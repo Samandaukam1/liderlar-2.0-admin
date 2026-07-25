@@ -15,6 +15,10 @@ import {
   Sparkles,
   MessageCircleQuestion,
   ChevronDown,
+  Info,
+  Clock3,
+  Maximize2,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button, Input } from "@/components/ui/primitives";
@@ -30,6 +34,13 @@ import {
   type ClothingType,
   type PhotoColor,
 } from "@/lib/intake/constants";
+import { validateContact } from "@/lib/intake/schemas";
+import {
+  autosaveRetryDelay,
+  canSubmitCandidateFinal,
+  mergeAutosaveConflict,
+  photoPollingDelay,
+} from "@/lib/intake/client-flow";
 
 /* ----------------------------- types ----------------------------- */
 
@@ -79,8 +90,30 @@ export interface UploadResp {
 }
 export interface PhotoGenResp {
   ok: boolean;
-  url?: string | null;
+  photoEditId?: string;
+  status?: PhotoJobStatus;
+  existing?: boolean;
   error?: string;
+}
+export type PhotoJobStatus = "queued" | "processing" | "completed" | "failed";
+export type PhotoSelectionKind = "original" | "ai";
+export interface CandidatePhotoStateView {
+  job: {
+    id: string;
+    status: PhotoJobStatus;
+    createdAt: string;
+    finishedAt: string | null;
+  } | null;
+  completed: {
+    id: string;
+    url: string | null;
+    createdAt: string;
+  } | null;
+  selection: {
+    kind: PhotoSelectionKind | null;
+    editId: string | null;
+    confirmedAt: string | null;
+  };
 }
 export interface IntakeFeedbackView {
   question_no: number | null;
@@ -100,6 +133,11 @@ export interface IntakeTransport {
   heartbeat(): Promise<void>;
   /** Candidate-side AI photo generation (public flow only). */
   generatePhoto?(params: { clothing_type: string; color: string | null }): Promise<PhotoGenResp>;
+  getPhotoStatus?(): Promise<{ ok: boolean; photoEdit?: CandidatePhotoStateView; error?: string }>;
+  confirmPhoto?(selection: {
+    kind: PhotoSelectionKind;
+    photo_edit_id?: string | null;
+  }): Promise<{ ok: boolean; photoEdit?: CandidatePhotoStateView; error?: string }>;
 }
 
 interface AnswerLocal {
@@ -108,19 +146,29 @@ interface AnswerLocal {
   plainText: string;
   lockVersion: number;
   dirty: boolean;
+  localRevision: number;
 }
 
 type SaveStatus = "idle" | "saving" | "saved" | "offline" | "retry";
+
+interface SaveControl {
+  debounceTimer: ReturnType<typeof setTimeout> | null;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+  inFlight: Promise<void> | null;
+  queued: boolean;
+  retryAttempt: number;
+  requestSequence: number;
+}
 
 /* ----------------------------- save indicator ----------------------------- */
 
 function SaveIndicator({ status }: { status: SaveStatus }) {
   const map = {
-    idle: { icon: Check, text: "Saqlangan", cls: "text-ink-soft" },
+    idle: { icon: Check, text: "Saqlandi", cls: "text-ink-soft" },
     saving: { icon: Loader2, text: "Saqlanmoqda…", cls: "text-brand", spin: true },
     saved: { icon: Check, text: "Saqlandi", cls: "text-green" },
-    offline: { icon: CloudOff, text: "Internet yo‘q", cls: "text-amber" },
-    retry: { icon: RefreshCw, text: "Qayta urinilmoqda…", cls: "text-amber", spin: true },
+    offline: { icon: CloudOff, text: "Internet tiklangach saqlanadi", cls: "text-amber" },
+    retry: { icon: RefreshCw, text: "Qayta saqlanmoqda…", cls: "text-amber", spin: true },
   } as const;
   const m = map[status];
   const Icon = m.icon;
@@ -138,6 +186,7 @@ export function IntakeForm({
   template,
   initialAnswers,
   initialPhoto,
+  initialPhotoEdit,
   initialAttachments,
   initialContact,
   consentText,
@@ -151,6 +200,7 @@ export function IntakeForm({
   template: IntakeTemplateView;
   initialAnswers: IntakeAnswerView[];
   initialPhoto: { url: string | null; file_name: string } | null;
+  initialPhotoEdit?: CandidatePhotoStateView | null;
   initialAttachments?: IntakeAttachmentView[];
   initialContact: { phone: string | null; telegram: string | null; consent: boolean };
   consentText: string;
@@ -161,10 +211,22 @@ export function IntakeForm({
   feedback?: IntakeFeedbackView[];
 }) {
   const questions = template.questions;
-  const totalStages = questions.length + 2; // photo + questions + contact
+  const requiresPhotoConfirmation = mode === "public" && !!transport.confirmPhoto;
+  const contactStage = questions.length + 1;
+  const confirmationStage = questions.length + 2;
+  const totalStages = questions.length + (requiresPhotoConfirmation ? 3 : 2);
   const [stage, setStage] = useState(0);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [questionSaveStatuses, setQuestionSaveStatuses] = useState<Map<number, SaveStatus>>(
+    () => new Map(questions.map((q) => [q.question_no, "idle" as const])),
+  );
   const [photo, setPhoto] = useState(initialPhoto);
+  const [photoEdit, setPhotoEdit] = useState<CandidatePhotoStateView | null>(initialPhotoEdit ?? null);
+  const [photoPreferences, setPhotoPreferences] = useState<{
+    clothing: ClothingType;
+    color: PhotoColor;
+  }>({ clothing: "suit", color: "navy" });
+  const [photoActionError, setPhotoActionError] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<IntakeAttachmentView[]>(initialAttachments ?? []);
   const [contact, setContact] = useState({
     phone: initialContact.phone ?? "",
@@ -174,6 +236,9 @@ export function IntakeForm({
   const [submitErrors, setSubmitErrors] = useState<string[]>([]);
   const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [photoGenerating, setPhotoGenerating] = useState(false);
+  const [photoConfirming, setPhotoConfirming] = useState(false);
 
   const { feedbackByQuestion, generalFeedback } = useMemo(() => {
     const map = new Map<number, IntakeFeedbackView[]>();
@@ -201,6 +266,7 @@ export function IntakeForm({
         plainText: a?.plain_text ?? "",
         lockVersion: a?.lock_version ?? 0,
         dirty: false,
+        localRevision: 0,
       });
     }
     // Recover any newer local draft (offline fallback).
@@ -211,7 +277,13 @@ export function IntakeForm({
         for (const [no, val] of Object.entries(parsed)) {
           const key = Number(no);
           const cur = map.get(key);
-          if (cur && val.dirty) map.set(key, { ...cur, ...val });
+          if (cur && val.dirty) {
+            map.set(key, {
+              ...cur,
+              ...val,
+              localRevision: Number.isFinite(val.localRevision) ? val.localRevision : 1,
+            });
+          }
         }
       }
     } catch {
@@ -231,14 +303,39 @@ export function IntakeForm({
         if (!cur) return prev;
         const next = new Map(prev);
         next.set(no, typeof patch === "function" ? patch(cur) : { ...cur, ...patch });
+        answersRef.current = next;
         return next;
       });
     },
     [],
   );
 
-  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const queue = useRef<number[]>([]);
+  const saveControls = useRef<Map<number, SaveControl>>(new Map());
+  const flushOneRef = useRef<(questionNo: number) => Promise<void>>(async () => {});
+
+  const getSaveControl = useCallback((questionNo: number): SaveControl => {
+    const existing = saveControls.current.get(questionNo);
+    if (existing) return existing;
+    const created: SaveControl = {
+      debounceTimer: null,
+      retryTimer: null,
+      inFlight: null,
+      queued: false,
+      retryAttempt: 0,
+      requestSequence: 0,
+    };
+    saveControls.current.set(questionNo, created);
+    return created;
+  }, []);
+
+  const setQuestionSaveStatus = useCallback((questionNo: number, status: SaveStatus) => {
+    setQuestionSaveStatuses((previous) => {
+      const next = new Map(previous);
+      next.set(questionNo, status);
+      return next;
+    });
+    setSaveStatus(status);
+  }, []);
 
   const persistLocal = useCallback(() => {
     try {
@@ -252,103 +349,167 @@ export function IntakeForm({
 
   const flushOne = useCallback(
     async (questionNo: number): Promise<void> => {
+      const control = getSaveControl(questionNo);
+      if (control.debounceTimer) {
+        clearTimeout(control.debounceTimer);
+        control.debounceTimer = null;
+      }
+      if (control.retryTimer) {
+        clearTimeout(control.retryTimer);
+        control.retryTimer = null;
+      }
+      if (control.inFlight) {
+        control.queued = true;
+        await control.inFlight;
+        if (answersRef.current.get(questionNo)?.dirty && !control.retryTimer) {
+          await flushOneRef.current(questionNo);
+        }
+        return;
+      }
+
       const a = answersRef.current.get(questionNo);
       if (!a || !a.dirty) return;
-      setSaveStatus("saving");
-      try {
-        const resp = await transport.autosave({
-          question_no: questionNo,
-          answer_state: a.answerState,
-          rich_content: a.richContent,
-          plain_text: a.plainText,
-          lock_version: a.lockVersion,
-        });
-        if (resp.ok) {
-          setAnswer(questionNo, { lockVersion: resp.lock_version ?? a.lockVersion, dirty: false });
-          setSaveStatus("saved");
+      const sentRevision = a.localRevision;
+      const sentSequence = ++control.requestSequence;
+      control.queued = false;
+      setQuestionSaveStatus(questionNo, control.retryAttempt > 0 ? "retry" : "saving");
+
+      const request = (async () => {
+        let shouldDrainImmediately = false;
+        try {
+          const resp = await transport.autosave({
+            question_no: questionNo,
+            answer_state: a.answerState,
+            rich_content: a.richContent,
+            plain_text: a.plainText,
+            lock_version: a.lockVersion,
+          });
+          const current = answersRef.current.get(questionNo);
+          if (!current || sentSequence !== control.requestSequence) return;
+
+          if (resp.ok) {
+            const unchangedSinceRequest = current.localRevision === sentRevision;
+            setAnswer(questionNo, {
+              lockVersion: resp.lock_version ?? a.lockVersion,
+              dirty: !unchangedSinceRequest,
+            });
+            control.retryAttempt = 0;
+            shouldDrainImmediately = !unchangedSinceRequest;
+            setQuestionSaveStatus(questionNo, unchangedSinceRequest ? "saved" : "saving");
+            persistLocal();
+          } else if (resp.conflict && resp.server) {
+            // Silent merge: only adopt the server lock. The editor's local
+            // rich/plain value remains untouched and is retried against that
+            // newest revision, so neither device's text is discarded.
+            setAnswer(questionNo, (local) =>
+              mergeAutosaveConflict(local, resp.server!.lock_version),
+            );
+            control.retryAttempt = 0;
+            shouldDrainImmediately = true;
+            setQuestionSaveStatus(questionNo, "retry");
+            persistLocal();
+          } else {
+            throw new Error(resp.error ?? "autosave failed");
+          }
+        } catch {
+          control.retryAttempt += 1;
+          const offline = typeof navigator !== "undefined" && !navigator.onLine;
+          setQuestionSaveStatus(questionNo, offline ? "offline" : "retry");
           persistLocal();
-        } else if (resp.conflict && resp.server) {
-          // Optimistic-concurrency clash: adopt the server version and inform.
-          const server = resp.server;
-          setAnswer(questionNo, () => ({
-            answerState: server.answer_state as AnswerState,
-            richContent: server.rich_content,
-            plainText: server.plain_text,
-            lockVersion: server.lock_version,
-            dirty: false,
-          }));
-          setSaveStatus("saved");
-          alert("Bu javob boshqa qurilmada yangilangan. Serverdagi so‘nggi versiya yuklandi.");
-        } else {
-          setSaveStatus("retry");
-          queue.current.push(questionNo);
+          const retryDelay = autosaveRetryDelay(control.retryAttempt);
+          control.retryTimer = setTimeout(() => {
+            control.retryTimer = null;
+            void flushOneRef.current(questionNo);
+          }, retryDelay);
+        } finally {
+          control.inFlight = null;
+          if (control.queued || shouldDrainImmediately) {
+            control.queued = false;
+            queueMicrotask(() => void flushOneRef.current(questionNo));
+          }
         }
-      } catch {
-        setSaveStatus(navigator.onLine ? "retry" : "offline");
-        if (!queue.current.includes(questionNo)) queue.current.push(questionNo);
-        persistLocal();
+      })();
+      control.inFlight = request;
+      await request;
+      if (answersRef.current.get(questionNo)?.dirty && !control.retryTimer) {
+        await flushOneRef.current(questionNo);
       }
     },
-    [transport, persistLocal, setAnswer],
+    [getSaveControl, persistLocal, setAnswer, setQuestionSaveStatus, transport],
   );
+  useEffect(() => {
+    flushOneRef.current = flushOne;
+  }, [flushOne]);
 
   const flushAll = useCallback(async () => {
-    for (const q of questions) await flushOne(q.question_no);
+    await Promise.all(questions.map((q) => flushOne(q.question_no)));
   }, [questions, flushOne]);
 
-  // Reconnect: drain the retry queue in order.
+  // Reconnect: immediately drain every dirty question. Per-question controls
+  // still guarantee that no two saves for the same answer run concurrently.
   useEffect(() => {
-    const onOnline = async () => {
+    const onOnline = () => {
       setSaveStatus("retry");
-      const pending = [...new Set(queue.current)];
-      queue.current = [];
-      for (const no of pending) await flushOne(no);
-      setSaveStatus("saved");
+      answersRef.current.forEach((answer, no) => {
+        if (answer.dirty) {
+          setQuestionSaveStatus(no, "retry");
+          void flushOne(no);
+        }
+      });
     };
-    const onOffline = () => setSaveStatus("offline");
+    const onOffline = () => {
+      setSaveStatus("offline");
+      answersRef.current.forEach((answer, no) => {
+        if (answer.dirty) setQuestionSaveStatus(no, "offline");
+      });
+    };
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     return () => {
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", onOffline);
     };
-  }, [flushOne]);
+  }, [flushOne, setQuestionSaveStatus]);
 
   // Heartbeat + flush on unload (keepalive/beacon).
   useEffect(() => {
     if (readOnly) return;
+    const controls = saveControls.current;
     // Presence heartbeat only matters for the remote public form.
     const hb = mode === "public" ? setInterval(() => void transport.heartbeat().catch(() => {}), 45000) : null;
     const onHide = () => {
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
       answersRef.current.forEach((a, no) => {
-        if (a.dirty) {
-          void transport.autosave({
-            question_no: no,
-            answer_state: a.answerState,
-            rich_content: a.richContent,
-            plain_text: a.plainText,
-            lock_version: a.lockVersion,
-          }).catch(() => {});
-        }
+        if (a.dirty) void flushOne(no);
       });
       persistLocal();
     };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") onHide();
+    };
     window.addEventListener("pagehide", onHide);
-    document.addEventListener("visibilitychange", () => document.visibilityState === "hidden" && onHide());
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       if (hb) clearInterval(hb);
       window.removeEventListener("pagehide", onHide);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      controls.forEach((control) => {
+        if (control.debounceTimer) clearTimeout(control.debounceTimer);
+        if (control.retryTimer) clearTimeout(control.retryTimer);
+      });
     };
-  }, [transport, persistLocal, readOnly, mode]);
+  }, [flushOne, transport, persistLocal, readOnly, mode]);
 
   const scheduleSave = useCallback(
     (questionNo: number) => {
       if (readOnly) return;
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
-      debounceTimer.current = setTimeout(() => void flushOne(questionNo), 850);
+      const control = getSaveControl(questionNo);
+      if (control.debounceTimer) clearTimeout(control.debounceTimer);
+      control.debounceTimer = setTimeout(() => {
+        control.debounceTimer = null;
+        void flushOne(questionNo);
+      }, 900);
     },
-    [flushOne, readOnly],
+    [flushOne, getSaveControl, readOnly],
   );
 
   const onEditorChange = useCallback(
@@ -359,11 +520,13 @@ export function IntakeForm({
         plainText: text,
         answerState: text.trim() ? "answered" : "unanswered",
         dirty: true,
+        localRevision: prev.localRevision + 1,
       }));
-      setSaveStatus("saving");
+      setQuestionSaveStatus(questionNo, "saving");
+      persistLocal();
       scheduleSave(questionNo);
     },
-    [scheduleSave, setAnswer],
+    [persistLocal, scheduleSave, setAnswer, setQuestionSaveStatus],
   );
 
   const onNoAnswer = useCallback(
@@ -375,10 +538,13 @@ export function IntakeForm({
         richContent: doc,
         plainText: NO_ANSWER_TEXT,
         dirty: true,
+        localRevision: prev.localRevision + 1,
       }));
+      setQuestionSaveStatus(questionNo, "saving");
+      persistLocal();
       void flushOne(questionNo);
     },
-    [flushOne, setAnswer],
+    [flushOne, persistLocal, setAnswer, setQuestionSaveStatus],
   );
 
   /* ----------------------------- navigation ----------------------------- */
@@ -386,13 +552,16 @@ export function IntakeForm({
   const currentQuestion = stage >= 1 && stage <= questions.length ? questions[stage - 1] : null;
   const canGoNext = useMemo(() => {
     if (stage === 0) return true; // photo optional to advance (but recommended)
+    if (stage === contactStage && requiresPhotoConfirmation) {
+      return validateContact(contact).ok;
+    }
     if (stage > questions.length) return true;
     const q = questions[stage - 1];
     const a = answers.get(q.question_no);
     if (!a) return false;
     if (!q.required) return true;
     return canAdvanceAnswer(a.answerState, a.plainText);
-  }, [stage, questions, answers]);
+  }, [answers, contact, contactStage, questions, requiresPhotoConfirmation, stage]);
 
   const goNext = useCallback(async () => {
     if (currentQuestion) await flushOne(currentQuestion.question_no);
@@ -402,24 +571,44 @@ export function IntakeForm({
     if (currentQuestion) await flushOne(currentQuestion.question_no);
     setStage((s) => Math.max(s - 1, 0));
   }, [currentQuestion, flushOne]);
+  const goToQuestion = useCallback(
+    async (nextStage: number) => {
+      if (currentQuestion) await flushOne(currentQuestion.question_no);
+      setStage(nextStage);
+    },
+    [currentQuestion, flushOne],
+  );
 
   /* ----------------------------- uploads ----------------------------- */
 
   const doUpload = useCallback(
     async (file: File, purpose: "photo" | "attachment", questionNo?: number) => {
+      setUploadError(null);
       if (file.size > maxUploadBytes) {
-        alert(`Fayl juda katta (maksimum ${Math.round(maxUploadBytes / 1024 / 1024)} MB)`);
+        setUploadError(`Fayl juda katta (maksimum ${Math.round(maxUploadBytes / 1024 / 1024)} MB)`);
         return;
       }
       setBusy(true);
-      const resp = await transport.upload(file, { purpose, question_no: questionNo });
-      setBusy(false);
+      let resp: UploadResp;
+      try {
+        resp = await transport.upload(file, { purpose, question_no: questionNo });
+      } catch {
+        resp = { ok: false, error: "Tarmoq xatosi. Qayta urinib ko‘ring." };
+      } finally {
+        setBusy(false);
+      }
       if (!resp.ok || !resp.attachment) {
-        alert(resp.error ?? "Yuklab bo‘lmadi");
+        setUploadError(resp.error ?? "Yuklab bo‘lmadi");
         return;
       }
       if (purpose === "photo") {
         setPhoto({ url: resp.attachment.signedUrl, file_name: resp.attachment.file_name });
+        setPhotoEdit(null);
+        setPhotoActionError(null);
+        if (transport.getPhotoStatus) {
+          const state = await transport.getPhotoStatus();
+          if (state.ok && state.photoEdit) setPhotoEdit(state.photoEdit);
+        }
       } else {
         setAttachments((prev) => [...prev, resp.attachment!]);
       }
@@ -430,6 +619,102 @@ export function IntakeForm({
   const attachInputRef = useRef<HTMLInputElement>(null);
   const [attachTarget, setAttachTarget] = useState<number | null>(null);
 
+  /* ----------------------------- background photo job ----------------------------- */
+
+  const startPhotoGeneration = useCallback(async () => {
+    if (!transport.generatePhoto || !photo) return;
+    setPhotoGenerating(true);
+    setPhotoActionError(null);
+    try {
+      const response = await transport.generatePhoto({
+        clothing_type: photoPreferences.clothing,
+        color: photoPreferences.clothing === "own_clothes" ? null : photoPreferences.color,
+      });
+      if (!response.ok || !response.photoEditId || !response.status) {
+        setPhotoActionError(response.error ?? "Rasmni tayyorlashni boshlab bo‘lmadi");
+        return;
+      }
+      setPhotoEdit((previous) => ({
+        job: {
+          id: response.photoEditId!,
+          status: response.status!,
+          createdAt: new Date().toISOString(),
+          finishedAt: null,
+        },
+        completed: previous?.completed ?? null,
+        selection: previous?.selection ?? { kind: null, editId: null, confirmedAt: null },
+      }));
+    } catch {
+      setPhotoActionError("Tarmoq xatosi. Qayta urinib ko‘ring.");
+    } finally {
+      setPhotoGenerating(false);
+    }
+  }, [photo, photoPreferences, transport]);
+
+  const photoJob = photoEdit?.job;
+  useEffect(() => {
+    if (
+      !transport.getPhotoStatus ||
+      !photoJob ||
+      !["queued", "processing"].includes(photoJob.status)
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const schedule = (immediate = false) => {
+      if (cancelled) return;
+      if (timer) clearTimeout(timer);
+      const delay = immediate ? 0 : photoPollingDelay(document.visibilityState === "hidden");
+      timer = setTimeout(async () => {
+        const response = await transport.getPhotoStatus!().catch(() => ({ ok: false as const }));
+        if (cancelled) return;
+        if (response.ok && response.photoEdit) {
+          setPhotoEdit(response.photoEdit);
+          if (response.photoEdit.job?.status === "completed") setPhotoActionError(null);
+          if (["queued", "processing"].includes(response.photoEdit.job?.status ?? "")) schedule();
+        } else {
+          schedule();
+        }
+      }, delay);
+    };
+    const onVisibilityChange = () => schedule(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    schedule();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [photoJob, transport]);
+
+  const confirmPhoto = useCallback(
+    async (kind: PhotoSelectionKind, editId?: string | null) => {
+      if (!transport.confirmPhoto) return false;
+      setPhotoConfirming(true);
+      setPhotoActionError(null);
+      try {
+        const response = await transport.confirmPhoto({
+          kind,
+          photo_edit_id: kind === "ai" ? editId : null,
+        });
+        if (!response.ok || !response.photoEdit) {
+          setPhotoActionError(response.error ?? "Rasmni tasdiqlab bo‘lmadi");
+          return false;
+        }
+        setPhotoEdit(response.photoEdit);
+        return true;
+      } catch {
+        setPhotoActionError("Tarmoq xatosi. Qayta urinib ko‘ring.");
+        return false;
+      } finally {
+        setPhotoConfirming(false);
+      }
+    },
+    [transport],
+  );
+
   /* ----------------------------- submit ----------------------------- */
 
   const answeredCount = questions.filter((q) => {
@@ -438,6 +723,10 @@ export function IntakeForm({
   }).length;
 
   const doSubmit = useCallback(async () => {
+    if (requiresPhotoConfirmation && !photoEdit?.selection.confirmedAt) {
+      setSubmitErrors(["Yuborishdan oldin original yoki AI rasmni tasdiqlang"]);
+      return;
+    }
     setBusy(true);
     await flushAll();
     const resp = await transport.submit(contact);
@@ -452,7 +741,7 @@ export function IntakeForm({
     } else {
       setSubmitErrors(resp.errors ?? ["Yuborib bo‘lmadi"]);
     }
-  }, [flushAll, transport, contact, draftKey]);
+  }, [contact, draftKey, flushAll, photoEdit?.selection.confirmedAt, requiresPhotoConfirmation, transport]);
 
   if (submitted) {
     return (
@@ -478,7 +767,13 @@ export function IntakeForm({
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-ink-soft">
-              {stage === 0 ? template.photoTitle : stage > questions.length ? "Yakuniy bosqich" : `Savol ${stage} / ${questions.length}`}
+              {stage === 0
+                ? template.photoTitle
+                : stage <= questions.length
+                  ? `Savol ${stage} / ${questions.length}`
+                  : stage === contactStage
+                    ? "Yakuniy ma’lumot"
+                    : "Rasm va ma’lumotlarni tasdiqlash"}
             </p>
             <div className="mt-1.5 h-1.5 w-56 max-w-full overflow-hidden rounded-full bg-line">
               <div
@@ -487,7 +782,13 @@ export function IntakeForm({
               />
             </div>
           </div>
-          <SaveIndicator status={saveStatus} />
+          <SaveIndicator
+            status={
+              currentQuestion
+                ? questionSaveStatuses.get(currentQuestion.question_no) ?? "idle"
+                : saveStatus
+            }
+          />
         </div>
       </div>
 
@@ -507,7 +808,7 @@ export function IntakeForm({
             return (
               <button
                 key={q.question_no}
-                onClick={() => setStage(i + 1)}
+                onClick={() => void goToQuestion(i + 1)}
                 className={cn(
                   "flex h-7 w-7 items-center justify-center rounded-lg text-xs font-bold transition",
                   stage === i + 1
@@ -527,25 +828,40 @@ export function IntakeForm({
 
       {/* Stage content */}
       <div className="rounded-card border border-line bg-card p-6 shadow-card">
+        {uploadError && (
+          <p role="status" className="mb-4 rounded-field border border-coral/40 bg-coral/5 p-3 text-sm font-semibold text-coral">
+            {uploadError}
+          </p>
+        )}
         {stage === 0 && (
           <PhotoStage
             title={template.photoTitle}
             instruction={template.photoInstruction}
             photo={photo}
+            photoEdit={photoEdit}
+            preferences={photoPreferences}
+            generating={photoGenerating}
+            actionError={photoActionError}
             busy={busy}
             readOnly={readOnly}
             onPick={(f) => doUpload(f, "photo")}
-            onGenerate={transport.generatePhoto ? (p) => transport.generatePhoto!(p) : undefined}
+            onPreferencesChange={setPhotoPreferences}
+            onGenerate={transport.generatePhoto ? startPhotoGeneration : undefined}
           />
         )}
 
         {currentQuestion && (
           <div>
             <div className="mb-3">
-              <h3 className="text-base font-bold text-ink">
-                <span className="mr-2 text-brand">{currentQuestion.question_no}.</span>
-                {currentQuestion.prompt}
-              </h3>
+              <div className="flex items-start justify-between gap-3">
+                <h3 className="text-base font-bold text-ink">
+                  <span className="mr-2 text-brand">{currentQuestion.question_no}.</span>
+                  {currentQuestion.prompt}
+                </h3>
+                <span aria-live="polite" className="shrink-0">
+                  <SaveIndicator status={questionSaveStatuses.get(currentQuestion.question_no) ?? "idle"} />
+                </span>
+              </div>
               {currentQuestion.help && <p className="mt-1 text-xs text-ink-soft">{currentQuestion.help}</p>}
             </div>
             <RichEditor
@@ -567,7 +883,7 @@ export function IntakeForm({
           </div>
         )}
 
-        {stage > questions.length && (
+        {stage === contactStage && (
           <ContactStage
             contact={contact}
             consentText={consentText}
@@ -579,12 +895,30 @@ export function IntakeForm({
             busy={busy}
             onChange={setContact}
             onSubmit={doSubmit}
+            showSubmit={!requiresPhotoConfirmation}
+          />
+        )}
+
+        {requiresPhotoConfirmation && stage === confirmationStage && (
+          <FinalConfirmationStage
+            photo={photo}
+            photoEdit={photoEdit}
+            contact={contact}
+            answeredCount={answeredCount}
+            total={questions.length}
+            busy={busy}
+            confirming={photoConfirming}
+            actionError={photoActionError}
+            onConfirm={confirmPhoto}
+            onRegenerate={startPhotoGeneration}
+            onSubmit={doSubmit}
+            submitErrors={submitErrors}
           />
         )}
       </div>
 
       {/* Nav footer */}
-      {stage <= questions.length && (
+      {stage < totalStages - 1 && (
         <div className="mt-5 flex items-center justify-between gap-3">
           <Button variant="secondary" onClick={goPrev} disabled={stage === 0}>
             <ChevronLeft className="h-4 w-4" /> Orqaga
@@ -593,9 +927,24 @@ export function IntakeForm({
             {stage >= 1 && stage <= questions.length && !canGoNext && (
               <span className="text-amber">Javob bering yoki “Yo‘q” tugmasini bosing</span>
             )}
+            {stage === contactStage && !canGoNext && (
+              <span className="text-amber">Telefon, Telegram va rozilikni tekshiring</span>
+            )}
           </div>
           <Button onClick={goNext} disabled={!canGoNext}>
-            {stage === questions.length ? "Yakuniy bosqich" : "Keyingi"} <ChevronRight className="h-4 w-4" />
+            {stage === questions.length
+              ? "Yakuniy ma’lumot"
+              : stage === contactStage
+                ? "Rasmni tasdiqlash"
+                : "Keyingi"}{" "}
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
+      {requiresPhotoConfirmation && stage === confirmationStage && (
+        <div className="mt-5">
+          <Button variant="secondary" onClick={goPrev}>
+            <ChevronLeft className="h-4 w-4" /> Orqaga
           </Button>
         </div>
       )}
@@ -623,38 +972,47 @@ function PhotoStage({
   title,
   instruction,
   photo,
+  photoEdit,
+  preferences,
+  generating,
+  actionError,
   busy,
   readOnly,
   onPick,
+  onPreferencesChange,
   onGenerate,
 }: {
   title: string;
   instruction: string;
   photo: { url: string | null; file_name: string } | null;
+  photoEdit: CandidatePhotoStateView | null;
+  preferences: { clothing: ClothingType; color: PhotoColor };
+  generating: boolean;
+  actionError: string | null;
   busy: boolean;
   readOnly: boolean;
   onPick: (f: File) => void;
-  onGenerate?: (params: { clothing_type: string; color: string | null }) => Promise<PhotoGenResp>;
+  onPreferencesChange: (value: { clothing: ClothingType; color: PhotoColor }) => void;
+  onGenerate?: () => Promise<void>;
 }) {
   const ref = useRef<HTMLInputElement>(null);
-  const [clothing, setClothing] = useState<ClothingType>("suit");
-  const [color, setColor] = useState<PhotoColor>("navy");
-  const [genBusy, setGenBusy] = useState(false);
-  const [generated, setGenerated] = useState<string | null>(null);
-  const [genError, setGenError] = useState<string | null>(null);
-
-  const runGenerate = async () => {
-    if (!onGenerate) return;
-    setGenBusy(true);
-    setGenError(null);
-    const resp = await onGenerate({ clothing_type: clothing, color: clothing === "own_clothes" ? null : color });
-    setGenBusy(false);
-    if (resp.ok && resp.url) setGenerated(resp.url);
-    else setGenError(resp.error ?? "Rasmni yaratib bo‘lmadi");
-  };
+  const processing = photoEdit?.job?.status === "queued" || photoEdit?.job?.status === "processing";
+  const completed = photoEdit?.job?.status === "completed" || !!photoEdit?.completed;
+  const failed = photoEdit?.job?.status === "failed";
 
   return (
     <div className="text-center">
+      {!completed && (
+        <div className="mb-6 flex items-start gap-3 rounded-[22px] border border-cyan/35 bg-gradient-to-br from-brand/[0.07] to-cyan/[0.09] p-4 text-left">
+          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-brand/10 text-brand">
+            <Info className="h-4 w-4" />
+          </span>
+          <p className="text-sm leading-relaxed text-ink">
+            Vaqtdan yutish uchun avval rasmingizni yuklab, «Jaxongir AI bilan yaxshilash» tugmasini bosing.
+            Rasm fon rejimida tayyorlanayotgan paytda qolgan savollarni to‘ldiravering.
+          </p>
+        </div>
+      )}
       <span className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan/20 to-lavender/20 text-brand">
         <Camera className="h-7 w-7" />
       </span>
@@ -704,10 +1062,11 @@ function PhotoStage({
               <button
                 key={c}
                 type="button"
-                onClick={() => setClothing(c)}
+                onClick={() => onPreferencesChange({ ...preferences, clothing: c })}
+                disabled={processing}
                 className={cn(
                   "rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
-                  clothing === c ? "border-brand bg-brand/10 text-brand" : "border-line text-ink-soft hover:border-brand/40",
+                  preferences.clothing === c ? "border-brand bg-brand/10 text-brand" : "border-line text-ink-soft hover:border-brand/40",
                 )}
               >
                 {CLOTHING_LABELS[c]}
@@ -715,7 +1074,7 @@ function PhotoStage({
             ))}
           </div>
 
-          {clothing !== "own_clothes" && (
+          {preferences.clothing !== "own_clothes" && (
             <>
               <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-ink-soft">Rang</p>
               <div className="mb-3 flex flex-wrap gap-1.5">
@@ -723,10 +1082,11 @@ function PhotoStage({
                   <button
                     key={c}
                     type="button"
-                    onClick={() => setColor(c)}
+                    onClick={() => onPreferencesChange({ ...preferences, color: c })}
+                    disabled={processing}
                     className={cn(
                       "rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
-                      color === c ? "border-brand bg-brand/10 text-brand" : "border-line text-ink-soft hover:border-brand/40",
+                      preferences.color === c ? "border-brand bg-brand/10 text-brand" : "border-line text-ink-soft hover:border-brand/40",
                     )}
                   >
                     {COLOR_LABELS[c]}
@@ -736,22 +1096,281 @@ function PhotoStage({
             </>
           )}
 
-          <Button variant="ai" className="w-full" onClick={runGenerate} disabled={genBusy}>
-            {genBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            AI bilan ishlash
+          <Button variant="ai" className="w-full" onClick={() => void onGenerate()} disabled={generating || processing}>
+            {generating || processing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {processing ? "Rasm allaqachon tayyorlanmoqda" : "Jaxongir AI bilan yaxshilash"}
           </Button>
-          {genError && <p className="mt-2 text-xs font-semibold text-coral">{genError}</p>}
+          {actionError && <p role="status" className="mt-2 text-xs font-semibold text-coral">{actionError}</p>}
 
-          {generated && (
-            <div className="mt-4 text-center">
-              <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-brand">AI natija</p>
-              {/* eslint-disable-next-line @next/next/no-img-element -- signed storage URL */}
-              <img src={generated} alt="AI natija" className="mx-auto h-52 w-52 rounded-2xl border-2 border-brand object-cover shadow-card" />
-              <p className="mt-2 text-xs text-ink-soft">Jamoamiz yakuniy rasmni tasdiqlaydi.</p>
+          {processing && (
+            <div aria-live="polite" className="mt-4 rounded-[20px] border border-cyan/35 bg-brand/[0.05] p-4">
+              <div className="flex items-start gap-3">
+                <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-brand" />
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-ink">
+                    Jaxongir AI rasmingizni tayyorlamoqda. Savollarni to‘ldirishda davom etishingiz mumkin.
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-ink-soft">
+                    <span className="rounded-full bg-cyan/15 px-2 py-1 font-bold text-brand">Fon rejimida ishlanmoqda</span>
+                    {photoEdit?.job?.createdAt && (
+                      <span className="inline-flex items-center gap-1">
+                        <Clock3 className="h-3 w-3" />
+                        {new Date(photoEdit.job.createdAt).toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {completed && (
+            <p aria-live="polite" className="mt-3 rounded-[20px] border border-mint/50 bg-mint/10 p-3 text-sm font-semibold text-green">
+              Rasmingiz tayyor. Yakuniy bosqichda uni ko‘rib, tasdiqlashingiz mumkin.
+            </p>
+          )}
+
+          {failed && (
+            <div role="status" className="mt-3 rounded-[20px] border border-coral/35 bg-coral/5 p-3 text-sm text-coral">
+              Rasmni tayyorlashda muammo yuz berdi. Qayta urinishingiz yoki original rasmni tanlashingiz mumkin.
             </div>
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function FinalConfirmationStage({
+  photo,
+  photoEdit,
+  contact,
+  answeredCount,
+  total,
+  busy,
+  confirming,
+  actionError,
+  onConfirm,
+  onRegenerate,
+  onSubmit,
+  submitErrors,
+}: {
+  photo: { url: string | null; file_name: string } | null;
+  photoEdit: CandidatePhotoStateView | null;
+  contact: { phone: string; telegram: string; consent: boolean };
+  answeredCount: number;
+  total: number;
+  busy: boolean;
+  confirming: boolean;
+  actionError: string | null;
+  onConfirm: (kind: PhotoSelectionKind, editId?: string | null) => Promise<boolean>;
+  onRegenerate: () => Promise<void>;
+  onSubmit: () => void;
+  submitErrors: string[];
+}) {
+  const [pendingChoice, setPendingChoice] = useState<PhotoSelectionKind | null>(null);
+  const completed = photoEdit?.completed ?? null;
+  const processing = photoEdit?.job?.status === "queued" || photoEdit?.job?.status === "processing";
+  const failed = photoEdit?.job?.status === "failed";
+  const choice = pendingChoice ?? photoEdit?.selection.kind ?? null;
+  const confirmed = !!photoEdit?.selection.confirmedAt;
+  const contactValid = validateContact(contact).ok;
+  const canSubmit = canSubmitCandidateFinal({
+    everyAnswerValid: answeredCount === total,
+    contactValid,
+    photoConfirmed: confirmed,
+  });
+
+  const selectAndConfirm = async (kind: PhotoSelectionKind) => {
+    setPendingChoice(kind);
+    const ok = await onConfirm(kind, kind === "ai" ? completed?.id : null);
+    if (!ok) setPendingChoice(null);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="font-display text-lg font-semibold uppercase tracking-wide text-ink">
+          Rasm va ma’lumotlarni tasdiqlash
+        </h3>
+        <p className="mt-1 text-sm text-ink-soft">
+          Yakuniy rasmni ongli ravishda tanlang, so‘ng ma’lumotlaringizni yuboring.
+        </p>
+      </div>
+
+      {processing && (
+        <div aria-live="polite" className="flex items-start gap-3 rounded-[22px] border border-cyan/35 bg-brand/[0.05] p-4">
+          <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-brand" />
+          <div>
+            <p className="text-sm font-bold text-ink">Rasmingiz hali tayyorlanmoqda. Javoblaringiz saqlandi.</p>
+            <p className="mt-1 text-xs text-ink-soft">AI rasm tayyor bo‘lgach shu sahifada avtomatik ko‘rinadi.</p>
+          </div>
+        </div>
+      )}
+
+      {failed && (
+        <div role="status" className="flex items-start gap-3 rounded-[22px] border border-coral/35 bg-coral/5 p-4">
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-coral" />
+          <p className="text-sm text-coral">
+            Rasmni tayyorlashda muammo yuz berdi. Qayta urinishingiz yoki original rasmni tanlashingiz mumkin.
+          </p>
+        </div>
+      )}
+
+      <div role="radiogroup" aria-label="Yakuniy rasm" className="grid gap-4 sm:grid-cols-2">
+        <PhotoChoiceCard
+          label="Original rasm"
+          url={photo?.url ?? null}
+          alt={photo?.file_name ?? "Original rasm"}
+          selected={choice === "original"}
+          confirmed={confirmed && photoEdit?.selection.kind === "original"}
+          onSelect={() => setPendingChoice("original")}
+        />
+        <PhotoChoiceCard
+          label="Jaxongir AI bilan yaxshilangan"
+          url={completed?.url ?? null}
+          alt="Jaxongir AI bilan yaxshilangan rasm"
+          selected={choice === "ai"}
+          confirmed={confirmed && photoEdit?.selection.kind === "ai"}
+          loading={processing && !completed}
+          onSelect={() => completed && setPendingChoice("ai")}
+        />
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        <div className="rounded-field border border-line bg-surface/50 p-3 text-center">
+          <p className={cn("text-lg font-bold", answeredCount === total ? "text-green" : "text-amber")}>{answeredCount}/{total}</p>
+          <p className="text-[11px] text-ink-soft">Javoblar</p>
+        </div>
+        <div className="rounded-field border border-line bg-surface/50 p-3 text-center">
+          <p className={cn("text-lg font-bold", contactValid ? "text-green" : "text-amber")}>{contactValid ? "✓" : "—"}</p>
+          <p className="text-[11px] text-ink-soft">Aloqa</p>
+        </div>
+        <div className="rounded-field border border-line bg-surface/50 p-3 text-center">
+          <p className={cn("text-lg font-bold", confirmed ? "text-green" : "text-amber")}>{confirmed ? "✓" : "—"}</p>
+          <p className="text-[11px] text-ink-soft">Rasm tasdig‘i</p>
+        </div>
+      </div>
+
+      {actionError && (
+        <p role="status" className="rounded-field border border-coral/40 bg-coral/5 p-3 text-sm font-semibold text-coral">
+          {actionError}
+        </p>
+      )}
+
+      {submitErrors.length > 0 && (
+        <ul role="status" className="space-y-1 rounded-field border border-coral/40 bg-coral/5 p-3">
+          {submitErrors.map((error, index) => (
+            <li key={index} className="text-sm font-semibold text-coral">• {error}</li>
+          ))}
+        </ul>
+      )}
+
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <Button
+          variant="ai"
+          className="flex-1"
+          onClick={() => void selectAndConfirm(choice ?? (completed ? "ai" : "original"))}
+          disabled={confirming || (!photo?.url && choice !== "ai") || (choice === "ai" && !completed)}
+        >
+          {confirming ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+          Shu rasmni tasdiqlash
+        </Button>
+        <Button variant="secondary" onClick={() => void onRegenerate()} disabled={processing}>
+          <RefreshCw className="h-4 w-4" /> Qayta ishlash
+        </Button>
+      </div>
+
+      {photo?.url && photoEdit?.selection.kind !== "original" && (
+        <Button
+          variant="secondary"
+          className="w-full"
+          onClick={() => void selectAndConfirm("original")}
+          disabled={confirming}
+        >
+          <Camera className="h-4 w-4" /> Original rasmni tanlash
+        </Button>
+      )}
+
+      <Button className="w-full" size="lg" onClick={onSubmit} disabled={busy || !canSubmit}>
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+        Anketani yuborish
+      </Button>
+      {!confirmed && (
+        <p className="flex items-center justify-center gap-1.5 text-center text-xs text-ink-soft">
+          <ShieldCheck className="h-3.5 w-3.5" /> Yuborish uchun original yoki AI rasmni tasdiqlang
+        </p>
+      )}
+    </div>
+  );
+}
+
+function PhotoChoiceCard({
+  label,
+  url,
+  alt,
+  selected,
+  confirmed,
+  loading = false,
+  onSelect,
+}: {
+  label: string;
+  url: string | null;
+  alt: string;
+  selected: boolean;
+  confirmed: boolean;
+  loading?: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <div
+      role="radio"
+      aria-checked={selected}
+      tabIndex={url ? 0 : -1}
+      onClick={url ? onSelect : undefined}
+      onKeyDown={(event) => {
+        if (url && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+      className={cn(
+        "relative overflow-hidden rounded-[22px] border-2 bg-surface/40 p-3 transition",
+        url && "cursor-pointer",
+        selected ? "border-cyan shadow-card ring-2 ring-cyan/20" : "border-line",
+      )}
+    >
+      <div className="mb-2 flex min-h-8 items-center justify-between gap-2">
+        <p className="text-xs font-bold text-ink">{label}</p>
+        {selected && (
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-cyan text-white">
+            <Check className="h-3.5 w-3.5" />
+          </span>
+        )}
+      </div>
+      {url ? (
+        <div className="relative">
+          {/* eslint-disable-next-line @next/next/no-img-element -- signed storage URL */}
+          <img src={url} alt={alt} className="aspect-[4/5] w-full rounded-2xl object-cover" />
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(event) => event.stopPropagation()}
+            className="absolute bottom-2 right-2 flex h-9 w-9 items-center justify-center rounded-xl bg-ink/75 text-white backdrop-blur"
+            aria-label={`${label}ni katta ko‘rish`}
+          >
+            <Maximize2 className="h-4 w-4" />
+          </a>
+        </div>
+      ) : (
+        <div className="flex aspect-[4/5] w-full items-center justify-center rounded-2xl border border-dashed border-line bg-card">
+          {loading ? <Loader2 className="h-7 w-7 animate-spin text-brand" /> : <Camera className="h-7 w-7 text-ink-soft" />}
+        </div>
+      )}
+      <p className={cn("mt-2 text-center text-xs font-semibold", confirmed ? "text-green" : "text-ink-soft")}>
+        {confirmed ? "Tasdiqlandi" : selected ? "Tanlandi" : url ? "Tanlash" : "Kutilmoqda"}
+      </p>
     </div>
   );
 }
@@ -822,6 +1441,7 @@ function ContactStage({
   busy,
   onChange,
   onSubmit,
+  showSubmit = true,
 }: {
   contact: { phone: string; telegram: string; consent: boolean };
   consentText: string;
@@ -833,6 +1453,7 @@ function ContactStage({
   busy: boolean;
   onChange: (c: { phone: string; telegram: string; consent: boolean }) => void;
   onSubmit: () => void;
+  showSubmit?: boolean;
 }) {
   return (
     <div className="space-y-5">
@@ -897,7 +1518,7 @@ function ContactStage({
         </ul>
       )}
 
-      {!readOnly && (
+      {!readOnly && showSubmit && (
         <Button
           className="w-full"
           size="lg"
@@ -908,7 +1529,7 @@ function ContactStage({
           Anketani yuborish
         </Button>
       )}
-      {!contact.consent && !readOnly && (
+      {!contact.consent && !readOnly && showSubmit && (
         <p className="flex items-center justify-center gap-1.5 text-center text-xs text-ink-soft">
           <ShieldCheck className="h-3.5 w-3.5" /> Yuborish uchun rozilikni belgilang
         </p>

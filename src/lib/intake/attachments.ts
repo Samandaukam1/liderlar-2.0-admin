@@ -133,6 +133,27 @@ export async function uploadIntakeFile(params: {
     return { ok: false, error: error?.message ?? "Saqlab bo‘lmadi", status: 500 };
   }
 
+  if (params.purpose === "photo") {
+    const [{ error: confirmationResetError }, { error: selectionResetError }] = await Promise.all([
+      admin
+        .from("candidate_intakes")
+        .update({ selected_photo_kind: null, photo_confirmed_at: null })
+        .eq("id", params.intakeId),
+      admin
+        .from("candidate_intake_photo_edits")
+        .update({ is_selected: false })
+        .eq("intake_id", params.intakeId)
+        .eq("is_selected", true),
+    ]);
+    if (confirmationResetError || selectionResetError) {
+      return {
+        ok: false,
+        error: "Yangi rasm tanlovini boshlashda xatolik yuz berdi",
+        status: 500,
+      };
+    }
+  }
+
   return {
     ok: true,
     attachment: {

@@ -7,6 +7,8 @@ import {
   type IntakeTransport,
   type IntakeTemplateView,
   type IntakeAnswerView,
+  type CandidatePhotoStateView,
+  type PhotoJobStatus,
 } from "@/components/intake/intake-form";
 
 interface ResolvedState {
@@ -17,6 +19,7 @@ interface ResolvedState {
   template: IntakeTemplateView;
   answers: IntakeAnswerView[];
   photo: { file_name: string; url: string | null } | null;
+  photoEdit: CandidatePhotoStateView;
   feedback: { question_no: number | null; feedback_text: string; feedback_type: string }[];
   settings: { consentText: string; consentVersion: string; maxUploadBytes: number };
 }
@@ -106,7 +109,36 @@ export function PublicIntake({ token }: { token: string }) {
           const r = await postJson("/api/intake/photo-edit", params);
           const j = await r.json();
           if (!r.ok || !j.ok) return { ok: false, error: j.error ?? "Rasmni yaratib bo‘lmadi" };
-          return { ok: true, url: j.edit?.url ?? null };
+          return {
+            ok: true,
+            photoEditId: j.photoEditId as string,
+            status: j.status as PhotoJobStatus,
+            existing: j.existing === true,
+          };
+        } catch {
+          return { ok: false, error: "Tarmoq xatosi" };
+        }
+      },
+      async getPhotoStatus() {
+        try {
+          const r = await fetch("/api/intake/photo-edit/status", {
+            method: "GET",
+            headers: { authorization: `Bearer ${token}` },
+            cache: "no-store",
+          });
+          const j = await r.json();
+          if (!r.ok || !j.ok) return { ok: false, error: j.error ?? "Rasm holatini yuklab bo‘lmadi" };
+          return { ok: true, photoEdit: j.photoEdit as CandidatePhotoStateView };
+        } catch {
+          return { ok: false, error: "network" };
+        }
+      },
+      async confirmPhoto(selection) {
+        try {
+          const r = await postJson("/api/intake/photo-edit/confirm", selection);
+          const j = await r.json();
+          if (!r.ok || !j.ok) return { ok: false, error: j.error ?? "Rasmni tasdiqlab bo‘lmadi" };
+          return { ok: true, photoEdit: j.photoEdit as CandidatePhotoStateView };
         } catch {
           return { ok: false, error: "Tarmoq xatosi" };
         }
@@ -159,6 +191,7 @@ export function PublicIntake({ token }: { token: string }) {
         template={state.template}
         initialAnswers={state.answers}
         initialPhoto={state.photo ? { url: state.photo.url, file_name: state.photo.file_name } : null}
+        initialPhotoEdit={state.photoEdit}
         initialContact={state.contact}
         consentText={state.settings.consentText}
         maxUploadBytes={state.settings.maxUploadBytes}

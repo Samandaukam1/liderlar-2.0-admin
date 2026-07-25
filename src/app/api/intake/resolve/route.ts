@@ -8,6 +8,7 @@ import {
 } from "@/lib/intake/data";
 import { enforceRateLimit } from "@/lib/intake/rate-limit";
 import { clientIpHash, jsonError, noStoreJson, readJsonBody } from "@/lib/intake/http";
+import { loadCandidatePhotoState } from "@/lib/intake/photo-jobs";
 
 export const dynamic = "force-dynamic";
 
@@ -24,9 +25,10 @@ export async function POST(request: NextRequest) {
   if (!resolved) return jsonError(404, "Havola yaroqsiz yoki muddati tugagan");
 
   await touchLinkUsage(resolved.linkId);
-  const [state, settings] = await Promise.all([
+  const [state, settings, photoEdit] = await Promise.all([
     loadPublicIntakeState(resolved.intakeId),
     getIntakeSettings(),
+    loadCandidatePhotoState(resolved.intakeId),
   ]);
   if (!state) return jsonError(404, "Anketa topilmadi");
 
@@ -68,6 +70,7 @@ export async function POST(request: NextRequest) {
     photo: state.primaryPhoto
       ? { file_name: state.primaryPhoto.file_name, url: state.primaryPhoto.signedUrl }
       : null,
+    photoEdit,
     feedback: state.feedback,
     settings: {
       consentText: settings.consentText,

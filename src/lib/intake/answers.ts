@@ -22,6 +22,30 @@ export type SaveAnswerOutcome =
     }
   | { ok: false; error: string };
 
+async function latestServerAnswer(
+  intakeId: string,
+  questionId: string,
+): Promise<Extract<SaveAnswerOutcome, { conflict: true }> | null> {
+  const admin = createSupabaseAdminClient();
+  const { data } = await admin
+    .from("candidate_intake_answers")
+    .select("answer_state, rich_content, plain_text, lock_version")
+    .eq("intake_id", intakeId)
+    .eq("question_id", questionId)
+    .maybeSingle();
+  if (!data) return null;
+  return {
+    ok: false,
+    conflict: true,
+    server: {
+      answer_state: data.answer_state as string,
+      rich_content: data.rich_content,
+      plain_text: data.plain_text as string,
+      lock_version: data.lock_version as number,
+    },
+  };
+}
+
 /**
  * Persists one answer with optimistic concurrency (lock_version), writes a
  * revision snapshot, and advances progress. Shared by the public autosave route
@@ -76,7 +100,7 @@ export async function saveIntakeAnswer(args: SaveAnswerArgs): Promise<SaveAnswer
   let answerId = existing?.id as string | undefined;
 
   if (existing) {
-    const { error } = await admin
+    const { data: updated, error } = await admin
       .from("candidate_intake_answers")
       .update({
         answer_state: args.answerState,
@@ -85,8 +109,19 @@ export async function saveIntakeAnswer(args: SaveAnswerArgs): Promise<SaveAnswer
         lock_version: newLock,
       })
       .eq("id", existing.id)
-      .eq("lock_version", args.lockVersion);
+      .eq("lock_version", args.lockVersion)
+      .select("id")
+      .maybeSingle();
     if (error) return { ok: false, error: error.message };
+    // A different device may have won between the initial SELECT and UPDATE.
+    // Supabase treats an UPDATE matching zero rows as success, so explicitly
+    // convert that race into the same optimistic-concurrency response.
+    if (!updated) {
+      return (await latestServerAnswer(args.intakeId, question.id as string)) ?? {
+        ok: false,
+        error: "Javobning so‘nggi versiyasini yuklab bo‘lmadi",
+      };
+    }
   } else {
     const { data, error } = await admin
       .from("candidate_intake_answers")
@@ -101,7 +136,12 @@ export async function saveIntakeAnswer(args: SaveAnswerArgs): Promise<SaveAnswer
       })
       .select("id")
       .single();
-    if (error || !data) return { ok: false, error: error?.message ?? "Saqlab bo‘lmadi" };
+    if (error || !data) {
+      // Simultaneous first saves can race on the canonical unique key. Return
+      // the winning row as a conflict instead of losing either local draft.
+      const conflict = await latestServerAnswer(args.intakeId, question.id as string);
+      return conflict ?? { ok: false, error: error?.message ?? "Saqlab bo‘lmadi" };
+    }
     answerId = data.id as string;
   }
 

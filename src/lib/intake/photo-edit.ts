@@ -325,6 +325,7 @@ export function serializePhotoEditError(error: unknown): string {
       status: error.details.status ?? null,
       message: error.details.message.slice(0, 500),
       code: error.details.code ?? null,
+      type: error.details.type ?? null,
       param: error.details.param ?? null,
       requestId: error.details.requestId ?? null,
     });

@@ -179,6 +179,7 @@ test("OpenAI 400 raw body aniq diagnostik maydonlarga ajratiladi", async () => {
     status: 400,
     message: "Unsupported parameter: quality",
     code: "invalid_value",
+    type: "invalid_request_error",
     param: "quality",
     requestId: "req_123",
   });

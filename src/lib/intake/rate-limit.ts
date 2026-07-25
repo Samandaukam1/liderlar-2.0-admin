@@ -44,6 +44,8 @@ export const RATE_LIMITS = {
   submit: { limit: 6, windowMs: 60_000 },
   heartbeat: { limit: 90, windowMs: 60_000 },
   photo_edit: { limit: 12, windowMs: 60_000 },
+  photo_status: { limit: 40, windowMs: 60_000 },
+  photo_confirm: { limit: 12, windowMs: 60_000 },
   ai_text: { limit: 30, windowMs: 60_000 },
 } as const;
 
