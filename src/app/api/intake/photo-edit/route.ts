@@ -5,9 +5,15 @@ import { enforceRateLimit } from "@/lib/intake/rate-limit";
 import { jsonError, noStoreJson, originAllowed, readJsonBody } from "@/lib/intake/http";
 import { buildPhotoPrompt } from "@/lib/intake/photo-prompt";
 import { editIntakePhoto, imageModel } from "@/lib/intake/ai";
+import {
+  OpenAIImageEditError,
+  assertStorageUploadSucceeded,
+  photoEditErrorResponse,
+} from "@/lib/intake/photo-edit";
 import { INTAKE_BUCKET, CLOTHING_TYPES, COLORS, type ClothingType, type PhotoColor, type Gender } from "@/lib/intake/constants";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 180;
 
@@ -61,7 +67,7 @@ export async function POST(request: NextRequest) {
     color: clothing === "own_clothes" ? null : (color as PhotoColor),
   });
 
-  const { data: edit } = await db
+  const { data: edit, error: editError } = await db
     .from("candidate_intake_photo_edits")
     .insert({
       intake_id: resolved.intakeId,
@@ -75,38 +81,56 @@ export async function POST(request: NextRequest) {
     })
     .select("id")
     .single();
+  if (editError || !edit) return jsonError(500, "Rasmni qayta ishlashni boshlashda xatolik yuz berdi");
 
   try {
     const { data: blob, error: dlErr } = await db.storage
       .from(source.bucket as string)
       .download(source.path as string);
-    if (dlErr || !blob) throw new Error("Original rasmni o‘qib bo‘lmadi");
+    if (dlErr || !blob) {
+      throw new Error(`Source image download failed: ${dlErr?.message || "empty response"}`);
+    }
 
     const result = await editIntakePhoto({
       imageBytes: new Uint8Array(await blob.arrayBuffer()),
-      fileName: (source.file_name as string) || "portrait.png",
-      mime: (source.mime_type as string) || "image/png",
+      mime: blob.type || (source.mime_type as string) || "image/jpeg",
       prompt,
     });
 
     const resultPath = `${resolved.intakeId}/photos/edited-${crypto.randomUUID()}.png`;
     const { error: upErr } = await db.storage
       .from(INTAKE_BUCKET)
-      .upload(resultPath, Buffer.from(result.b64, "base64"), { contentType: "image/png", upsert: false });
-    if (upErr) throw new Error(upErr.message);
+      .upload(resultPath, result.outputBuffer, { contentType: "image/png", upsert: false });
+    assertStorageUploadSucceeded(upErr);
 
-    await db
+    const { error: completedError } = await db
       .from("candidate_intake_photo_edits")
       .update({ status: "completed", result_bucket: INTAKE_BUCKET, result_path: resultPath, finished_at: new Date().toISOString() })
       .eq("id", edit!.id);
+    if (completedError) throw new Error(`Photo edit status update failed: ${completedError.message}`);
 
     return noStoreJson({ ok: true, edit: { id: edit!.id, status: "completed", url: await signIntakeFileUrl(resultPath) } });
-  } catch (err) {
-    await db
+  } catch (error: unknown) {
+    const storedError = error instanceof Error ? error.message.slice(0, 400) : "unknown";
+    const { error: failedStatusError } = await db
       .from("candidate_intake_photo_edits")
-      .update({ status: "failed", error: err instanceof Error ? err.message.slice(0, 400) : "unknown", finished_at: new Date().toISOString() })
+      .update({ status: "failed", error: storedError, finished_at: new Date().toISOString() })
       .eq("id", edit!.id);
-    console.error("intake candidate photo-edit failed");
-    return jsonError(502, "Rasmni qayta ishlashda xatolik yuz berdi");
+    if (failedStatusError) {
+      console.error("Photo edit failed-status update failed", {
+        editId: edit.id,
+        message: failedStatusError.message,
+      });
+    }
+    if (error instanceof OpenAIImageEditError) {
+      console.error("OpenAI image edit failed", {
+        ...error.details,
+        model: imageModel(),
+      });
+    } else {
+      console.error("intake candidate photo-edit failed", { message: storedError });
+    }
+    const response = photoEditErrorResponse(error);
+    return jsonError(response.status, response.message);
   }
 }

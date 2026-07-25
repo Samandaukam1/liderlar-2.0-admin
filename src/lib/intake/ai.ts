@@ -3,6 +3,12 @@ import OpenAI, { toFile } from "openai";
 import { z } from "zod";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
+import {
+  OpenAIImageEditError,
+  buildOpenAIImageEditRequest,
+  decodeOpenAIImageEditResult,
+  preparePhotoEditSource,
+} from "./photo-edit";
 
 let client: OpenAI | null = null;
 function openai(): OpenAI {
@@ -14,7 +20,7 @@ export function textModel(): string {
   return process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 }
 export function imageModel(): string {
-  return process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-1";
+  return process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-2";
 }
 export function moderationModel(): string {
   return process.env.OPENAI_MODERATION_MODEL ?? "omni-moderation-latest";
@@ -306,7 +312,7 @@ export async function moderateContent(inputs: {
  * ============================================================ */
 
 export interface PhotoEditResult {
-  b64: string;
+  outputBuffer: Buffer;
 }
 
 /**
@@ -316,21 +322,27 @@ export interface PhotoEditResult {
  */
 export async function editIntakePhoto(params: {
   imageBytes: Uint8Array;
-  fileName: string;
   mime: string;
   prompt: string;
 }): Promise<PhotoEditResult> {
   const model = imageModel();
-  const file = await toFile(Buffer.from(params.imageBytes), params.fileName || "portrait.png", {
-    type: params.mime || "image/png",
+  const source = preparePhotoEditSource({
+    imageBytes: params.imageBytes,
+    mime: params.mime,
   });
-  const res = await openai().images.edit({
-    model,
-    image: file,
-    prompt: params.prompt,
-    size: "1024x1024",
+  const file = await toFile(source.buffer, source.fileName, {
+    type: source.mime,
   });
-  const b64 = res.data?.[0]?.b64_json;
-  if (!b64) throw new Error("Rasm natijasi bo‘sh qaytdi");
-  return { b64 };
+  try {
+    const result = await openai().images.edit(
+      buildOpenAIImageEditRequest({
+        model,
+        image: file,
+        prompt: params.prompt,
+      }),
+    );
+    return { outputBuffer: decodeOpenAIImageEditResult(result) };
+  } catch (error: unknown) {
+    throw new OpenAIImageEditError(error);
+  }
 }

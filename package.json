@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start --port 3001",
     "lint": "eslint",
-    "test": "node --test tests/permissions.test.ts tests/tokens.test.ts tests/ranking.test.ts tests/diff-csv.test.ts tests/intake-tokens.test.ts tests/intake-files.test.ts tests/intake-validation.test.ts"
+    "test": "node --test tests/permissions.test.ts tests/tokens.test.ts tests/ranking.test.ts tests/diff-csv.test.ts tests/intake-tokens.test.ts tests/intake-files.test.ts tests/intake-validation.test.ts tests/photo-edit.test.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",

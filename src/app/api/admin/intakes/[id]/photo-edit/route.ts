@@ -7,7 +7,13 @@ import { signIntakeFileUrl } from "@/lib/intake/data";
 import { buildPhotoPrompt } from "@/lib/intake/photo-prompt";
 import { INTAKE_BUCKET, CLOTHING_TYPES, type ClothingType, type PhotoColor, type Gender } from "@/lib/intake/constants";
 import { logAudit } from "@/lib/audit";
+import {
+  OpenAIImageEditError,
+  assertStorageUploadSucceeded,
+  photoEditErrorResponse,
+} from "@/lib/intake/photo-edit";
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 180;
 
@@ -82,7 +88,7 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
     : await srcQuery.eq("is_primary_photo", true).maybeSingle();
   if (!source) return NextResponse.json({ error: "Original rasm topilmadi" }, { status: 404 });
 
-  const { data: edit } = await db
+  const { data: edit, error: editError } = await db
     .from("candidate_intake_photo_edits")
     .insert({
       intake_id: intakeId,
@@ -98,27 +104,31 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
     })
     .select("id")
     .single();
+  if (editError || !edit) {
+    return NextResponse.json({ error: "Rasmni qayta ishlashni boshlashda xatolik" }, { status: 500 });
+  }
 
   try {
     const { data: blob, error: dlErr } = await db.storage
       .from(source.bucket as string)
       .download(source.path as string);
-    if (dlErr || !blob) throw new Error("Original rasmni o‘qib bo‘lmadi");
+    if (dlErr || !blob) {
+      throw new Error(`Source image download failed: ${dlErr?.message || "empty response"}`);
+    }
 
     const result = await editIntakePhoto({
       imageBytes: new Uint8Array(await blob.arrayBuffer()),
-      fileName: (source.file_name as string) || "portrait.png",
-      mime: (source.mime_type as string) || "image/png",
+      mime: blob.type || (source.mime_type as string) || "image/jpeg",
       prompt,
     });
 
     const resultPath = `${intakeId}/photos/edited-${crypto.randomUUID()}.png`;
     const { error: upErr } = await db.storage
       .from(INTAKE_BUCKET)
-      .upload(resultPath, Buffer.from(result.b64, "base64"), { contentType: "image/png", upsert: false });
-    if (upErr) throw new Error(upErr.message);
+      .upload(resultPath, result.outputBuffer, { contentType: "image/png", upsert: false });
+    assertStorageUploadSucceeded(upErr);
 
-    await db
+    const { error: completedError } = await db
       .from("candidate_intake_photo_edits")
       .update({
         status: "completed",
@@ -127,6 +137,7 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
         finished_at: new Date().toISOString(),
       })
       .eq("id", edit!.id);
+    if (completedError) throw new Error(`Photo edit status update failed: ${completedError.message}`);
 
     await db.from("candidate_intake_ai_runs").insert({
       intake_id: intakeId,
@@ -150,12 +161,27 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
       ok: true,
       edit: { id: edit!.id, status: "completed", url: await signIntakeFileUrl(resultPath) },
     });
-  } catch (err) {
-    await db
+  } catch (error: unknown) {
+    const storedError = error instanceof Error ? error.message.slice(0, 400) : "unknown";
+    const { error: failedStatusError } = await db
       .from("candidate_intake_photo_edits")
-      .update({ status: "failed", error: err instanceof Error ? err.message.slice(0, 400) : "unknown", finished_at: new Date().toISOString() })
+      .update({ status: "failed", error: storedError, finished_at: new Date().toISOString() })
       .eq("id", edit!.id);
-    console.error("intake photo-edit failed");
-    return NextResponse.json({ error: "Rasmni qayta ishlashda xatolik" }, { status: 502 });
+    if (failedStatusError) {
+      console.error("Photo edit failed-status update failed", {
+        editId: edit.id,
+        message: failedStatusError.message,
+      });
+    }
+    if (error instanceof OpenAIImageEditError) {
+      console.error("OpenAI image edit failed", {
+        ...error.details,
+        model: imageModel(),
+      });
+    } else {
+      console.error("intake photo-edit failed", { message: storedError });
+    }
+    const response = photoEditErrorResponse(error);
+    return NextResponse.json({ error: response.message }, { status: response.status });
   }
 }
