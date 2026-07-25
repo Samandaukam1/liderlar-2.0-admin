@@ -34,6 +34,7 @@ export async function POST(request: NextRequest) {
   return noStoreJson({
     ok: true,
     full_name: state.intake.full_name,
+    gender: state.intake.gender,
     status: state.intake.status,
     progress: {
       current: state.intake.current_question_no,
@@ -67,6 +68,7 @@ export async function POST(request: NextRequest) {
     photo: state.primaryPhoto
       ? { file_name: state.primaryPhoto.file_name, url: state.primaryPhoto.signedUrl }
       : null,
+    feedback: state.feedback,
     settings: {
       consentText: settings.consentText,
       consentVersion: settings.consentVersion,

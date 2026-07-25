@@ -166,6 +166,7 @@ export interface PublicIntakeState {
     id: string;
     status: string;
     full_name: string;
+    gender: string | null;
     current_question_no: number;
     last_completed_question_no: number;
     phone_e164: string | null;
@@ -175,6 +176,13 @@ export interface PublicIntakeState {
   template: IntakeTemplate;
   answers: PublicAnswer[];
   primaryPhoto: { path: string; file_name: string; signedUrl: string | null } | null;
+  feedback: IntakeFeedback[];
+}
+
+export interface IntakeFeedback {
+  question_no: number | null;
+  feedback_text: string;
+  feedback_type: string;
 }
 
 /** Everything the public form needs to render — no tokens, no service key. */
@@ -183,7 +191,7 @@ export async function loadPublicIntakeState(intakeId: string): Promise<PublicInt
   const { data: intake } = await admin
     .from("candidate_intakes")
     .select(
-      "id, status, full_name, template_id, current_question_no, last_completed_question_no, phone_e164, telegram_username, consent_given",
+      "id, status, full_name, gender, template_id, current_question_no, last_completed_question_no, phone_e164, telegram_username, consent_given",
     )
     .eq("id", intakeId)
     .maybeSingle();
@@ -192,7 +200,7 @@ export async function loadPublicIntakeState(intakeId: string): Promise<PublicInt
   const template = await getActiveTemplate();
   if (!template) return null;
 
-  const [{ data: answers }, { data: photo }] = await Promise.all([
+  const [{ data: answers }, { data: photo }, { data: feedback }] = await Promise.all([
     admin
       .from("candidate_intake_answers")
       .select("question_no, answer_state, rich_content, plain_text, lock_version")
@@ -205,6 +213,12 @@ export async function loadPublicIntakeState(intakeId: string): Promise<PublicInt
       .eq("is_primary_photo", true)
       .eq("status", "active")
       .maybeSingle(),
+    admin
+      .from("candidate_intake_ai_feedback")
+      .select("question_no, feedback_text, feedback_type")
+      .eq("intake_id", intakeId)
+      .eq("is_visible_to_candidate", true)
+      .eq("is_resolved", false),
   ]);
 
   let primaryPhoto: PublicIntakeState["primaryPhoto"] = null;
@@ -221,6 +235,7 @@ export async function loadPublicIntakeState(intakeId: string): Promise<PublicInt
     template,
     answers: (answers ?? []) as PublicAnswer[],
     primaryPhoto,
+    feedback: (feedback ?? []) as IntakeFeedback[],
   };
 }
 

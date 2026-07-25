@@ -47,7 +47,7 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
 
   const [{ data: questions }, { data: answers }] = await Promise.all([
     db.from("candidate_intake_questions").select("question_no, prompt").eq("template_id", intake.template_id).order("question_no"),
-    db.from("candidate_intake_answers").select("question_no, plain_text, answer_state").eq("intake_id", intakeId).order("question_no"),
+    db.from("candidate_intake_answers").select("id, question_no, plain_text, answer_state").eq("intake_id", intakeId).order("question_no"),
   ]);
 
   const promptByNo = new Map((questions ?? []).map((q) => [q.question_no as number, q.prompt as string]));
@@ -91,6 +91,42 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
         })
         .eq("intake_id", intakeId)
         .eq("question_no", a.question_no);
+    }
+
+    // Candidate-visible AI feedback: replace the unresolved set with a fresh one
+    // (per-answer clarification questions + fact conflicts). Best-effort.
+    try {
+      const answerIdByNo = new Map((answers ?? []).map((a) => [a.question_no as number, a.id as string]));
+      await db.from("candidate_intake_ai_feedback").delete().eq("intake_id", intakeId).eq("is_resolved", false);
+      const feedbackRows: Record<string, unknown>[] = [];
+      for (const a of review.answers) {
+        const answerId = answerIdByNo.get(a.question_no) ?? null;
+        if (a.clarification_questions.length > 0) {
+          feedbackRows.push({
+            intake_id: intakeId,
+            answer_id: answerId,
+            question_no: a.question_no,
+            feedback_text: a.clarification_questions.join("\n"),
+            feedback_type: "clarification",
+            is_visible_to_candidate: true,
+            is_resolved: false,
+          });
+        }
+        if (a.fact_flags.length > 0) {
+          feedbackRows.push({
+            intake_id: intakeId,
+            answer_id: answerId,
+            question_no: a.question_no,
+            feedback_text: a.fact_flags.map((f) => `${f.claim}: ${f.explanation}`).join("\n"),
+            feedback_type: "fact_conflict",
+            is_visible_to_candidate: true,
+            is_resolved: false,
+          });
+        }
+      }
+      if (feedbackRows.length > 0) await db.from("candidate_intake_ai_feedback").insert(feedbackRows);
+    } catch {
+      /* feedback write is non-fatal */
     }
 
     // Real omni-moderation signal over the raw answers.

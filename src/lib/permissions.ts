@@ -55,6 +55,8 @@ export const PERMISSIONS = [
   "media.upload",
   "media.delete",
   "ai.use",
+  "ai_prompts.view",
+  "ai_prompts.edit",
   "notifications.view",
   "notifications.manage",
   "admins.manage",

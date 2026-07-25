@@ -163,6 +163,22 @@ body {
   animation: rise-in 0.4s var(--ease-out-soft) both;
 }
 
+/* Candidate intake — gender accent theme.
+ * Tailwind v4 compiles `bg-brand`/`text-brand`/`from-brand`/`to-cyan` to
+ * var(--color-*), so overriding these tokens on the form root recolours every
+ * accent (buttons, progress bar, borders) in one place. `--intake-accent` is
+ * also exposed for any bespoke element that needs the accent directly. */
+[data-intake-gender="male"] {
+  --intake-accent: var(--color-brand);
+}
+[data-intake-gender="female"] {
+  --color-brand: #db2777; /* pink-600 */
+  --color-electric: #ec4899; /* pink-500 */
+  --color-cyan: #f472b6; /* pink-400 */
+  --color-cyan-light: #f9a8d4; /* pink-300 */
+  --intake-accent: #db2777;
+}
+
 /* Intake rich-text (TipTap) content */
 .intake-prose:focus {
   outline: none;

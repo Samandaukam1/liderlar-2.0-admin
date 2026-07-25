@@ -12,11 +12,24 @@ import {
   Paperclip,
   ShieldCheck,
   Send,
+  Sparkles,
+  MessageCircleQuestion,
+  ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button, Input } from "@/components/ui/primitives";
 import { RichEditor } from "@/components/intake/rich-editor";
-import { canAdvanceAnswer, NO_ANSWER_TEXT, type AnswerState } from "@/lib/intake/constants";
+import {
+  canAdvanceAnswer,
+  NO_ANSWER_TEXT,
+  CLOTHING_TYPES,
+  COLORS,
+  CLOTHING_LABELS,
+  COLOR_LABELS,
+  type AnswerState,
+  type ClothingType,
+  type PhotoColor,
+} from "@/lib/intake/constants";
 
 /* ----------------------------- types ----------------------------- */
 
@@ -64,6 +77,16 @@ export interface UploadResp {
   attachment?: IntakeAttachmentView;
   error?: string;
 }
+export interface PhotoGenResp {
+  ok: boolean;
+  url?: string | null;
+  error?: string;
+}
+export interface IntakeFeedbackView {
+  question_no: number | null;
+  feedback_text: string;
+  feedback_type: string;
+}
 export interface IntakeTransport {
   autosave(p: {
     question_no: number;
@@ -75,6 +98,8 @@ export interface IntakeTransport {
   upload(file: File, opts: { purpose: "photo" | "attachment"; question_no?: number }): Promise<UploadResp>;
   submit(c: { phone: string; telegram: string; consent: boolean }): Promise<{ ok: boolean; errors?: string[] }>;
   heartbeat(): Promise<void>;
+  /** Candidate-side AI photo generation (public flow only). */
+  generatePhoto?(params: { clothing_type: string; color: string | null }): Promise<PhotoGenResp>;
 }
 
 interface AnswerLocal {
@@ -120,6 +145,7 @@ export function IntakeForm({
   draftKey,
   transport,
   readOnly = false,
+  feedback = [],
 }: {
   mode: "public" | "admin";
   template: IntakeTemplateView;
@@ -132,6 +158,7 @@ export function IntakeForm({
   draftKey: string;
   transport: IntakeTransport;
   readOnly?: boolean;
+  feedback?: IntakeFeedbackView[];
 }) {
   const questions = template.questions;
   const totalStages = questions.length + 2; // photo + questions + contact
@@ -147,6 +174,20 @@ export function IntakeForm({
   const [submitErrors, setSubmitErrors] = useState<string[]>([]);
   const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const { feedbackByQuestion, generalFeedback } = useMemo(() => {
+    const map = new Map<number, IntakeFeedbackView[]>();
+    const general: IntakeFeedbackView[] = [];
+    for (const f of feedback) {
+      if (f.question_no == null) general.push(f);
+      else {
+        const arr = map.get(f.question_no) ?? [];
+        arr.push(f);
+        map.set(f.question_no, arr);
+      }
+    }
+    return { feedbackByQuestion: map, generalFeedback: general };
+  }, [feedback]);
 
   // Answers live in React state (read during render); a mirror ref gives
   // callbacks/effects the latest value without reading a ref during render.
@@ -450,6 +491,13 @@ export function IntakeForm({
         </div>
       </div>
 
+      {/* General AI feedback (not tied to a specific question) */}
+      {generalFeedback.length > 0 && (
+        <div className="mb-4">
+          <FeedbackPanel items={generalFeedback} title="Umumiy AI izohi" />
+        </div>
+      )}
+
       {/* Question navigator */}
       {stage >= 1 && stage <= questions.length && (
         <div className="mb-4 flex flex-wrap gap-1.5">
@@ -487,6 +535,7 @@ export function IntakeForm({
             busy={busy}
             readOnly={readOnly}
             onPick={(f) => doUpload(f, "photo")}
+            onGenerate={transport.generatePhoto ? (p) => transport.generatePhoto!(p) : undefined}
           />
         )}
 
@@ -512,6 +561,9 @@ export function IntakeForm({
             <AttachmentList
               items={attachments.filter((a) => a.question_no === currentQuestion.question_no)}
             />
+            {feedbackByQuestion.has(currentQuestion.question_no) && (
+              <FeedbackPanel items={feedbackByQuestion.get(currentQuestion.question_no)!} />
+            )}
           </div>
         )}
 
@@ -574,6 +626,7 @@ function PhotoStage({
   busy,
   readOnly,
   onPick,
+  onGenerate,
 }: {
   title: string;
   instruction: string;
@@ -581,8 +634,25 @@ function PhotoStage({
   busy: boolean;
   readOnly: boolean;
   onPick: (f: File) => void;
+  onGenerate?: (params: { clothing_type: string; color: string | null }) => Promise<PhotoGenResp>;
 }) {
   const ref = useRef<HTMLInputElement>(null);
+  const [clothing, setClothing] = useState<ClothingType>("suit");
+  const [color, setColor] = useState<PhotoColor>("navy");
+  const [genBusy, setGenBusy] = useState(false);
+  const [generated, setGenerated] = useState<string | null>(null);
+  const [genError, setGenError] = useState<string | null>(null);
+
+  const runGenerate = async () => {
+    if (!onGenerate) return;
+    setGenBusy(true);
+    setGenError(null);
+    const resp = await onGenerate({ clothing_type: clothing, color: clothing === "own_clothes" ? null : color });
+    setGenBusy(false);
+    if (resp.ok && resp.url) setGenerated(resp.url);
+    else setGenError(resp.error ?? "Rasmni yaratib bo‘lmadi");
+  };
+
   return (
     <div className="text-center">
       <span className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan/20 to-lavender/20 text-brand">
@@ -618,6 +688,96 @@ function PhotoStage({
             }}
           />
           <p className="mt-3 text-xs text-ink-soft">JPG, PNG, WEBP yoki HEIC</p>
+        </div>
+      )}
+
+      {/* AI photo generation (candidate flow) */}
+      {onGenerate && photo?.url && !readOnly && (
+        <div className="mt-6 rounded-field border border-line bg-surface/40 p-4 text-left">
+          <p className="mb-3 flex items-center gap-1.5 text-sm font-bold text-ink">
+            <Sparkles className="h-4 w-4 text-brand" /> AI bilan professional rasm
+          </p>
+
+          <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-ink-soft">Kiyim turi</p>
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {CLOTHING_TYPES.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setClothing(c)}
+                className={cn(
+                  "rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
+                  clothing === c ? "border-brand bg-brand/10 text-brand" : "border-line text-ink-soft hover:border-brand/40",
+                )}
+              >
+                {CLOTHING_LABELS[c]}
+              </button>
+            ))}
+          </div>
+
+          {clothing !== "own_clothes" && (
+            <>
+              <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-ink-soft">Rang</p>
+              <div className="mb-3 flex flex-wrap gap-1.5">
+                {COLORS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setColor(c)}
+                    className={cn(
+                      "rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
+                      color === c ? "border-brand bg-brand/10 text-brand" : "border-line text-ink-soft hover:border-brand/40",
+                    )}
+                  >
+                    {COLOR_LABELS[c]}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          <Button variant="ai" className="w-full" onClick={runGenerate} disabled={genBusy}>
+            {genBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            AI bilan ishlash
+          </Button>
+          {genError && <p className="mt-2 text-xs font-semibold text-coral">{genError}</p>}
+
+          {generated && (
+            <div className="mt-4 text-center">
+              <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-brand">AI natija</p>
+              {/* eslint-disable-next-line @next/next/no-img-element -- signed storage URL */}
+              <img src={generated} alt="AI natija" className="mx-auto h-52 w-52 rounded-2xl border-2 border-brand object-cover shadow-card" />
+              <p className="mt-2 text-xs text-ink-soft">Jamoamiz yakuniy rasmni tasdiqlaydi.</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FeedbackPanel({ items, title = "AI izohi" }: { items: IntakeFeedbackView[]; title?: string }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="mt-3 overflow-hidden rounded-field border border-amber/50 bg-amber/[0.06]">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left"
+      >
+        <span className="flex items-center gap-2 text-sm font-bold text-amber">
+          <MessageCircleQuestion className="h-4 w-4" /> {title}
+        </span>
+        <ChevronDown className={cn("h-4 w-4 text-amber transition", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div className="space-y-2 px-3 pb-3">
+          {items.map((f, i) => (
+            <p key={i} className="whitespace-pre-wrap text-sm text-ink">
+              {f.feedback_text}
+            </p>
+          ))}
+          <p className="text-xs text-ink-soft">Iltimos, javobingizni yuqorida tahrirlab, so‘ng qayta yuboring.</p>
         </div>
       )}
     </div>

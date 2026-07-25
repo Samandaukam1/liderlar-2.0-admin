@@ -6,7 +6,7 @@ import { requirePermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 import { slugify } from "@/lib/utils";
-import { nameSchema, composeFullName, validateContact } from "@/lib/intake/schemas";
+import { validateContact } from "@/lib/intake/schemas";
 import {
   generateRawIntakeToken,
   hashIntakeToken,
@@ -33,13 +33,6 @@ export interface IntakeActionResult {
   lockVersion?: number;
 }
 
-function parseNames(formData: FormData) {
-  return nameSchema.safeParse({
-    first_name: String(formData.get("first_name") ?? ""),
-    last_name: String(formData.get("last_name") ?? ""),
-    father_name: String(formData.get("father_name") ?? ""),
-  });
-}
 
 /**
  * Resolves the intake public base URL from the LIVE request at runtime, so the
@@ -94,24 +87,26 @@ async function createIntake(
   method: "manual" | "secure_link",
 ): Promise<IntakeActionResult> {
   const ctx = await requirePermission("intakes.create");
-  const names = parseNames(formData);
-  if (!names.success) return { ok: false, error: names.error.issues[0]?.message ?? "Ism xato" };
+  // Single free-text full name + required gender (drives photo AI + form theme).
+  const fullName = String(formData.get("full_name") ?? "").trim();
+  const gender = String(formData.get("gender") ?? "");
+  if (fullName.length < 3) return { ok: false, error: "Ism familiya kiritilishi shart (kamida 3 belgi)" };
+  if (gender !== "male" && gender !== "female") return { ok: false, error: "Jins tanlanishi shart" };
 
   const template = await getActiveTemplate();
   if (!template) return { ok: false, error: "Faol anketa shabloni topilmadi (migration/seed?)" };
 
   const admin = createSupabaseAdminClient();
-  const fullName = composeFullName(names.data);
+  // first_name/last_name/father_name kept at their DB defaults ('') — full_name
+  // is now the single source of truth.
   const { data, error } = await admin
     .from("candidate_intakes")
     .insert({
       template_id: template.id,
       intake_method: method,
       status: "draft",
-      first_name: names.data.first_name,
-      last_name: names.data.last_name,
-      father_name: names.data.father_name,
-      full_name: fullName,
+      full_name: fullName.slice(0, 200),
+      gender,
       created_by: ctx.userId,
       assigned_admin: ctx.userId,
     })
@@ -124,7 +119,7 @@ async function createIntake(
     action: `intake.create.${method}`,
     entityType: "candidate_intake",
     entityId: data.id,
-    newValue: { full_name: fullName, method },
+    newValue: { full_name: fullName, gender, method },
   });
 
   revalidatePath("/nomzodlar/anketalar");

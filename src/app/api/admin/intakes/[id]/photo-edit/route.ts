@@ -4,7 +4,8 @@ import { checkPermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { editIntakePhoto, imageModel } from "@/lib/intake/ai";
 import { signIntakeFileUrl } from "@/lib/intake/data";
-import { INTAKE_BUCKET } from "@/lib/intake/constants";
+import { buildPhotoPrompt } from "@/lib/intake/photo-prompt";
+import { INTAKE_BUCKET, CLOTHING_TYPES, type ClothingType, type PhotoColor, type Gender } from "@/lib/intake/constants";
 import { logAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
@@ -21,16 +22,39 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
   if (!admin) return NextResponse.json({ error: "Ruxsat yo‘q" }, { status: 403 });
   const { id: intakeId } = await ctx.params;
 
-  let body: { prompt?: string; idempotency_key?: string; source_attachment_id?: string } = {};
+  let body: {
+    prompt?: string;
+    idempotency_key?: string;
+    source_attachment_id?: string;
+    clothing_type?: string;
+    color?: string | null;
+  } = {};
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "So‘rov noto‘g‘ri" }, { status: 400 });
   }
-  const prompt = (body.prompt ?? "").trim();
-  if (prompt.length < 10) return NextResponse.json({ error: "Prompt juda qisqa" }, { status: 400 });
 
   const db = createSupabaseAdminClient();
+
+  // Structured mode (clothing_type present) builds the prompt via the SHARED
+  // buildPhotoPrompt() — same source as the candidate route, never hardcoded.
+  // Otherwise fall back to a free-text prompt (backward compatible).
+  const structured = !!body.clothing_type && (CLOTHING_TYPES as readonly string[]).includes(body.clothing_type);
+  let prompt: string;
+  let genderSnapshot: Gender | null = null;
+  if (structured) {
+    const { data: intakeRow } = await db.from("candidate_intakes").select("gender").eq("id", intakeId).maybeSingle();
+    genderSnapshot = ((intakeRow?.gender as Gender) ?? "male") as Gender;
+    prompt = await buildPhotoPrompt({
+      gender: genderSnapshot,
+      clothingType: body.clothing_type as ClothingType,
+      color: body.clothing_type === "own_clothes" ? null : ((body.color as PhotoColor) ?? null),
+    });
+  } else {
+    prompt = (body.prompt ?? "").trim();
+    if (prompt.length < 10) return NextResponse.json({ error: "Prompt juda qisqa" }, { status: 400 });
+  }
 
   if (body.idempotency_key) {
     const { data: prior } = await db
@@ -68,6 +92,9 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
       status: "processing",
       idempotency_key: body.idempotency_key ?? null,
       created_by: admin.userId,
+      gender_snapshot: genderSnapshot,
+      clothing_type: structured ? body.clothing_type : null,
+      color: structured && body.clothing_type !== "own_clothes" ? body.color ?? null : null,
     })
     .select("id")
     .single();

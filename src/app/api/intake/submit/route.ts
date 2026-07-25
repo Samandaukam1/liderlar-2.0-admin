@@ -53,5 +53,12 @@ export async function POST(request: NextRequest) {
   const res = result as { ok: boolean; errors?: string[] };
   if (!res?.ok) return noStoreJson({ ok: false, errors: res?.errors ?? ["Yuborib bo‘lmadi"] }, 422);
 
+  // A successful (re-)submission resolves any candidate-visible AI feedback.
+  await admin
+    .from("candidate_intake_ai_feedback")
+    .update({ is_resolved: true })
+    .eq("intake_id", resolved.intakeId)
+    .eq("is_resolved", false);
+
   return noStoreJson({ ok: true });
 }

@@ -18,6 +18,7 @@ import {
   ClipboardList,
   Image,
   Sparkles,
+  Wand2,
   Bell,
   ShieldCheck,
   ScrollText,
@@ -82,6 +83,12 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Aqlli vositalar",
     items: [
       { label: "Jaxongir AI", href: "/ai", icon: Sparkles, permission: "ai.use", keywords: "sun'iy intellekt muharrir" },
+    ],
+  },
+  {
+    label: "AI Promtlar",
+    items: [
+      { label: "Nomzod link rasm yaratish promtlari", href: "/ai-prompts", icon: Wand2, permission: "ai_prompts.view", keywords: "prompt rasm fon kiyim rang" },
     ],
   },
   {

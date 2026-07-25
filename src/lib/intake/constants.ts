@@ -111,6 +111,29 @@ export function tiptapToPlainText(doc: unknown): string {
   return out.join("").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+/* ----------------------------- gender / photo params ----------------------------- */
+
+export const GENDERS = ["male", "female"] as const;
+export type Gender = (typeof GENDERS)[number];
+
+export const CLOTHING_TYPES = ["suit", "shirt", "own_clothes"] as const;
+export type ClothingType = (typeof CLOTHING_TYPES)[number];
+
+export const COLORS = ["black", "white", "navy"] as const;
+export type PhotoColor = (typeof COLORS)[number];
+
+export const GENDER_LABELS: Record<Gender, string> = { male: "Erkak", female: "Ayol" };
+export const CLOTHING_LABELS: Record<ClothingType, string> = {
+  suit: "Kostyum",
+  shirt: "Ko‘ylak",
+  own_clothes: "O‘z kiyimim",
+};
+export const COLOR_LABELS: Record<PhotoColor, string> = {
+  black: "Qora",
+  white: "Oq",
+  navy: "To‘q ko‘k",
+};
+
 /** site_settings keys used by the intake system. */
 export const SETTINGS_KEYS = {
   defaultPhotoPrompt: "candidate_intake.default_photo_prompt",

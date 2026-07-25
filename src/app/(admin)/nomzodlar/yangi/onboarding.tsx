@@ -40,20 +40,20 @@ export function IntakeOnboarding() {
   const router = useRouter();
   const toast = useToast();
   const [method, setMethod] = useState<Method | null>(null);
-  const [names, setNames] = useState({ first_name: "", last_name: "", father_name: "" });
+  const [fullName, setFullName] = useState("");
+  const [gender, setGender] = useState<"male" | "female" | null>(null);
   const [pending, startTransition] = useTransition();
   const [link, setLink] = useState<{ url: string; id: string; expiresAt?: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
   const buildFd = () => {
     const fd = new FormData();
-    fd.set("first_name", names.first_name);
-    fd.set("last_name", names.last_name);
-    fd.set("father_name", names.father_name);
+    fd.set("full_name", fullName);
+    fd.set("gender", gender ?? "");
     return fd;
   };
 
-  const canSubmit = names.first_name.trim() && names.last_name.trim();
+  const canSubmit = fullName.trim().length >= 3 && !!gender;
 
   const handleSubmit = () => {
     if (!method || !canSubmit) return;
@@ -161,35 +161,37 @@ export function IntakeOnboarding() {
         })}
       </div>
 
-      {/* Name form */}
+      {/* Name + gender form */}
       {method && (
         <Card className="mt-6 rise-in">
-          <h3 className="mb-4 text-sm font-bold uppercase tracking-wide text-ink-soft">Nomzod ismi</h3>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <FormField label="Familiya" htmlFor="last_name">
-              <Input
-                id="last_name"
-                value={names.last_name}
-                onChange={(e) => setNames({ ...names, last_name: e.target.value })}
-                placeholder="Karimova"
-              />
-            </FormField>
-            <FormField label="Ism" htmlFor="first_name">
-              <Input
-                id="first_name"
-                value={names.first_name}
-                onChange={(e) => setNames({ ...names, first_name: e.target.value })}
-                placeholder="Aziza"
-              />
-            </FormField>
-            <FormField label="Otasining ismi" htmlFor="father_name">
-              <Input
-                id="father_name"
-                value={names.father_name}
-                onChange={(e) => setNames({ ...names, father_name: e.target.value })}
-                placeholder="Akmalovna"
-              />
-            </FormField>
+          <FormField label="Ism familiya (yoki Ism Familiya Otasining ismi)" htmlFor="full_name">
+            <Input
+              id="full_name"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="Masalan: Aziza Karimova Akmalovna"
+            />
+          </FormField>
+
+          <div className="mt-4">
+            <p className="mb-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-ink-soft">Jins</p>
+            <div className="flex gap-2">
+              {(["male", "female"] as const).map((g) => (
+                <button
+                  key={g}
+                  type="button"
+                  onClick={() => setGender(g)}
+                  className={cn(
+                    "flex-1 rounded-field border px-4 py-2.5 text-sm font-bold transition",
+                    gender === g
+                      ? "border-brand bg-brand/10 text-brand"
+                      : "border-line text-ink-soft hover:border-brand/40 hover:text-ink",
+                  )}
+                >
+                  {g === "male" ? "Erkak" : "Ayol"}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="mt-5 flex items-center justify-between">

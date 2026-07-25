@@ -11,11 +11,13 @@ import {
 
 interface ResolvedState {
   full_name: string;
+  gender: string | null;
   status: string;
   contact: { phone: string | null; telegram: string | null; consent: boolean };
   template: IntakeTemplateView;
   answers: IntakeAnswerView[];
   photo: { file_name: string; url: string | null } | null;
+  feedback: { question_no: number | null; feedback_text: string; feedback_type: string }[];
   settings: { consentText: string; consentVersion: string; maxUploadBytes: number };
 }
 
@@ -99,6 +101,16 @@ export function PublicIntake({ token }: { token: string }) {
       async heartbeat() {
         await postJson("/api/intake/heartbeat", {}).catch(() => {});
       },
+      async generatePhoto(params) {
+        try {
+          const r = await postJson("/api/intake/photo-edit", params);
+          const j = await r.json();
+          if (!r.ok || !j.ok) return { ok: false, error: j.error ?? "Rasmni yaratib bo‘lmadi" };
+          return { ok: true, url: j.edit?.url ?? null };
+        } catch {
+          return { ok: false, error: "Tarmoq xatosi" };
+        }
+      },
     };
   }, [token]);
 
@@ -127,7 +139,7 @@ export function PublicIntake({ token }: { token: string }) {
   const readOnly = !["draft", "needs_clarification"].includes(state.status);
 
   return (
-    <div className="px-4 py-8">
+    <div className="px-4 py-8" data-intake-gender={state.gender === "female" ? "female" : "male"}>
       <div className="mx-auto mb-8 max-w-3xl text-center">
         <h1 className="font-display text-2xl font-semibold uppercase tracking-wide text-ink">
           Assalomu alaykum, {state.full_name}!
@@ -153,6 +165,7 @@ export function PublicIntake({ token }: { token: string }) {
         draftKey={draftKey}
         transport={transport}
         readOnly={readOnly}
+        feedback={state.feedback}
       />
     </div>
   );
