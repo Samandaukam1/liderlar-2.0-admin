@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { requirePermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
@@ -40,6 +41,27 @@ function parseNames(formData: FormData) {
   });
 }
 
+/**
+ * Resolves the intake public base URL from the LIVE request at runtime, so the
+ * generated link always matches the real deployment (Vercel domain, custom
+ * domain, or localhost) instead of a value frozen into the build. An explicit
+ * server-only `INTAKE_BASE_URL` override wins when set.
+ */
+async function resolveIntakeBaseUrl(): Promise<string | undefined> {
+  const override = process.env.INTAKE_BASE_URL?.trim();
+  if (override) return override;
+  try {
+    const h = await headers();
+    const host = h.get("x-forwarded-host") ?? h.get("host");
+    if (!host) return undefined;
+    const isLocal = host.startsWith("localhost") || host.startsWith("127.0.0.1");
+    const proto = h.get("x-forwarded-proto") ?? (isLocal ? "http" : "https");
+    return `${proto}://${host}/anketa`;
+  } catch {
+    return undefined;
+  }
+}
+
 async function createLinkFor(intakeId: string, actorId: string, ttlDays: number) {
   const admin = createSupabaseAdminClient();
   // Retire any existing active link first.
@@ -60,7 +82,9 @@ async function createLinkFor(intakeId: string, actorId: string, ttlDays: number)
     created_by: actorId,
   });
   if (error) return { ok: false as const, error: error.message };
-  return { ok: true as const, link: buildIntakeLink(raw), prefix: tokenPrefix(raw), expiresAt };
+  // Base derived from the live request → correct URL on every deployment.
+  const base = await resolveIntakeBaseUrl();
+  return { ok: true as const, link: buildIntakeLink(raw, base), prefix: tokenPrefix(raw), expiresAt };
 }
 
 /* --------------------------- create --------------------------- */

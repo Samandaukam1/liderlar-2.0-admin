@@ -56,12 +56,34 @@ export function timingSafeEqualHex(a: string, b: string): boolean {
   }
 }
 
-/** Public form URL for a freshly-minted raw token. */
-export function buildIntakeLink(rawToken: string): string {
-  const base =
-    process.env.NEXT_PUBLIC_INTAKE_BASE_URL ??
-    `${(process.env.NEXT_PUBLIC_ADMIN_URL ?? "http://localhost:3001").replace(/\/$/, "")}/anketa`;
-  return `${base.replace(/\/$/, "")}/${rawToken}`;
+/** Strip trailing slashes; returns undefined for empty/blank input. */
+function normalizeBase(value: string | undefined | null): string | undefined {
+  const trimmed = value?.trim().replace(/\/+$/, "");
+  return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Public form URL for a freshly-minted raw token.
+ *
+ * IMPORTANT: `NEXT_PUBLIC_*` variables are inlined at BUILD time by Next.js, so
+ * on Vercel they freeze to whatever value existed during `next build` and can
+ * never reflect the real deployment URL at runtime — that is exactly why links
+ * came out as http://localhost:3001. Link creation happens server-side, so the
+ * caller resolves `base` from the LIVE request at runtime (see
+ * resolveIntakeBaseUrl in lib/actions/intakes.ts) and passes it in. The env
+ * fallbacks below only apply when no runtime base is available:
+ *   1. `base` (runtime request-derived) — the correct production URL
+ *   2. `INTAKE_BASE_URL` — server-only env, read at RUNTIME (not inlined)
+ *   3. `NEXT_PUBLIC_INTAKE_BASE_URL` — legacy, build-time inlined
+ *   4. localhost — local development only
+ */
+export function buildIntakeLink(rawToken: string, base?: string): string {
+  const resolved =
+    normalizeBase(base) ??
+    normalizeBase(process.env.INTAKE_BASE_URL) ??
+    normalizeBase(process.env.NEXT_PUBLIC_INTAKE_BASE_URL) ??
+    "http://localhost:3001/anketa";
+  return `${resolved}/${rawToken}`;
 }
 
 /**
