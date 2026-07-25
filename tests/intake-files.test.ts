@@ -56,6 +56,50 @@ test("validateIntakeUpload: JPEG qabul qilinadi", () => {
   assert.equal(r.ext, "jpg");
 });
 
+test("validateIntakeUpload: PNG va PDF qabul qilinadi", () => {
+  const png = validateIntakeUpload({
+    bytes: withTail([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    declaredMime: "image/png",
+    size: 1000,
+    maxBytes: 10_000,
+  });
+  assert.equal(png.ok, true);
+  assert.equal(png.kind, "image");
+
+  const pdf = validateIntakeUpload({
+    bytes: withTail([0x25, 0x50, 0x44, 0x46, 0x2d]),
+    declaredMime: "application/pdf",
+    size: 1000,
+    maxBytes: 10_000,
+  });
+  assert.equal(pdf.ok, true);
+  assert.equal(pdf.kind, "pdf");
+});
+
+test("validateIntakeUpload: audio va video qabul qilinadi", () => {
+  const audio = validateIntakeUpload({
+    bytes: withTail([0x49, 0x44, 0x33]),
+    declaredMime: "audio/mpeg",
+    size: 1000,
+    maxBytes: 10_000,
+  });
+  assert.equal(audio.ok, true);
+  assert.equal(audio.kind, "audio");
+
+  const videoBytes = new Uint8Array(64);
+  videoBytes.set([0x00, 0x00, 0x00, 0x18], 0);
+  videoBytes.set([0x66, 0x74, 0x79, 0x70], 4);
+  videoBytes.set([0x69, 0x73, 0x6f, 0x6d], 8);
+  const video = validateIntakeUpload({
+    bytes: videoBytes,
+    declaredMime: "video/mp4",
+    size: 1000,
+    maxBytes: 10_000,
+  });
+  assert.equal(video.ok, true);
+  assert.equal(video.kind, "video");
+});
+
 test("validateIntakeUpload: bajariladigan fayl rad etiladi", () => {
   const r = validateIntakeUpload({ bytes: withTail([0x4d, 0x5a, 0x90]), declaredMime: "application/octet-stream", size: 1000, maxBytes: 10_000 });
   assert.equal(r.ok, false);

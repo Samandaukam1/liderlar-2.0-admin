@@ -89,13 +89,90 @@ export function PublicIntake({ token }: { token: string }) {
         }
       },
       async upload(file, opts) {
-        const fd = new FormData();
-        fd.set("token", token);
-        fd.set("file", file);
-        fd.set("purpose", opts.purpose);
-        if (opts.question_no != null) fd.set("question_no", String(opts.question_no));
-        const r = await fetch("/api/intake/upload", { method: "POST", body: fd });
-        return r.json();
+        const requestId = crypto.randomUUID();
+        const send = async () => {
+          const form = new FormData();
+          form.set("token", token);
+          form.set("file", file);
+          form.set("purpose", opts.purpose);
+          form.set("request_id", requestId);
+          if (opts.question_no != null) form.set("question_no", String(opts.question_no));
+          const response = await fetch("/api/intake/upload", {
+            method: "POST",
+            body: form,
+          });
+          const json = await response.json();
+          return { response, json };
+        };
+
+        let result: Awaited<ReturnType<typeof send>>;
+        try {
+          result = await send();
+          if (
+            !result.response.ok &&
+            (result.json.attachmentPersisted === true || result.response.status === 409)
+          ) {
+            // The checksum-based server guard returns the already-created row.
+            result = await send();
+          }
+        } catch {
+          // A response can be lost after Storage/DB succeeded. One retry is
+          // safe because the server deduplicates by checksum and target.
+          try {
+            result = await send();
+          } catch {
+            return {
+              ok: false,
+              error:
+                "Fayl serverga yuklangan bo‘lishi mumkin, ammo javobni qayta ishlashda muammo yuz berdi. Sahifani yangilang.",
+            };
+          }
+        }
+
+        if (!result.response.ok || !result.json.ok) {
+          return {
+            ok: false,
+            error:
+              result.json.error ??
+              "Fayl serverga yuklandi, ammo javobni qayta ishlashda muammo yuz berdi. Sahifani yangilang.",
+          };
+        }
+
+        const wire = result.json.attachment as {
+          id: string;
+          intakeId: string;
+          fileName: string;
+          mimeType: string;
+          sizeBytes: number | string;
+          kind: string;
+          createdAt: string;
+        };
+        let previewUrl: string | null = null;
+        if (opts.purpose === "photo") {
+          try {
+            const resolved = await postJson("/api/intake/resolve", {});
+            const refreshed = await resolved.json();
+            if (resolved.ok && refreshed.ok) {
+              previewUrl = (refreshed.photo?.url as string | null) ?? null;
+              setState(refreshed as ResolvedState);
+            }
+          } catch {
+            // The durable upload remains successful; preview can recover on refresh.
+          }
+        }
+
+        return {
+          ok: true,
+          attachment: {
+            id: wire.id,
+            file_name: wire.fileName,
+            mime_type: wire.mimeType,
+            kind: wire.kind,
+            size_bytes: Number(wire.sizeBytes),
+            signedUrl: previewUrl,
+            question_no: opts.question_no ?? null,
+          },
+        };
       },
       async submit(c) {
         const r = await postJson("/api/intake/submit", c);
