@@ -2,16 +2,6 @@ import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type { Gender, ClothingType, PhotoColor } from "./constants";
 
-/**
- * Column that holds the actual prompt text in public.photo_prompt_fragments.
- *
- * ⚠️ ASSUMPTION: the 0011 migration was applied outside this repo, so the exact
- * name of the text column could not be introspected. It is centralized here —
- * if your migration named it differently (e.g. `prompt_text`, `body`, `text`),
- * change this ONE constant and everything (admin editor + prompt builder) follows.
- */
-export const FRAGMENT_TEXT_COLUMN = "content";
-
 export interface PromptFragment {
   id: string;
   fragment_type: "base_scene" | "clothing" | "color";
@@ -19,7 +9,7 @@ export interface PromptFragment {
   clothing_type: string | null;
   color: string | null;
   label: string | null;
-  text: string;
+  prompt_text: string;
   is_active: boolean;
 }
 
@@ -31,7 +21,7 @@ function normalize(row: Record<string, unknown>): PromptFragment {
     clothing_type: (row.clothing_type as string | null) ?? null,
     color: (row.color as string | null) ?? null,
     label: (row.label as string | null) ?? null,
-    text: (row[FRAGMENT_TEXT_COLUMN] as string | null) ?? "",
+    prompt_text: (row.prompt_text as string | null) ?? "",
     is_active: (row.is_active as boolean) ?? false,
   };
 }
@@ -75,7 +65,9 @@ export async function buildPhotoPrompt(params: {
       ? fragments.find((f) => f.fragment_type === "color" && f.color === params.color)
       : undefined;
 
-  const parts = [base?.text, clothing?.text, color?.text].map((p) => p?.trim()).filter(Boolean);
+  const parts = [base?.prompt_text, clothing?.prompt_text, color?.prompt_text]
+    .map((p) => p?.trim())
+    .filter(Boolean);
 
   // Graceful fallback so a missing/renamed fragment never yields an empty prompt.
   if (parts.length === 0) {

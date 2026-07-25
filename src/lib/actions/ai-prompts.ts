@@ -4,7 +4,6 @@ import { revalidatePath } from "next/cache";
 import { requirePermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
-import { FRAGMENT_TEXT_COLUMN } from "@/lib/intake/photo-prompt";
 
 export interface PromptActionResult {
   ok: boolean;
@@ -17,7 +16,7 @@ export async function updateFragmentAction(id: string, text: string): Promise<Pr
   const admin = createSupabaseAdminClient();
   const { error } = await admin
     .from("photo_prompt_fragments")
-    .update({ [FRAGMENT_TEXT_COLUMN]: text, updated_by: ctx.userId })
+    .update({ prompt_text: text, updated_by: ctx.userId })
     .eq("id", id);
   if (error) return { ok: false, error: error.message };
   await logAudit({

@@ -30,10 +30,10 @@ function fragmentLabel(f: PromptFragment): string {
 
 function FragmentCard({ fragment, canEdit }: { fragment: PromptFragment; canEdit: boolean }) {
   const toast = useToast();
-  const [text, setText] = useState(fragment.text);
+  const [text, setText] = useState(fragment.prompt_text);
   const [active, setActive] = useState(fragment.is_active);
   const [pending, startTransition] = useTransition();
-  const dirty = text !== fragment.text;
+  const dirty = text !== fragment.prompt_text;
 
   const save = () =>
     startTransition(async () => {
