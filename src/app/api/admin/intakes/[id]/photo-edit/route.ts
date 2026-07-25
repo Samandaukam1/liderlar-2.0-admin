@@ -11,6 +11,7 @@ import {
   OpenAIImageEditError,
   assertStorageUploadSucceeded,
   photoEditErrorResponse,
+  serializePhotoEditError,
 } from "@/lib/intake/photo-edit";
 
 export const runtime = "nodejs";
@@ -162,7 +163,7 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
       edit: { id: edit!.id, status: "completed", url: await signIntakeFileUrl(resultPath) },
     });
   } catch (error: unknown) {
-    const storedError = error instanceof Error ? error.message.slice(0, 400) : "unknown";
+    const storedError = serializePhotoEditError(error);
     const { error: failedStatusError } = await db
       .from("candidate_intake_photo_edits")
       .update({ status: "failed", error: storedError, finished_at: new Date().toISOString() })
@@ -173,12 +174,7 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
         message: failedStatusError.message,
       });
     }
-    if (error instanceof OpenAIImageEditError) {
-      console.error("OpenAI image edit failed", {
-        ...error.details,
-        model: imageModel(),
-      });
-    } else {
+    if (!(error instanceof OpenAIImageEditError)) {
       console.error("intake photo-edit failed", { message: storedError });
     }
     const response = photoEditErrorResponse(error);

@@ -1,12 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import sharp from "sharp";
 import {
   OpenAIImageEditError,
   assertStorageUploadSucceeded,
-  buildOpenAIImageEditRequest,
   decodeOpenAIImageEditResult,
   photoEditErrorResponse,
   preparePhotoEditSource,
+  requestOpenAIImageEdit,
+  serializePhotoEditError,
+  standardizePhotoEditSource,
 } from "../src/lib/intake/photo-edit.ts";
 
 const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
@@ -59,37 +62,126 @@ test("bo‘sh source image rad etiladi", () => {
   );
 });
 
-test("gpt-image-2 request faqat minimal parametrlarni yuboradi", () => {
-  const request = buildOpenAIImageEditRequest({
-    model: "gpt-image-2",
-    image: "file",
-    prompt: "portrait",
-  });
-  assert.deepEqual(request, {
-    model: "gpt-image-2",
-    image: "file",
-    prompt: "portrait",
-    size: "1024x1536",
-    quality: "high",
-  });
-  assert.equal("input_fidelity" in request, false);
-  assert.equal("response_format" in request, false);
-  assert.equal("background" in request, false);
+test("CMYK JPEG OpenAI oldidan sRGB PNG ga standartlashtiriladi", async () => {
+  const cmykJpeg = await sharp({
+    create: {
+      width: 16,
+      height: 16,
+      channels: 3,
+      background: "#c06030",
+    },
+  })
+    .toColourspace("cmyk")
+    .jpeg()
+    .toBuffer();
+  const prepared = preparePhotoEditSource({ imageBytes: cmykJpeg, mime: "image/jpeg" });
+  const standardized = await standardizePhotoEditSource(prepared);
+  const metadata = await sharp(standardized.buffer).metadata();
+
+  assert.equal(standardized.mime, "image/png");
+  assert.equal(standardized.fileName, "candidate-source.png");
+  assert.equal(metadata.format, "png");
+  assert.equal(metadata.space, "srgb");
+  assert.equal(metadata.channels, 3);
 });
 
-test("OpenAI 400 foydalanuvchiga xavfsiz xabar qaytaradi", () => {
-  const error = new OpenAIImageEditError({
+test("gpt-image-2 raw multipart request faqat minimal parametrlarni yuboradi", async () => {
+  const source = preparePhotoEditSource({ imageBytes: JPEG_BYTES, mime: "image/jpeg" });
+  let requestBody: FormData | null = null;
+  const fetchImpl: typeof fetch = async (_input, init) => {
+    requestBody = init?.body as FormData;
+    return new Response(
+      JSON.stringify({ data: [{ b64_json: Buffer.from("png-result").toString("base64") }] }),
+      { status: 200, headers: { "x-request-id": "req_success" } },
+    );
+  };
+
+  const result = await requestOpenAIImageEdit({
+    source,
+    model: "gpt-image-2",
+    prompt: "portrait",
+    apiKey: "test-key",
+    fetchImpl,
+    log: () => undefined,
+  });
+  assert.deepEqual(result, Buffer.from("png-result"));
+  assert.ok(requestBody);
+  assert.deepEqual(Array.from(requestBody.keys()), ["image", "model", "prompt", "size", "quality"]);
+  assert.equal(requestBody.get("model"), "gpt-image-2");
+  assert.equal(requestBody.get("prompt"), "portrait");
+  assert.equal(requestBody.get("size"), "1024x1536");
+  assert.equal(requestBody.get("quality"), "high");
+  const image = requestBody.get("image");
+  assert.ok(image instanceof File);
+  assert.equal(image.name, "candidate-source.jpg");
+  assert.equal(image.type, "image/jpeg");
+});
+
+test("OpenAI 400 raw body aniq diagnostik maydonlarga ajratiladi", async () => {
+  const diagnostics: Array<{ event: string; payload: Record<string, unknown> }> = [];
+  const source = preparePhotoEditSource({ imageBytes: PNG_BYTES, mime: "image/png" });
+  const fetchImpl: typeof fetch = async () =>
+    new Response(
+      JSON.stringify({
+        error: {
+          message: "Unsupported parameter: quality",
+          type: "invalid_request_error",
+          code: "invalid_value",
+          param: "quality",
+        },
+      }),
+      { status: 400, headers: { "x-request-id": "req_123" } },
+    );
+
+  let caught: unknown;
+  try {
+    await requestOpenAIImageEdit({
+      source,
+      model: "gpt-image-2",
+      prompt: "portrait",
+      apiKey: "test-key",
+      fetchImpl,
+      log: (event, payload) => diagnostics.push({ event, payload }),
+    });
+  } catch (error: unknown) {
+    caught = error;
+  }
+  assert.ok(caught instanceof OpenAIImageEditError);
+  assert.deepEqual(caught.details, {
     status: 400,
     code: "invalid_value",
     type: "invalid_request_error",
-    message: "Unsupported parameter",
-    requestID: "req_123",
+    message: "Unsupported parameter: quality",
+    param: "quality",
+    requestId: "req_123",
+    moderationDetails: undefined,
   });
-  assert.deepEqual(photoEditErrorResponse(error), {
+  assert.deepEqual(photoEditErrorResponse(caught), {
     status: 400,
     message: "Rasmni qayta ishlash so‘rovi noto‘g‘ri shakllangan. Administrator xabardor qilindi.",
   });
-  assert.equal(error.details.requestId, "req_123");
+  assert.deepEqual(diagnostics, [{
+    event: "OPENAI_IMAGE_EDIT_ERROR",
+    payload: {
+      status: 400,
+      message: "Unsupported parameter: quality",
+      type: "invalid_request_error",
+      code: "invalid_value",
+      param: "quality",
+      requestId: "req_123",
+      model: "gpt-image-2",
+      sourceMime: "image/png",
+      sourceBytes: PNG_BYTES.length,
+      promptChars: 8,
+    },
+  }]);
+  assert.deepEqual(JSON.parse(serializePhotoEditError(caught)), {
+    status: 400,
+    message: "Unsupported parameter: quality",
+    code: "invalid_value",
+    param: "quality",
+    requestId: "req_123",
+  });
 });
 
 test("moderation_blocked tushunarli xabar qaytaradi", () => {

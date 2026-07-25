@@ -1,3 +1,5 @@
+import sharp from "sharp";
+
 const MAX_SOURCE_IMAGE_BYTES = 50 * 1024 * 1024;
 
 export type SupportedImageMime = "image/jpeg" | "image/png" | "image/webp";
@@ -90,18 +92,31 @@ export function preparePhotoEditSource(params: {
   };
 }
 
-export function buildOpenAIImageEditRequest<TImage>(params: {
-  model: string;
-  image: TImage;
-  prompt: string;
-}) {
-  return {
-    model: params.model,
-    image: params.image,
-    prompt: params.prompt,
-    size: "1024x1536" as const,
-    quality: "high" as const,
-  };
+export async function standardizePhotoEditSource(source: {
+  buffer: Buffer;
+  mime: SupportedImageMime;
+  fileName: string;
+}): Promise<{
+  buffer: Buffer;
+  mime: "image/png";
+  fileName: "candidate-source.png";
+}> {
+  try {
+    const buffer = await sharp(source.buffer, { failOn: "error" })
+      .rotate()
+      .flatten({ background: "#ffffff" })
+      .toColourspace("srgb")
+      .png()
+      .toBuffer();
+    return {
+      buffer,
+      mime: "image/png",
+      fileName: "candidate-source.png",
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "unknown decode error";
+    throw new Error(`Source image decode failed: ${message}`);
+  }
 }
 
 export function decodeOpenAIImageEditResult(result: {
@@ -123,6 +138,7 @@ export interface OpenAIImageEditErrorDetails {
   code?: string;
   type?: string;
   message: string;
+  param?: string;
   requestId?: string;
   moderationDetails?: unknown;
 }
@@ -146,6 +162,7 @@ export function extractOpenAIImageEditError(error: unknown): OpenAIImageEditErro
       optionalString(err.message) ??
       optionalString(nested.message) ??
       "Unknown OpenAI image edit error",
+    param: optionalString(err.param) ?? optionalString(nested.param),
     requestId:
       optionalString(err.request_id) ??
       optionalString(err.requestID) ??
@@ -163,6 +180,156 @@ export class OpenAIImageEditError extends Error {
     this.name = "OpenAIImageEditError";
     this.details = details;
   }
+}
+
+type SafeDiagnosticLogger = (event: string, payload: Record<string, unknown>) => void;
+
+function defaultDiagnosticLogger(event: string, payload: Record<string, unknown>): void {
+  console.error(event, JSON.stringify(payload));
+}
+
+export async function requestOpenAIImageEdit(params: {
+  source: {
+    buffer: Buffer;
+    mime: SupportedImageMime;
+    fileName: string;
+  };
+  model: string;
+  prompt: string;
+  apiKey?: string;
+  diagnosticSource?: {
+    mime: SupportedImageMime;
+    bytes: number;
+  };
+  fetchImpl?: typeof fetch;
+  log?: SafeDiagnosticLogger;
+}): Promise<Buffer> {
+  const log = params.log ?? defaultDiagnosticLogger;
+  const diagnosticSource = params.diagnosticSource ?? {
+    mime: params.source.mime,
+    bytes: params.source.buffer.length,
+  };
+  if (!params.apiKey) {
+    const error = new OpenAIImageEditError({
+      code: "missing_api_key",
+      message: "OPENAI_API_KEY sozlanmagan",
+    });
+    log("OPENAI_IMAGE_EDIT_ERROR", {
+      status: null,
+      message: error.details.message,
+      type: null,
+      code: error.details.code,
+      param: null,
+      requestId: null,
+      model: params.model,
+      sourceMime: diagnosticSource.mime,
+      sourceBytes: diagnosticSource.bytes,
+      promptChars: params.prompt.length,
+    });
+    throw error;
+  }
+
+  const formData = new FormData();
+  const imageArrayBuffer = new ArrayBuffer(params.source.buffer.length);
+  new Uint8Array(imageArrayBuffer).set(params.source.buffer);
+  formData.append(
+    "image",
+    new Blob([imageArrayBuffer], { type: params.source.mime }),
+    params.source.fileName,
+  );
+  formData.append("model", params.model);
+  formData.append("prompt", params.prompt);
+  formData.append("size", "1024x1536");
+  formData.append("quality", "high");
+
+  let response: Response;
+  try {
+    response = await (params.fetchImpl ?? fetch)("https://api.openai.com/v1/images/edits", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.apiKey}`,
+      },
+      body: formData,
+    });
+  } catch (cause: unknown) {
+    const error = new OpenAIImageEditError(cause);
+    log("OPENAI_IMAGE_EDIT_ERROR", {
+      status: null,
+      message: error.details.message,
+      type: error.details.type ?? null,
+      code: error.details.code ?? null,
+      param: error.details.param ?? null,
+      requestId: error.details.requestId ?? null,
+      model: params.model,
+      sourceMime: diagnosticSource.mime,
+      sourceBytes: diagnosticSource.bytes,
+      promptChars: params.prompt.length,
+    });
+    throw error;
+  }
+
+  const rawBody = await response.text();
+  let body: unknown;
+  try {
+    body = JSON.parse(rawBody);
+  } catch {
+    body = { raw: rawBody.slice(0, 2000) };
+  }
+
+  const requestId = response.headers.get("x-request-id") ?? undefined;
+  if (!response.ok) {
+    const safeError = asRecord(asRecord(body).error);
+    const error = new OpenAIImageEditError({
+      status: response.status,
+      message:
+        optionalString(safeError.message) ??
+        `OpenAI image edit failed with ${response.status}`,
+      type: optionalString(safeError.type),
+      code: optionalString(safeError.code),
+      param: optionalString(safeError.param),
+      request_id: requestId,
+      moderation_details: safeError.moderation_details,
+    });
+
+    log("OPENAI_IMAGE_EDIT_ERROR", {
+      status: response.status,
+      message: optionalString(safeError.message) ?? null,
+      type: optionalString(safeError.type) ?? null,
+      code: optionalString(safeError.code) ?? null,
+      param: optionalString(safeError.param) ?? null,
+      requestId: requestId ?? null,
+      model: params.model,
+      sourceMime: diagnosticSource.mime,
+      sourceBytes: diagnosticSource.bytes,
+      promptChars: params.prompt.length,
+    });
+    throw error;
+  }
+
+  const responseRecord = asRecord(body);
+  const data = Array.isArray(responseRecord.data)
+    ? (responseRecord.data as Array<{ b64_json?: string | null }>)
+    : undefined;
+  if (!data?.[0]?.b64_json) {
+    log("OPENAI_IMAGE_EDIT_EMPTY_RESULT", {
+      requestId: requestId ?? null,
+      keys: Object.keys(responseRecord),
+    });
+  }
+  return decodeOpenAIImageEditResult({ data });
+}
+
+export function serializePhotoEditError(error: unknown): string {
+  if (error instanceof OpenAIImageEditError) {
+    return JSON.stringify({
+      status: error.details.status ?? null,
+      message: error.details.message.slice(0, 500),
+      code: error.details.code ?? null,
+      param: error.details.param ?? null,
+      requestId: error.details.requestId ?? null,
+    });
+  }
+  return error instanceof Error ? error.message.slice(0, 500) : "unknown";
 }
 
 export function photoEditErrorResponse(error: unknown): { status: number; message: string } {

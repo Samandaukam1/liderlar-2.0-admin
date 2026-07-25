@@ -9,6 +9,7 @@ import {
   OpenAIImageEditError,
   assertStorageUploadSucceeded,
   photoEditErrorResponse,
+  serializePhotoEditError,
 } from "@/lib/intake/photo-edit";
 import { INTAKE_BUCKET, CLOTHING_TYPES, COLORS, type ClothingType, type PhotoColor, type Gender } from "@/lib/intake/constants";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -111,7 +112,7 @@ export async function POST(request: NextRequest) {
 
     return noStoreJson({ ok: true, edit: { id: edit!.id, status: "completed", url: await signIntakeFileUrl(resultPath) } });
   } catch (error: unknown) {
-    const storedError = error instanceof Error ? error.message.slice(0, 400) : "unknown";
+    const storedError = serializePhotoEditError(error);
     const { error: failedStatusError } = await db
       .from("candidate_intake_photo_edits")
       .update({ status: "failed", error: storedError, finished_at: new Date().toISOString() })
@@ -122,12 +123,7 @@ export async function POST(request: NextRequest) {
         message: failedStatusError.message,
       });
     }
-    if (error instanceof OpenAIImageEditError) {
-      console.error("OpenAI image edit failed", {
-        ...error.details,
-        model: imageModel(),
-      });
-    } else {
+    if (!(error instanceof OpenAIImageEditError)) {
       console.error("intake candidate photo-edit failed", { message: storedError });
     }
     const response = photoEditErrorResponse(error);

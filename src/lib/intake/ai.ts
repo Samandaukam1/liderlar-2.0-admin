@@ -1,13 +1,12 @@
 import "server-only";
-import OpenAI, { toFile } from "openai";
+import OpenAI from "openai";
 import { z } from "zod";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 import {
-  OpenAIImageEditError,
-  buildOpenAIImageEditRequest,
-  decodeOpenAIImageEditResult,
   preparePhotoEditSource,
+  requestOpenAIImageEdit,
+  standardizePhotoEditSource,
 } from "./photo-edit";
 
 let client: OpenAI | null = null;
@@ -326,23 +325,21 @@ export async function editIntakePhoto(params: {
   prompt: string;
 }): Promise<PhotoEditResult> {
   const model = imageModel();
-  const source = preparePhotoEditSource({
+  const uploadedSource = preparePhotoEditSource({
     imageBytes: params.imageBytes,
     mime: params.mime,
   });
-  const file = await toFile(source.buffer, source.fileName, {
-    type: source.mime,
-  });
-  try {
-    const result = await openai().images.edit(
-      buildOpenAIImageEditRequest({
-        model,
-        image: file,
-        prompt: params.prompt,
-      }),
-    );
-    return { outputBuffer: decodeOpenAIImageEditResult(result) };
-  } catch (error: unknown) {
-    throw new OpenAIImageEditError(error);
-  }
+  const source = await standardizePhotoEditSource(uploadedSource);
+  return {
+    outputBuffer: await requestOpenAIImageEdit({
+      source,
+      model,
+      prompt: params.prompt,
+      apiKey: process.env.OPENAI_API_KEY,
+      diagnosticSource: {
+        mime: uploadedSource.mime,
+        bytes: uploadedSource.buffer.length,
+      },
+    }),
+  };
 }
