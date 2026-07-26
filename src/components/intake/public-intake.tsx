@@ -223,7 +223,8 @@ export function PublicIntake({ token }: { token: string }) {
           const r = await postJson("/api/intake/photo-edit/confirm", payload);
           const j = await r.json();
           if (!r.ok || !j.ok) {
-            return { ok: false, error: j.error ?? "Rasmni tasdiqlashda muammo yuz berdi. Qayta urinib ko‘ring." };
+            const base = j.error ?? "Rasmni tasdiqlashda muammo yuz berdi. Qayta urinib ko‘ring.";
+            return { ok: false, error: j.traceId ? `${base} Xato kodi: ${j.traceId}` : base };
           }
           return { ok: true, photoEdit: j.photoEdit as CandidatePhotoStateView };
         } catch {
