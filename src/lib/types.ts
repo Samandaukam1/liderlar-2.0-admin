@@ -4,6 +4,7 @@ export type CandidateStatus = "draft" | "review" | "published" | "archived";
 
 export interface Candidate {
   id: string;
+  integration_key: string;
   slug: string;
   full_name: string;
   short_bio: string | null;

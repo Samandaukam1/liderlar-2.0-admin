@@ -18,7 +18,10 @@ Supabase Dashboard → **SQL Editor** da fayllarni **quyidagi tartibda** ishga t
 8. `migrations/0008_storage_and_rls.sql` — storage bucketlar, RLS va policy'lar
 9. `migrations/0009_functions_and_triggers.sql` — reyting hisoblash va boshqa funksiyalar
 10. `migrations/0010_candidate_intake_v2.sql` — nomzod anketasi (intake) tizimi: yangi jadvallar, RLS, `candidate-intake-files` bucketi, `submit_candidate_intake` / `promote_candidate_intake` RPC'lari, faol shablon + 15 savol, sozlamalar. **Non-destructive va idempotent** — mavjud sxemani buzmaydi.
-11. `seed.sql` — hududlar, yo'nalishlar, boshlang'ich reyting davri, sozlamalar
+11. `migrations/0012_ai_prompts_permissions.sql` — AI promptlari uchun permission matritsasi
+12. `migrations/0013_candidate_photo_confirmation.sql` — nomzod rasmi tasdiqlash oqimi
+13. `migrations/0014_candidate_adabiyotx_items.sql` — cross-project `integration_key`, AdabiyotX materiallari, RLS va atomic reorder RPC
+14. `seed.sql` — hududlar, yo'nalishlar, boshlang'ich reyting davri, sozlamalar
 
 Barcha fayllar **idempotent** — qayta ishga tushirish xavfsiz.
 

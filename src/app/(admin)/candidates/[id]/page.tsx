@@ -10,6 +10,7 @@ import { Avatar, Badge, StatusBadge } from "@/components/admin/badges";
 import { CandidateForm } from "../candidate-form";
 import { StatusActions } from "./status-actions";
 import { EntriesPanel, type EntryRow } from "./entries-panel";
+import { AdabiyotXPanel } from "./adabiyotx-panel";
 import { cn, formatDate, daysUntil, timeAgo } from "@/lib/utils";
 import type { Candidate } from "@/lib/types";
 
@@ -18,6 +19,7 @@ export const dynamic = "force-dynamic";
 const TABS = [
   { key: "profile", label: "Profil" },
   { key: "activity", label: "Faoliyat" },
+  { key: "adabiyotx", label: "AdabiyotX" },
   { key: "articles", label: "Maqolalar" },
   { key: "history", label: "Tarix" },
 ] as const;
@@ -146,6 +148,10 @@ export default async function CandidateDetailPage(props: {
               <EntriesPanel candidateId={id} kind="book" entries={(books?.data ?? []) as EntryRow[]} canEdit={canEdit} />
               <EntriesPanel candidateId={id} kind="social" entries={(socials?.data ?? []) as EntryRow[]} canEdit={canEdit} />
             </div>
+          )}
+
+          {tab === "adabiyotx" && (
+            <AdabiyotXPanel candidateId={id} canEdit={canEdit} />
           )}
 
           {tab === "articles" && (
