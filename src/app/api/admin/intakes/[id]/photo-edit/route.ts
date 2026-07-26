@@ -13,6 +13,7 @@ import {
   photoEditErrorResponse,
   serializePhotoEditError,
 } from "@/lib/intake/photo-edit";
+import { completePhotoEditWithAttachment } from "@/lib/intake/photo-jobs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -129,16 +130,13 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
       .upload(resultPath, result.outputBuffer, { contentType: "image/png", upsert: false });
     assertStorageUploadSucceeded(upErr);
 
-    const { error: completedError } = await db
-      .from("candidate_intake_photo_edits")
-      .update({
-        status: "completed",
-        result_bucket: INTAKE_BUCKET,
-        result_path: resultPath,
-        finished_at: new Date().toISOString(),
-      })
-      .eq("id", edit!.id);
-    if (completedError) throw new Error(`Photo edit status update failed: ${completedError.message}`);
+    // Attachment first, then "completed" (populates processed_attachment_id).
+    await completePhotoEditWithAttachment({
+      intakeId,
+      photoEditId: edit!.id as string,
+      resultPath,
+      sizeBytes: result.outputBuffer.length,
+    });
 
     await db.from("candidate_intake_ai_runs").insert({
       intake_id: intakeId,

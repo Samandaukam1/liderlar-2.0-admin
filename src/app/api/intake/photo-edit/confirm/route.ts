@@ -4,10 +4,19 @@ import { resolveActiveLink } from "@/lib/intake/data";
 import { enforceRateLimit } from "@/lib/intake/rate-limit";
 import { jsonError, noStoreJson, originAllowed, readJsonBody } from "@/lib/intake/http";
 import { loadCandidatePhotoState } from "@/lib/intake/photo-jobs";
+import { evaluatePhotoEditPrecheck, type ProcessedAttachmentRow } from "@/lib/intake/photo-confirm";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const GENERIC_CONFIRM_MESSAGE = "Rasmni tasdiqlashda muammo yuz berdi. Qayta urinib ko‘ring.";
+
+/** Safe, code-tagged failure response — the message shown to the candidate is
+ * always generic; the specific code stays for logs/telemetry. */
+function confirmFailure(status: number, code: string) {
+  return noStoreJson({ ok: false, code, error: GENERIC_CONFIRM_MESSAGE }, status);
+}
 
 /** Atomically confirms either the primary original or one completed AI edit. */
 export async function POST(request: NextRequest) {
@@ -19,69 +28,137 @@ export async function POST(request: NextRequest) {
 
   const rateLimit = enforceRateLimit("photo_confirm", hashIntakeToken(rawToken));
   if (!rateLimit.ok) {
-    return jsonError(429, "Juda ko‘p urinish", {
-      retryAfterSeconds: rateLimit.retryAfterSeconds,
-    });
+    return jsonError(429, "Juda ko‘p urinish", { retryAfterSeconds: rateLimit.retryAfterSeconds });
   }
 
-  const kind = body.kind;
-  if (kind !== "original" && kind !== "ai") return jsonError(400, "Rasm tanlovi noto‘g‘ri");
-  const editId = typeof body.photo_edit_id === "string" ? body.photo_edit_id : null;
-  if (kind === "ai" && !editId) return jsonError(400, "AI rasm topilmadi");
+  // Accept the canonical payload ({ source, photoEditId, originalAttachmentId })
+  // and the legacy keys ({ kind, photo_edit_id, original_attachment_id }).
+  const source = typeof body.source === "string" ? body.source : (body.kind as string | undefined);
+  if (source !== "original" && source !== "ai") return jsonError(400, "Rasm tanlovi noto‘g‘ri");
+
+  const photoEditId =
+    typeof body.photoEditId === "string"
+      ? body.photoEditId
+      : typeof body.photo_edit_id === "string"
+        ? body.photo_edit_id
+        : null;
+  if (source === "ai" && !photoEditId) return jsonError(400, "AI rasm topilmadi");
 
   const resolved = await resolveActiveLink(rawToken);
   if (!resolved) return jsonError(404, "Havola yaroqsiz yoki muddati tugagan");
+  const intakeId = resolved.intakeId;
 
   const db = createSupabaseAdminClient();
 
-  // The original selection needs the primary photo's attachment id for the RPC.
+  // ---- Original selection: resolve the primary photo's attachment id ----
   let originalAttachmentId: string | null = null;
-  if (kind === "original") {
+  if (source === "original") {
     originalAttachmentId =
-      (typeof body.original_attachment_id === "string" && body.original_attachment_id) || null;
+      (typeof body.originalAttachmentId === "string" && body.originalAttachmentId) ||
+      (typeof body.original_attachment_id === "string" && body.original_attachment_id) ||
+      null;
     if (!originalAttachmentId) {
       const { data: primary } = await db
         .from("candidate_intake_attachments")
         .select("id")
-        .eq("intake_id", resolved.intakeId)
+        .eq("intake_id", intakeId)
         .eq("is_primary_photo", true)
         .eq("status", "active")
         .maybeSingle();
       originalAttachmentId = (primary?.id as string) ?? null;
     }
-    if (!originalAttachmentId) return jsonError(400, "Original rasm topilmadi");
+    if (!originalAttachmentId) return confirmFailure(400, "PROCESSED_ATTACHMENT_MISSING");
   }
 
-  // Call the RPC with its REAL signature — every argument is p_-prefixed and
-  // matches confirm_candidate_intake_photo(p_intake_id, p_source,
-  // p_original_attachment_id, p_photo_edit_id, p_actor). Sending non-prefixed
-  // keys makes PostgREST fail to resolve the overload (PGRST202 → 404).
-  const { data, error } = await db.rpc("confirm_candidate_intake_photo", {
-    p_intake_id: resolved.intakeId,
-    p_source: kind,
-    p_original_attachment_id: kind === "original" ? originalAttachmentId : null,
-    p_photo_edit_id: kind === "ai" ? editId : null,
+  // ---- AI selection: validate the real photo-edit row BEFORE the RPC ----
+  if (source === "ai") {
+    const { data: photoEdit } = await db
+      .from("candidate_intake_photo_edits")
+      .select("id, intake_id, status, processed_attachment_id, is_selected")
+      .eq("id", photoEditId)
+      .eq("intake_id", intakeId)
+      .maybeSingle();
+
+    let attachment: ProcessedAttachmentRow | null = null;
+    if (photoEdit?.processed_attachment_id) {
+      const { data: att } = await db
+        .from("candidate_intake_attachments")
+        .select("id, intake_id, kind, scan_status, mime_type, deleted_at")
+        .eq("id", photoEdit.processed_attachment_id as string)
+        .maybeSingle();
+      attachment = (att as ProcessedAttachmentRow | null) ?? null;
+    }
+
+    const precheck = evaluatePhotoEditPrecheck({
+      intakeId,
+      photoEdit: photoEdit
+        ? {
+            intake_id: photoEdit.intake_id as string,
+            status: photoEdit.status as string,
+            processed_attachment_id: (photoEdit.processed_attachment_id as string | null) ?? null,
+          }
+        : null,
+      attachment,
+    });
+
+    if (!precheck.ok) {
+      console.error("PHOTO_CONFIRM_PRECHECK_FAILED", {
+        photoEditExists: Boolean(photoEdit),
+        status: photoEdit?.status ?? null,
+        hasProcessedAttachment: Boolean(photoEdit?.processed_attachment_id),
+        attachmentKind: attachment?.kind ?? null,
+        attachmentScanStatus: attachment?.scan_status ?? null,
+        attachmentDeleted: Boolean(attachment?.deleted_at),
+      });
+      return confirmFailure(precheck.status, precheck.code ?? "PHOTO_CONFIRMATION_FAILED");
+    }
+  }
+
+  // ---- Authoritative confirmation via the RPC (real p_-prefixed signature) ----
+  const rpcPayload = {
+    p_intake_id: intakeId,
+    p_source: source,
+    p_original_attachment_id: source === "original" ? originalAttachmentId : null,
+    p_photo_edit_id: source === "ai" ? photoEditId : null,
     p_actor: null,
-  });
+  };
+
+  const { data, error } = await db.rpc("confirm_candidate_intake_photo", rpcPayload);
 
   if (error) {
-    // Safe diagnostics only — no tokens, no service key.
-    console.error("PHOTO_CONFIRM_RPC_ERROR", {
-      code: error.code,
-      message: error.message,
-      details: error.details,
-      hint: error.hint,
-    });
-    // PGRST202 = function/overload not found in schema cache. The real message
-    // stays in the server log; the candidate gets a generic message.
-    return jsonError(500, "Rasmni tasdiqlab bo‘lmadi");
+    // Safe diagnostics only — never log tokens, service key, signed URLs or image data.
+    console.error(
+      "PHOTO_CONFIRM_RPC_ERROR",
+      JSON.stringify({
+        code: error.code ?? null,
+        message: error.message ?? null,
+        details: error.details ?? null,
+        hint: error.hint ?? null,
+        source,
+        intakeId,
+        hasOriginalAttachmentId: Boolean(originalAttachmentId),
+        hasPhotoEditId: Boolean(photoEditId),
+      }),
+    );
+    return confirmFailure(400, "PHOTO_CONFIRMATION_FAILED");
   }
 
+  // Supabase jsonb-returning function → data is the object itself (never data[0]).
   const result = data as { ok?: boolean; error?: string } | null;
-  if (!result?.ok) return jsonError(422, result?.error ?? "Rasmni tasdiqlab bo‘lmadi");
+  if (!result?.ok) {
+    console.error("PHOTO_CONFIRM_RESULT_NOT_OK", { source, intakeId, resultError: result?.error ?? null });
+    return confirmFailure(400, "PHOTO_CONFIRMATION_FAILED");
+  }
 
+  const photoEdit = await loadCandidatePhotoState(intakeId);
   return noStoreJson({
     ok: true,
-    photoEdit: await loadCandidatePhotoState(resolved.intakeId),
+    confirmation: {
+      source,
+      photoEditId: source === "ai" ? photoEditId : null,
+      originalAttachmentId: source === "original" ? originalAttachmentId : null,
+      confirmedAt: photoEdit.selection.confirmedAt ?? new Date().toISOString(),
+    },
+    photoEdit,
   });
 }

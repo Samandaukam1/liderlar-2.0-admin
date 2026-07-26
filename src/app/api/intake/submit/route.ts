@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
 
   const { data: intake } = await admin
     .from("candidate_intakes")
-    .select("template_id, selected_photo_kind, photo_confirmed_at")
+    .select("template_id")
     .eq("id", resolved.intakeId)
     .maybeSingle();
   if (!intake) return jsonError(404, "Anketa topilmadi");
@@ -43,7 +43,6 @@ export async function POST(request: NextRequest) {
   const [
     { data: questions, error: questionsError },
     { data: answers, error: answersError },
-    { data: primaryPhoto, error: primaryPhotoError },
   ] = await Promise.all([
     admin
       .from("candidate_intake_questions")
@@ -53,15 +52,8 @@ export async function POST(request: NextRequest) {
       .from("candidate_intake_answers")
       .select("question_id, answer_state, plain_text")
       .eq("intake_id", resolved.intakeId),
-    admin
-      .from("candidate_intake_attachments")
-      .select("id")
-      .eq("intake_id", resolved.intakeId)
-      .eq("is_primary_photo", true)
-      .eq("status", "active")
-      .maybeSingle(),
   ]);
-  if (questionsError || answersError || primaryPhotoError) {
+  if (questionsError || answersError) {
     return jsonError(500, "Anketa validatsiyasini bajarib bo‘lmadi");
   }
   if (!questions?.length) return jsonError(500, "Anketa savollari topilmadi");
@@ -89,29 +81,17 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const selectedKind = intake.selected_photo_kind as string | null;
-  if (!primaryPhoto || !intake.photo_confirmed_at || !["original", "ai"].includes(selectedKind ?? "")) {
+  // Server never trusts client state: the photo confirmation is validated by the
+  // authoritative RPC (checks selected_photo_source + processed attachment).
+  const { data: isPhotoConfirmed, error: photoConfirmError } = await admin.rpc(
+    "candidate_intake_photo_is_confirmed",
+    { p_intake_id: resolved.intakeId },
+  );
+  if (photoConfirmError || isPhotoConfirmed !== true) {
     return noStoreJson(
       { ok: false, errors: ["Original yoki AI rasmni tasdiqlash shart"] },
       422,
     );
-  }
-  if (selectedKind === "ai") {
-    const { data: selectedEdit } = await admin
-      .from("candidate_intake_photo_edits")
-      .select("id")
-      .eq("intake_id", resolved.intakeId)
-      .eq("source_attachment_id", primaryPhoto.id)
-      .eq("is_selected", true)
-      .eq("status", "completed")
-      .not("result_path", "is", null)
-      .maybeSingle();
-    if (!selectedEdit) {
-      return noStoreJson(
-        { ok: false, errors: ["Tasdiqlangan AI rasm topilmadi"] },
-        422,
-      );
-    }
   }
 
   const { error: contactSaveError } = await admin

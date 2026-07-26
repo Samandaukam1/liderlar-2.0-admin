@@ -52,7 +52,8 @@ export function PublicIntake({ token }: { token: string }) {
       try {
         const res = await fetch("/api/intake/resolve", {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          cache: "no-store",
+          headers: { "content-type": "application/json", "Cache-Control": "no-cache" },
           body: JSON.stringify({ token }),
         });
         const json = await res.json();
@@ -75,7 +76,8 @@ export function PublicIntake({ token }: { token: string }) {
     const postJson = (path: string, body: object) =>
       fetch(path, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        cache: "no-store",
+        headers: { "content-type": "application/json", "Cache-Control": "no-cache" },
         keepalive: true,
         body: JSON.stringify({ token, ...body }),
       });
@@ -212,12 +214,20 @@ export function PublicIntake({ token }: { token: string }) {
       },
       async confirmPhoto(selection) {
         try {
-          const r = await postJson("/api/intake/photo-edit/confirm", selection);
+          // Canonical payload: AI uses candidate_intake_photo_edits.id as photoEditId;
+          // original omits it (the server resolves the primary attachment id).
+          const payload =
+            selection.kind === "ai"
+              ? { source: "ai", photoEditId: selection.photo_edit_id ?? null }
+              : { source: "original" };
+          const r = await postJson("/api/intake/photo-edit/confirm", payload);
           const j = await r.json();
-          if (!r.ok || !j.ok) return { ok: false, error: j.error ?? "Rasmni tasdiqlab bo‘lmadi" };
+          if (!r.ok || !j.ok) {
+            return { ok: false, error: j.error ?? "Rasmni tasdiqlashda muammo yuz berdi. Qayta urinib ko‘ring." };
+          }
           return { ok: true, photoEdit: j.photoEdit as CandidatePhotoStateView };
         } catch {
-          return { ok: false, error: "Tarmoq xatosi" };
+          return { ok: false, error: "Tarmoq xatosi. Qayta urinib ko‘ring." };
         }
       },
     };

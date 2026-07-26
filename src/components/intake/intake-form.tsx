@@ -112,7 +112,9 @@ export interface CandidatePhotoStateView {
   selection: {
     kind: PhotoSelectionKind | null;
     editId: string | null;
+    originalAttachmentId: string | null;
     confirmedAt: string | null;
+    confirmed: boolean;
   };
 }
 export interface IntakeFeedbackView {
@@ -642,7 +644,8 @@ export function IntakeForm({
           finishedAt: null,
         },
         completed: previous?.completed ?? null,
-        selection: previous?.selection ?? { kind: null, editId: null, confirmedAt: null },
+        selection:
+          previous?.selection ?? { kind: null, editId: null, originalAttachmentId: null, confirmedAt: null, confirmed: false },
       }));
     } catch {
       setPhotoActionError("Tarmoq xatosi. Qayta urinib ko‘ring.");
@@ -723,7 +726,7 @@ export function IntakeForm({
   }).length;
 
   const doSubmit = useCallback(async () => {
-    if (requiresPhotoConfirmation && !photoEdit?.selection.confirmedAt) {
+    if (requiresPhotoConfirmation && !photoEdit?.selection.confirmed) {
       setSubmitErrors(["Yuborishdan oldin original yoki AI rasmni tasdiqlang"]);
       return;
     }
@@ -741,7 +744,7 @@ export function IntakeForm({
     } else {
       setSubmitErrors(resp.errors ?? ["Yuborib bo‘lmadi"]);
     }
-  }, [contact, draftKey, flushAll, photoEdit?.selection.confirmedAt, requiresPhotoConfirmation, transport]);
+  }, [contact, draftKey, flushAll, photoEdit?.selection.confirmed, requiresPhotoConfirmation, transport]);
 
   if (submitted) {
     return (
@@ -1173,12 +1176,25 @@ function FinalConfirmationStage({
   const processing = photoEdit?.job?.status === "queued" || photoEdit?.job?.status === "processing";
   const failed = photoEdit?.job?.status === "failed";
   const choice = pendingChoice ?? photoEdit?.selection.kind ?? null;
-  const confirmed = !!photoEdit?.selection.confirmedAt;
+  // Authoritative, server-derived confirmation (photo_confirmed_at + matching
+  // selected_photo_source/id) — never the local "Tanlandi" choice.
+  const confirmed = photoEdit?.selection.confirmed ?? false;
+  const answersComplete = answeredCount === total;
   const contactValid = validateContact(contact).ok;
   const canSubmit = canSubmitCandidateFinal({
-    everyAnswerValid: answeredCount === total,
+    everyAnswerValid: answersComplete,
     contactValid,
     photoConfirmed: confirmed,
+  });
+
+  // Safe diagnostics only — no token/phone/telegram/name/PII.
+  console.info("INTAKE_FINAL_STATE", {
+    answersComplete,
+    contactComplete: contactValid,
+    photoConfirmed: confirmed,
+    selectedPhotoSource: photoEdit?.selection.kind ?? null,
+    isSubmitting: busy,
+    canSubmit,
   });
 
   const selectAndConfirm = async (kind: PhotoSelectionKind) => {
@@ -1266,20 +1282,18 @@ function FinalConfirmationStage({
         </ul>
       )}
 
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <Button
-          variant="ai"
-          className="flex-1"
-          onClick={() => void selectAndConfirm(choice ?? (completed ? "ai" : "original"))}
-          disabled={confirming || (!photo?.url && choice !== "ai") || (choice === "ai" && !completed)}
-        >
-          {confirming ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-          Shu rasmni tasdiqlash
-        </Button>
-        <Button variant="secondary" onClick={() => void onRegenerate()} disabled={processing}>
-          <RefreshCw className="h-4 w-4" /> Qayta ishlash
-        </Button>
-      </div>
+      <button
+        type="button"
+        onClick={() => void selectAndConfirm(choice ?? (completed ? "ai" : "original"))}
+        disabled={confirming || (!photo?.url && choice !== "ai") || (choice === "ai" && !completed)}
+        className="ai-gradient inline-flex min-h-[60px] w-full items-center justify-center gap-2.5 rounded-[20px] px-6 text-[18px] font-extrabold text-white shadow-[0_12px_30px_rgba(0,199,232,0.22)] transition-all active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {confirming ? <Loader2 className="h-[22px] w-[22px] animate-spin" /> : <Check className="h-[22px] w-[22px]" />}
+        {confirmed && choice === (photoEdit?.selection.kind ?? null) ? "Rasm tasdiqlandi" : "Shu rasmni tasdiqlash"}
+      </button>
+      <Button variant="secondary" className="w-full" onClick={() => void onRegenerate()} disabled={processing}>
+        <RefreshCw className="h-4 w-4" /> Qayta ishlash
+      </Button>
 
       {photo?.url && photoEdit?.selection.kind !== "original" && (
         <Button

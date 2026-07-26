@@ -261,7 +261,13 @@ export async function uploadIntakeFile(params: {
     await Promise.all([
       admin
         .from("candidate_intakes")
-        .update({ selected_photo_kind: null, photo_confirmed_at: null })
+        .update({
+          selected_photo_source: null,
+          selected_original_attachment_id: null,
+          selected_photo_edit_id: null,
+          photo_confirmed_at: null,
+          photo_confirmation_metadata: null,
+        })
         .eq("id", params.intakeId),
       admin
         .from("candidate_intake_photo_edits")

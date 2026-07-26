@@ -28,7 +28,10 @@ export interface CandidatePhotoState {
   selection: {
     kind: CandidatePhotoSelectionKind | null;
     editId: string | null;
+    originalAttachmentId: string | null;
     confirmedAt: string | null;
+    /** Authoritative server-derived confirmation flag. */
+    confirmed: boolean;
   };
 }
 
@@ -47,7 +50,9 @@ export async function loadCandidatePhotoState(intakeId: string): Promise<Candida
   const [{ data: intake }, { data: source }] = await Promise.all([
     db
       .from("candidate_intakes")
-      .select("selected_photo_kind, photo_confirmed_at")
+      .select(
+        "selected_photo_source, selected_original_attachment_id, selected_photo_edit_id, photo_confirmed_at, photo_confirmation_metadata",
+      )
       .eq("id", intakeId)
       .maybeSingle(),
     db
@@ -83,10 +88,21 @@ export async function loadCandidatePhotoState(intakeId: string): Promise<Candida
   }
   const completed = rows.find((row) => row.status === "completed" && !!row.result_path) ?? null;
   const selected = rows.find((row) => row.is_selected && row.status === "completed") ?? null;
-  const selectedKind =
-    intake?.selected_photo_kind === "original" || intake?.selected_photo_kind === "ai"
-      ? (intake.selected_photo_kind as CandidatePhotoSelectionKind)
+
+  // Authoritative confirmation comes from the intake row the RPC writes, not
+  // from any local "selected" flag.
+  const selectedSource =
+    intake?.selected_photo_source === "original" || intake?.selected_photo_source === "ai"
+      ? (intake.selected_photo_source as CandidatePhotoSelectionKind)
       : null;
+  const selectedEditId = (intake?.selected_photo_edit_id as string | null) ?? null;
+  const selectedOriginalAttachmentId = (intake?.selected_original_attachment_id as string | null) ?? null;
+  const confirmedAt = (intake?.photo_confirmed_at as string | null) ?? null;
+  const confirmed = Boolean(
+    confirmedAt &&
+      ((selectedSource === "ai" && selectedEditId) ||
+        (selectedSource === "original" && selectedOriginalAttachmentId)),
+  );
 
   return {
     job: latest
@@ -105,11 +121,63 @@ export async function loadCandidatePhotoState(intakeId: string): Promise<Candida
         }
       : null,
     selection: {
-      kind: selectedKind,
-      editId: selectedKind === "ai" ? selected?.id ?? null : null,
-      confirmedAt: (intake?.photo_confirmed_at as string | null) ?? null,
+      kind: selectedSource,
+      editId: selectedEditId ?? (selectedSource === "ai" ? selected?.id ?? null : null),
+      originalAttachmentId: selectedOriginalAttachmentId,
+      confirmedAt,
+      confirmed,
     },
   };
+}
+
+/**
+ * Finalizes a generated portrait: first inserts the durable
+ * candidate_intake_attachments row (kind=image, scan_status=ready), THEN marks
+ * the photo edit completed with processed_attachment_id. The confirm RPC
+ * validates that attachment, so it must exist before status becomes "completed".
+ */
+export async function completePhotoEditWithAttachment(params: {
+  intakeId: string;
+  photoEditId: string;
+  resultPath: string;
+  sizeBytes: number;
+}): Promise<void> {
+  const db = createSupabaseAdminClient();
+  const fileName = params.resultPath.split("/").pop() ?? "edited.png";
+
+  const { data: attachment, error: attachmentError } = await db
+    .from("candidate_intake_attachments")
+    .insert({
+      intake_id: params.intakeId,
+      bucket: INTAKE_BUCKET,
+      path: params.resultPath,
+      file_name: fileName,
+      mime_type: "image/png",
+      size_bytes: params.sizeBytes,
+      kind: "image",
+      scan_status: "ready",
+    })
+    .select("id")
+    .single();
+  if (attachmentError || !attachment) {
+    throw new Error(`Processed attachment insert failed: ${attachmentError?.message ?? "unknown"}`);
+  }
+
+  const { error: completedError } = await db
+    .from("candidate_intake_photo_edits")
+    .update({
+      status: "completed",
+      processed_attachment_id: attachment.id,
+      result_bucket: INTAKE_BUCKET,
+      result_path: params.resultPath,
+      error: null,
+      finished_at: new Date().toISOString(),
+    })
+    .eq("id", params.photoEditId)
+    .eq("intake_id", params.intakeId);
+  if (completedError) {
+    throw new Error(`Photo edit status update failed: ${completedError.message}`);
+  }
 }
 
 /** Marks a job abandoned by a terminated background invocation. */
@@ -175,20 +243,14 @@ export async function processCandidatePhotoEdit(params: {
       });
     assertStorageUploadSucceeded(uploadError);
 
-    const { error: completedError } = await db
-      .from("candidate_intake_photo_edits")
-      .update({
-        status: "completed",
-        result_bucket: INTAKE_BUCKET,
-        result_path: resultPath,
-        error: null,
-        finished_at: new Date().toISOString(),
-      })
-      .eq("id", params.photoEditId)
-      .eq("intake_id", params.intakeId);
-    if (completedError) {
-      throw new Error(`Photo edit status update failed: ${completedError.message}`);
-    }
+    // Attachment first, then "completed" — so the confirm RPC always finds a
+    // ready image behind processed_attachment_id.
+    await completePhotoEditWithAttachment({
+      intakeId: params.intakeId,
+      photoEditId: params.photoEditId,
+      resultPath,
+      sizeBytes: result.outputBuffer.length,
+    });
   } catch (error: unknown) {
     const storedError = serializePhotoEditError(error);
     const { error: failedStatusError } = await db
