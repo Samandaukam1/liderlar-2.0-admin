@@ -23,7 +23,6 @@ create unique index if not exists uq_candidates_integration_key
 create table if not exists public.candidate_adabiyotx_items (
   id uuid primary key default gen_random_uuid(),
   candidate_id uuid not null references public.candidates(id) on delete cascade,
-  candidate_integration_key uuid not null,
   external_id text not null,
   relationship_type text not null
     check (relationship_type in ('own_work', 'read_book')),
@@ -47,19 +46,6 @@ create table if not exists public.candidate_adabiyotx_items (
     check (relationship_type <> 'read_book' or content_type = 'book')
 );
 
--- Migrationning oldingi varianti qo'llangan bazalarni ham xavfsiz yangilaydi.
-alter table public.candidate_adabiyotx_items
-  add column if not exists candidate_integration_key uuid;
-
-update public.candidate_adabiyotx_items item
-set candidate_integration_key = candidate.integration_key
-from public.candidates candidate
-where candidate.id = item.candidate_id
-  and item.candidate_integration_key is null;
-
-alter table public.candidate_adabiyotx_items
-  alter column candidate_integration_key set not null;
-
 create index if not exists idx_candidate_adabiyotx_listing
   on public.candidate_adabiyotx_items (
     candidate_id,
@@ -67,43 +53,6 @@ create index if not exists idx_candidate_adabiyotx_listing
     is_visible,
     sort_order
   );
-
-create index if not exists idx_candidate_adabiyotx_integration_listing
-  on public.candidate_adabiyotx_items (
-    candidate_integration_key,
-    relationship_type,
-    is_visible,
-    sort_order
-  );
-
--- candidate_id manba bo'lib qoladi; cross-project key doim candidates dan olinadi.
-create or replace function public.set_candidate_adabiyotx_integration_key()
-returns trigger
-language plpgsql
-set search_path = public
-as $$
-begin
-  select candidate.integration_key
-  into new.candidate_integration_key
-  from public.candidates candidate
-  where candidate.id = new.candidate_id;
-
-  if new.candidate_integration_key is null then
-    raise exception using
-      errcode = '23503',
-      message = 'Nomzod integration_key qiymati topilmadi';
-  end if;
-
-  return new;
-end;
-$$;
-
-drop trigger if exists trg_candidate_adabiyotx_integration_key
-  on public.candidate_adabiyotx_items;
-create trigger trg_candidate_adabiyotx_integration_key
-  before insert or update of candidate_id, candidate_integration_key
-  on public.candidate_adabiyotx_items
-  for each row execute function public.set_candidate_adabiyotx_integration_key();
 
 drop trigger if exists trg_candidate_adabiyotx_items_updated
   on public.candidate_adabiyotx_items;

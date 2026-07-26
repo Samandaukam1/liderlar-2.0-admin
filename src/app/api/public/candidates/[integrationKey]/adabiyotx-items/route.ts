@@ -10,7 +10,7 @@ import {
 export const dynamic = "force-dynamic";
 
 const PUBLIC_ITEM_SELECT =
-  "id, candidate_integration_key, external_id, relationship_type, content_type, title, author_name, description, cover_url, external_url, published_at, sort_order, is_visible, created_at";
+  "id, external_id, relationship_type, content_type, title, author_name, description, cover_url, external_url, published_at, sort_order, metadata";
 
 type PublicRouteContext = {
   params: Promise<{ integrationKey: string }>;
@@ -88,29 +88,60 @@ export async function GET(
   }
 
   const admin = createSupabaseAdminClient();
+  const failureResponse = NextResponse.json(
+    {
+      ok: false,
+      code: "PUBLIC_ITEMS_LOAD_FAILED",
+      error: "Materiallarni yuklab bo‘lmadi.",
+    },
+    {
+      status: 500,
+      headers: {
+        "Cache-Control": "no-store",
+        ...(isProtected ? { Vary: "x-liderlar-api-key" } : {}),
+      },
+    },
+  );
+
+  const { data: candidate, error: candidateError } = await admin
+    .from("candidates")
+    .select("id, integration_key")
+    .eq("integration_key", integrationKey)
+    .maybeSingle();
+
+  if (candidateError) {
+    console.error("ADABIYOTX_ITEMS_QUERY_ERROR", {
+      code: candidateError.code,
+      message: candidateError.message,
+      details: candidateError.details,
+      hint: candidateError.hint,
+    });
+    return failureResponse;
+  }
+
+  if (!candidate) {
+    return NextResponse.json(
+      { ok: true, items: [] },
+      { status: 200, headers: responseHeaders(isProtected) },
+    );
+  }
+
   const { data, error } = await admin
     .from("candidate_adabiyotx_items")
     .select(PUBLIC_ITEM_SELECT)
-    .eq("candidate_integration_key", integrationKey)
+    .eq("candidate_id", candidate.id)
     .eq("is_visible", true)
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: false });
 
   if (error) {
-    return NextResponse.json(
-      {
-        ok: false,
-        code: "PUBLIC_ITEMS_LOAD_FAILED",
-        error: "Materiallarni yuklab bo‘lmadi.",
-      },
-      {
-        status: 500,
-        headers: {
-          "Cache-Control": "no-store",
-          ...(isProtected ? { Vary: "x-liderlar-api-key" } : {}),
-        },
-      },
-    );
+    console.error("ADABIYOTX_ITEMS_QUERY_ERROR", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
+    return failureResponse;
   }
 
   const items = ((data ?? []) as unknown as PublicCandidateAdabiyotXRow[]).map(

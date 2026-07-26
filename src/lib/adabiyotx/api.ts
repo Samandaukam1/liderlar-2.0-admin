@@ -62,4 +62,4 @@ export async function ensureCandidateExists(
 }
 
 export const CANDIDATE_ADABIYOTX_SELECT =
-  "id, candidate_id, candidate_integration_key, external_id, relationship_type, content_type, title, author_name, description, cover_url, external_url, published_at, sort_order, is_visible, metadata, created_at, updated_at";
+  "id, candidate_id, external_id, relationship_type, content_type, title, author_name, description, cover_url, external_url, published_at, sort_order, is_visible, metadata, created_at, updated_at";

@@ -21,7 +21,8 @@ Supabase Dashboard → **SQL Editor** da fayllarni **quyidagi tartibda** ishga t
 11. `migrations/0012_ai_prompts_permissions.sql` — AI promptlari uchun permission matritsasi
 12. `migrations/0013_candidate_photo_confirmation.sql` — nomzod rasmi tasdiqlash oqimi
 13. `migrations/0014_candidate_adabiyotx_items.sql` — cross-project `integration_key`, AdabiyotX materiallari, RLS va atomic reorder RPC
-14. `seed.sql` — hududlar, yo'nalishlar, boshlang'ich reyting davri, sozlamalar
+14. `migrations/0015_normalize_candidate_adabiyotx.sql` — `candidate_adabiyotx_items.candidate_integration_key` ustunini olib tashlaydi; `integration_key` faqat `candidates` da saqlanadi
+15. `seed.sql` — hududlar, yo'nalishlar, boshlang'ich reyting davri, sozlamalar
 
 Barcha fayllar **idempotent** — qayta ishga tushirish xavfsiz.
 

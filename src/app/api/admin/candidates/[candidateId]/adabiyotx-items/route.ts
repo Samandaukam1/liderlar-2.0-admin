@@ -44,11 +44,16 @@ export async function GET(_request: Request, context: CandidateRouteContext) {
     .from("candidate_adabiyotx_items")
     .select(CANDIDATE_ADABIYOTX_SELECT)
     .eq("candidate_id", candidateId)
-    .order("relationship_type")
-    .order("sort_order")
-    .order("created_at");
+    .order("sort_order", { ascending: true })
+    .order("created_at", { ascending: false });
 
   if (error) {
+    console.error("ADABIYOTX_ITEMS_QUERY_ERROR", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
     return adabiyotXError(
       "ITEMS_LOAD_FAILED",
       "AdabiyotX materiallarini yuklab bo‘lmadi.",
@@ -142,6 +147,14 @@ export async function POST(request: Request, context: CandidateRouteContext) {
     );
   }
   if (error || !data) {
+    if (error) {
+      console.error("ADABIYOTX_ITEMS_QUERY_ERROR", {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+    }
     return adabiyotXError(
       "ITEM_CREATE_FAILED",
       "Materialni biriktirib bo‘lmadi.",

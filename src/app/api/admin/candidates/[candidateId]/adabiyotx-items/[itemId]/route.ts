@@ -60,6 +60,12 @@ export async function PATCH(request: Request, context: ItemRouteContext) {
     .eq("candidate_id", candidateId)
     .maybeSingle();
   if (loadError) {
+    console.error("ADABIYOTX_ITEMS_QUERY_ERROR", {
+      code: loadError.code,
+      message: loadError.message,
+      details: loadError.details,
+      hint: loadError.hint,
+    });
     return adabiyotXError(
       "ITEM_LOAD_FAILED",
       "Materialni tekshirib bo‘lmadi.",
@@ -136,6 +142,14 @@ export async function PATCH(request: Request, context: ItemRouteContext) {
     );
   }
   if (error || !data) {
+    if (error) {
+      console.error("ADABIYOTX_ITEMS_QUERY_ERROR", {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+    }
     return adabiyotXError(
       "ITEM_UPDATE_FAILED",
       "Materialni yangilab bo‘lmadi.",
@@ -186,6 +200,12 @@ export async function DELETE(_request: Request, context: ItemRouteContext) {
     .select("id, title")
     .maybeSingle();
   if (error) {
+    console.error("ADABIYOTX_ITEMS_QUERY_ERROR", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
     return adabiyotXError(
       "ITEM_DELETE_FAILED",
       "Materialni olib tashlab bo‘lmadi.",

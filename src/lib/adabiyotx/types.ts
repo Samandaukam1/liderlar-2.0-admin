@@ -20,7 +20,6 @@ export type CandidateAdabiyotXRelationship =
 export interface CandidateAdabiyotXItem {
   id: string;
   candidateId: string;
-  candidateIntegrationKey: string;
   externalId: string;
   relationshipType: CandidateAdabiyotXRelationship;
   contentType: AdabiyotXContentType;
@@ -40,7 +39,6 @@ export interface CandidateAdabiyotXItem {
 export interface CandidateAdabiyotXRow {
   id: string;
   candidate_id: string;
-  candidate_integration_key: string;
   external_id: string;
   relationship_type: CandidateAdabiyotXRelationship;
   content_type: AdabiyotXContentType;
@@ -82,9 +80,20 @@ export interface PublicCandidateAdabiyotXItem {
   sortOrder: number;
 }
 
-export type PublicCandidateAdabiyotXRow = Omit<
+export type PublicCandidateAdabiyotXRow = Pick<
   CandidateAdabiyotXRow,
-  "candidate_id" | "metadata" | "updated_at"
+  | "id"
+  | "external_id"
+  | "relationship_type"
+  | "content_type"
+  | "title"
+  | "author_name"
+  | "description"
+  | "cover_url"
+  | "external_url"
+  | "published_at"
+  | "sort_order"
+  | "metadata"
 >;
 
 export function mapCandidateAdabiyotXRow(
@@ -93,7 +102,6 @@ export function mapCandidateAdabiyotXRow(
   return {
     id: row.id,
     candidateId: row.candidate_id,
-    candidateIntegrationKey: row.candidate_integration_key,
     externalId: row.external_id,
     relationshipType: row.relationship_type,
     contentType: row.content_type,

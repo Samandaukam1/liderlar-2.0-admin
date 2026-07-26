@@ -46,6 +46,12 @@ export async function POST(request: Request, context: CandidateRouteContext) {
     })),
   });
   if (error) {
+    console.error("ADABIYOTX_ITEMS_QUERY_ERROR", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
     return adabiyotXError(
       "ITEMS_REORDER_FAILED",
       "Materiallar tartibini saqlab bo‘lmadi.",
