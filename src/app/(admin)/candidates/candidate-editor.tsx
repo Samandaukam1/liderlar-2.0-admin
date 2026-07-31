@@ -396,7 +396,7 @@ export function CandidateEditor({
               <div><h2 className="font-bold text-ink">Umumiy matn va avtomatik ajratish</h2><p className="text-xs text-ink-soft">Markerlar faqat yangi qator boshida taniladi</p></div>
             </div>
             <Textarea aria-label="Markerli nomzod matni" value={rawText} onChange={(event) => { setRawText(event.target.value); setSaveState("idle"); }} rows={30} spellCheck className="mt-4 min-h-[34rem] resize-y font-mono text-xs leading-6" placeholder="!!!Ism-familiya&#10;&&&Tavsif | Tavsif&#10;…" />
-            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1">
               <Button onClick={parse}><Wand2 className="h-4 w-4" /> Matnni bo‘limlarga ajratish</Button>
               <Button variant="secondary" onClick={buildMarkerText}><FileText className="h-4 w-4" /> Belgilar asosida matn yaratish</Button>
               <Button variant="ai" onClick={() => void runAi()} disabled={aiRunning || rawText.trim().length < 10}>{aiRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {aiRunning ? "Jaxongir AI ishlamoqda…" : "Jaxongir AI bilan tartiblash"}</Button>
