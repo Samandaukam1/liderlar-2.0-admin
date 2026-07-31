@@ -26,6 +26,8 @@ export const STATUS_META: Record<string, StatusMeta> = {
   scheduled: { label: "Rejalashtirilgan", accent: "cyan" },
   published: { label: "Nashr etilgan", accent: "mint" },
   archived: { label: "Arxivlangan", accent: "neutral" },
+  intake: { label: "Anketa qabul qilindi", accent: "cyan" },
+  ai_processing: { label: "AI qayta ishlamoqda", accent: "cyan" },
   // candidate intake (V2)
   ai_reviewing: { label: "AI ko‘rmoqda", accent: "cyan" },
   needs_clarification: { label: "Aniqlashtirish kerak", accent: "peach" },

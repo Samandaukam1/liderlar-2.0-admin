@@ -7,6 +7,7 @@ import { requirePermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 import { slugify } from "@/lib/utils";
+import { getCandidatePublicationReadiness } from "@/lib/candidates/publication-service";
 
 const candidateSchema = z.object({
   full_name: z.string().min(3, "Ism juda qisqa").max(160),
@@ -28,6 +29,8 @@ export interface ActionResult {
   ok: boolean;
   error?: string;
   id?: string;
+  warnings?: string[];
+  errors?: string[];
 }
 
 function nullable(v: string | undefined | null) {
@@ -116,7 +119,30 @@ export async function upsertCandidateAction(
   return { ok: true, id: data.id };
 }
 
-const STATUS_FLOW = ["draft", "review", "published", "archived"] as const;
+const STATUS_FLOW = [
+  "intake",
+  "ai_processing",
+  "draft",
+  "review",
+  "published",
+  "rejected",
+  "archived",
+] as const;
+
+export async function checkCandidatePublicationAction(candidateId: string): Promise<ActionResult> {
+  await requirePermission("candidates.publish");
+  try {
+    const readiness = await getCandidatePublicationReadiness(candidateId);
+    return {
+      ok: readiness.ready,
+      error: readiness.ready ? undefined : readiness.errors.join(" · "),
+      errors: readiness.errors,
+      warnings: readiness.warnings,
+    };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Nashrga tayyorlikni tekshirib bo‘lmadi" };
+  }
+}
 
 export async function setCandidateStatusAction(
   candidateId: string,
@@ -127,6 +153,12 @@ export async function setCandidateStatusAction(
   );
   if (!STATUS_FLOW.includes(status)) return { ok: false, error: "Noto‘g‘ri status" };
   const admin = createSupabaseAdminClient();
+  let publicationWarnings: string[] = [];
+  if (status === "published") {
+    const readiness = await getCandidatePublicationReadiness(candidateId);
+    if (!readiness.ready) return { ok: false, error: readiness.errors.join(" · "), errors: readiness.errors, warnings: readiness.warnings };
+    publicationWarnings = readiness.warnings;
+  }
   const { data: before } = await admin
     .from("candidates")
     .select("status")
@@ -136,6 +168,9 @@ export async function setCandidateStatusAction(
   if (status === "published" && !before?.status?.startsWith("publ")) {
     // First publish starts the 30-day update cycle.
     patch.next_update_due_at = new Date(Date.now() + 30 * 86400000).toISOString();
+    patch.manually_reviewed = true;
+    patch.reviewed_at = new Date().toISOString();
+    patch.reviewed_by = ctx.userId;
   }
   const { error } = await admin.from("candidates").update(patch).eq("id", candidateId);
   if (error) return { ok: false, error: error.message };
@@ -149,7 +184,7 @@ export async function setCandidateStatusAction(
   });
   revalidatePath(`/candidates/${candidateId}`);
   revalidatePath("/candidates");
-  return { ok: true };
+  return { ok: true, warnings: publicationWarnings };
 }
 
 /** Soft delete — candidates are never hard-deleted from the admin panel. */

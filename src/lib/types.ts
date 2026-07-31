@@ -1,6 +1,13 @@
 /** Hand-maintained row types for the canonical Liderlar.uz schema. */
 
-export type CandidateStatus = "draft" | "review" | "published" | "archived";
+export type CandidateStatus =
+  | "intake"
+  | "ai_processing"
+  | "draft"
+  | "review"
+  | "published"
+  | "rejected"
+  | "archived";
 
 export interface Candidate {
   id: string;
@@ -8,8 +15,18 @@ export interface Candidate {
   slug: string;
   full_name: string;
   short_bio: string | null;
+  description_items?: string[] | null;
   avatar_url: string | null;
   birth_date: string | null;
+  birth_year?: string | null;
+  birth_place?: string | null;
+  current_location?: string | null;
+  education_summary?: string | null;
+  activity_field?: string | null;
+  languages?: string[] | null;
+  raw_content?: string | null;
+  formatted_content?: string | null;
+  unparsed_content?: string | null;
   region_id: string | null;
   category_id: string | null;
   status: CandidateStatus;

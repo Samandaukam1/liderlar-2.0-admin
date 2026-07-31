@@ -17,6 +17,11 @@ import { getActiveTemplate, getIntakeSettings } from "@/lib/intake/data";
 import { saveIntakeAnswer } from "@/lib/intake/answers";
 import { copyFinalPhotoToAvatar } from "@/lib/intake/promote";
 import type { AnswerState } from "@/lib/intake/constants";
+import { normalizeCandidateIntake } from "@/lib/candidates/normalize-intake";
+import { structureCandidateWithAi } from "@/lib/candidates/ai-service";
+import { saveCandidateProfile, updateCandidateAiMetadata } from "@/lib/candidates/repository";
+import { serializeCandidateData } from "@/lib/candidates/serializer";
+import { getCandidatePublicationReadiness } from "@/lib/candidates/publication-service";
 
 export interface IntakeActionResult {
   ok: boolean;
@@ -370,13 +375,55 @@ export async function promoteIntakeAction(intakeId: string): Promise<IntakeActio
 
   const { data: intake } = await admin
     .from("candidate_intakes")
-    .select("full_name, status")
+    .select("full_name, status, short_bio, biography_draft, template_id")
     .eq("id", intakeId)
     .maybeSingle();
   if (!intake) return { ok: false, error: "Anketa topilmadi" };
   if (intake.status !== "approved") {
     return { ok: false, error: "Avval anketani tasdiqlang (approved)" };
   }
+
+  const [{ data: answerRows, error: answersError }, { data: questionRows, error: questionsError }] = await Promise.all([
+    admin
+      .from("candidate_intake_answers")
+      .select("question_no,plain_text,final_text,ai_improved_text")
+      .eq("intake_id", intakeId)
+      .order("question_no"),
+    admin
+      .from("candidate_intake_questions")
+      .select("question_no,prompt")
+      .eq("template_id", intake.template_id)
+      .order("question_no"),
+  ]);
+  if (answersError || questionsError) return { ok: false, error: answersError?.message ?? questionsError?.message ?? "Anketa javoblarini yuklab bo‘lmadi" };
+
+  const promptByNumber = new Map((questionRows ?? []).map((row) => [row.question_no as number, row.prompt as string]));
+  const rawAnswers: Record<string, unknown> = {
+    full_name: intake.full_name,
+    short_bio: intake.short_bio,
+    biography_draft: intake.biography_draft,
+  };
+  for (const answer of answerRows ?? []) {
+    const prompt = promptByNumber.get(answer.question_no as number) ?? `question_${answer.question_no}`;
+    rawAnswers[prompt] = answer.final_text || answer.ai_improved_text || answer.plain_text || "";
+  }
+  const normalized = normalizeCandidateIntake(rawAnswers);
+  normalized.data.fullName = String(intake.full_name ?? normalized.data.fullName);
+
+  await admin.from("candidate_intakes").update({ status: "ai_reviewing" }).eq("id", intakeId).eq("status", "approved");
+  let aiResult: Awaited<ReturnType<typeof structureCandidateWithAi>>;
+  try {
+    aiResult = await structureCandidateWithAi({
+      rawText: normalized.rawContent,
+      current: normalized.data,
+      actorId: ctx.userId,
+      intakeId,
+    });
+  } catch (error) {
+    await admin.from("candidate_intakes").update({ status: "approved" }).eq("id", intakeId).eq("status", "ai_reviewing");
+    return { ok: false, error: error instanceof Error ? `Jaxongir AI xatosi: ${error.message}` : "Jaxongir AI xatosi" };
+  }
+  await admin.from("candidate_intakes").update({ status: "approved" }).eq("id", intakeId).eq("status", "ai_reviewing");
 
   const avatarUrl = await copyFinalPhotoToAvatar(intakeId);
   const slug = slugify(intake.full_name as string);
@@ -391,6 +438,40 @@ export async function promoteIntakeAction(intakeId: string): Promise<IntakeActio
   if (error) return { ok: false, error: error.message };
   const res = data as { candidate_id: string; article_id: string; candidate_slug: string };
 
+  const structured = {
+    ...normalized.data,
+    candidateId: res.candidate_id,
+    fullName: aiResult.data.fullName || String(intake.full_name),
+    descriptionItems: aiResult.data.description,
+    birthYear: aiResult.data.birthYear,
+    birthPlace: aiResult.data.birthPlace,
+    currentLocation: aiResult.data.currentLocation,
+    education: aiResult.data.education,
+    activityField: aiResult.data.activityField,
+    languages: aiResult.data.languages,
+    sections: aiResult.data.sections.map((section, order) => ({ ...section, id: crypto.randomUUID(), order })),
+    profilePhoto: avatarUrl ?? "",
+    slug: res.candidate_slug,
+    rawContent: normalized.rawContent,
+    formattedContent: "",
+    unparsedContent: "",
+  };
+  structured.formattedContent = serializeCandidateData(structured);
+  try {
+    await saveCandidateProfile(structured, ctx.userId);
+    await updateCandidateAiMetadata(res.candidate_id, {
+      status: "succeeded",
+      model: aiResult.model,
+      rawResponse: aiResult.rawResponse,
+    });
+  } catch (saveError) {
+    return {
+      ok: false,
+      candidateId: res.candidate_id,
+      error: saveError instanceof Error ? `Draft yaratildi, lekin strukturani saqlashda xato: ${saveError.message}` : "Draft strukturasi saqlanmadi",
+    };
+  }
+
   revalidatePath(`/nomzodlar/anketalar/${intakeId}`);
   revalidatePath("/candidates");
   return { ok: true, candidateId: res.candidate_id, articleId: res.article_id, slug: res.candidate_slug };
@@ -402,17 +483,19 @@ export async function publishIntakeAction(intakeId: string): Promise<IntakeActio
 
   const { data: intake } = await admin
     .from("candidate_intakes")
-    .select("full_name, status, phone_e164, consent_given")
+    .select("full_name, status, phone_e164, consent_given, candidate_id")
     .eq("id", intakeId)
     .maybeSingle();
   if (!intake) return { ok: false, error: "Anketa topilmadi" };
-  if (!["approved", "promoted"].includes(intake.status as string)) {
-    return { ok: false, error: "Nashr etish uchun anketa tasdiqlangan bo‘lishi kerak" };
+  if (intake.status !== "promoted" || !intake.candidate_id) {
+    return { ok: false, error: "Avval anketani Jaxongir AI orqali draft nomzodga aylantirib, admin reviewdan o‘tkazing" };
   }
   if (!intake.consent_given) return { ok: false, error: "Rozilik tasdiqlanmagan — nashr etib bo‘lmaydi" };
 
   const avatarUrl = await copyFinalPhotoToAvatar(intakeId);
   if (!avatarUrl) return { ok: false, error: "Yakuniy portret rasm tanlanmagan" };
+  const readiness = await getCandidatePublicationReadiness(intake.candidate_id as string);
+  if (!readiness.ready) return { ok: false, error: readiness.errors.join(" · ") };
   const slug = slugify(intake.full_name as string);
 
   const { data, error } = await admin.rpc("promote_candidate_intake", {

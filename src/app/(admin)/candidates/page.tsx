@@ -24,7 +24,7 @@ export default async function CandidatesPage(props: {
 
   let query = admin
     .from("candidates")
-    .select("*, regions(name), categories(name, color)", { count: "exact" })
+    .select("id,integration_key,slug,full_name,short_bio,avatar_url,status,is_top100,top100_position,next_update_due_at,created_at,updated_at,deleted_at,regions(name),categories(name,color)", { count: "exact" })
     .order("created_at", { ascending: false });
 
   if (filters.status === "archived") {
@@ -38,13 +38,12 @@ export default async function CandidatesPage(props: {
   if (q) query = query.or(`full_name.ilike.%${q}%,slug.ilike.%${q}%`);
 
   const [from, to] = listRange(page);
-  const { data, count, error } = await query.range(from, to);
-  const rows = (data ?? []) as unknown as Candidate[];
-
-  const [{ data: regions }, { data: categories }] = await Promise.all([
+  const [{ data, count, error }, { data: regions }, { data: categories }] = await Promise.all([
+    query.range(from, to),
     admin.from("regions").select("id, name").order("sort_order"),
     admin.from("categories").select("id, name").order("sort_order"),
   ]);
+  const rows = (data ?? []) as unknown as Candidate[];
 
   const columns: Column<Candidate>[] = [
     {
@@ -120,8 +119,11 @@ export default async function CandidatesPage(props: {
             label: "Status",
             options: [
               { value: "draft", label: "Qoralama" },
-              { value: "review", label: "Ko‘rib chiqilmoqda" },
+              { value: "intake", label: "Anketa qabul qilindi" },
+              { value: "ai_processing", label: "AI qayta ishlamoqda" },
+              { value: "review", label: "Tekshiruvda" },
               { value: "published", label: "Nashr etilgan" },
+              { value: "rejected", label: "Rad etilgan" },
               { value: "archived", label: "Arxivlangan" },
             ],
           },

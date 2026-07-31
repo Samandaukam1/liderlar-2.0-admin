@@ -107,7 +107,8 @@ export function IntakeReview({
               const r = await fn();
               if (r.ok) {
                 toast.toast("success", ok);
-                router.refresh();
+                if (r.candidateId) router.push(`/candidates/${r.candidateId}`);
+                else router.refresh();
               } else {
                 toast.toast("error", "Xatolik", r.error);
               }
@@ -509,13 +510,13 @@ function ActionsBar({
   status: string;
   fullName: string;
   pending: boolean;
-  run: (fn: () => Promise<{ ok: boolean; error?: string }>, okMsg: string) => void;
+  run: (fn: () => Promise<{ ok: boolean; error?: string; candidateId?: string }>, okMsg: string) => void;
 }) {
   const [promoteOpen, setPromoteOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
   const canApprove = ["submitted", "ai_reviewing", "needs_clarification"].includes(status);
   const canPromote = status === "approved";
-  const canPublish = ["approved", "promoted"].includes(status);
+  const canPublish = status === "promoted";
 
   return (
     <Card>
@@ -554,7 +555,7 @@ function ActionsBar({
           run(() => promoteIntakeAction(intakeId), "Nomzodlar bo‘limiga yuborildi (draft)");
         }}
         title="Nomzodga aylantirish"
-        description={`“${fullName}” uchun nomzod va biografik maqola DRAFT sifatida yaratiladi. Bu hali nashr emas.`}
+        description={`Jaxongir AI “${fullName}” anketasining barcha xom javoblarini strukturalaydi va nomzod profilini DRAFT sifatida yaratadi. Natija review sahifasida ochiladi; bu hali nashr emas.`}
         confirmLabel="Yuborish"
       />
       <ConfirmDialog

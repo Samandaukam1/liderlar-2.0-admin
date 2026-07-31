@@ -7,12 +7,13 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { PageHeader } from "@/components/admin/page-header";
 import { Card } from "@/components/ui/primitives";
 import { Avatar, Badge, StatusBadge } from "@/components/admin/badges";
-import { CandidateForm } from "../candidate-form";
+import { CandidateEditor } from "../candidate-editor";
 import { StatusActions } from "./status-actions";
 import { EntriesPanel, type EntryRow } from "./entries-panel";
 import { AdabiyotXPanel } from "./adabiyotx-panel";
 import { cn, formatDate, daysUntil, timeAgo } from "@/lib/utils";
 import type { Candidate } from "@/lib/types";
+import { getCandidateEditorRecord, getCandidatePrompt } from "@/lib/candidates/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -33,22 +34,21 @@ export default async function CandidateDetailPage(props: {
   const { tab = "profile" } = await props.searchParams;
   const admin = createSupabaseAdminClient();
 
-  const { data } = await admin
-    .from("candidates")
-    .select("*, regions(name), categories(name, color)")
-    .eq("id", id)
-    .maybeSingle();
+  const [{ data }, editorRecord, candidatePrompt] = await Promise.all([
+    admin
+      .from("candidates")
+      .select("id,integration_key,slug,full_name,short_bio,avatar_url,birth_date,region_id,category_id,status,is_top100,top100_position,user_id,seo_title,seo_description,phone,email,last_update_requested_at,last_updated_at,next_update_due_at,created_at,updated_at,deleted_at,regions(name),categories(name,color)")
+      .eq("id", id)
+      .maybeSingle(),
+    tab === "profile" ? getCandidateEditorRecord(id) : Promise.resolve(null),
+    tab === "profile" ? getCandidatePrompt() : Promise.resolve(""),
+  ]);
   if (!data) notFound();
   const candidate = data as unknown as Candidate;
 
   const canEdit = hasPermission(ctx.roles, "candidates.edit");
   const canPublish = hasPermission(ctx.roles, "candidates.publish");
   const canArchive = hasPermission(ctx.roles, "candidates.archive");
-
-  const [{ data: regions }, { data: categories }] = await Promise.all([
-    admin.from("regions").select("id, name").order("sort_order"),
-    admin.from("categories").select("id, name").order("sort_order"),
-  ]);
 
   const entrySelect = "id, title, subtitle, description, date_from, date_to, url";
   const [education, work, achievements, events, books, socials] =
@@ -85,7 +85,7 @@ export default async function CandidateDetailPage(props: {
       : { data: null };
 
   const dueDays = daysUntil(candidate.next_update_due_at);
-  const publicUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "https://liderlar.uz"}/lider/${candidate.slug}`;
+  const publicUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "https://liderlar.uz"}/liderlar/${candidate.slug}`;
 
   return (
     <>
@@ -106,7 +106,7 @@ export default async function CandidateDetailPage(props: {
         }
       />
 
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+      <div className={tab === "profile" ? "block" : "grid grid-cols-1 gap-5 xl:grid-cols-3"}>
         {/* Main column */}
         <div className="min-w-0 xl:col-span-2">
           <nav className="mb-4 flex gap-1 overflow-x-auto rounded-[16px] border border-line bg-card p-1 shadow-card" aria-label="Nomzod bo‘limlari">
@@ -128,15 +128,11 @@ export default async function CandidateDetailPage(props: {
           </nav>
 
           {tab === "profile" && (
-            <Card>
-              {canEdit ? (
-                <CandidateForm candidate={candidate} regions={regions ?? []} categories={categories ?? []} />
-              ) : (
-                <p className="text-sm text-ink-soft">
-                  Profilni tahrirlash uchun vakolatingiz yetarli emas.
-                </p>
-              )}
-            </Card>
+            canEdit && editorRecord ? (
+              <CandidateEditor candidateId={id} initialData={editorRecord.data} initialPrompt={candidatePrompt} />
+            ) : (
+              <Card><p className="text-sm text-ink-soft">Profilni tahrirlash uchun vakolatingiz yetarli emas.</p></Card>
+            )
           )}
 
           {tab === "activity" && (
@@ -213,7 +209,7 @@ export default async function CandidateDetailPage(props: {
         </div>
 
         {/* Context panel */}
-        <aside className="space-y-4">
+        <aside className={tab === "profile" ? "hidden" : "space-y-4"}>
           {/* Preview card — mirrors the public site candidate card */}
           <div className="overflow-hidden rounded-card border border-line bg-gradient-to-br from-navy-deep to-navy-dark p-6 text-white shadow-card">
             <p className="mb-4 font-display text-4xl leading-none text-cyan/60">“</p>

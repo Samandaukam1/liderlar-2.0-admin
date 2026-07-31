@@ -8,6 +8,7 @@ import { ConfirmDialog } from "@/components/ui/overlays";
 import { useToast } from "@/components/ui/toast";
 import {
   archiveCandidateAction,
+  checkCandidatePublicationAction,
   restoreCandidateAction,
   setCandidateStatusAction,
 } from "@/lib/actions/candidates";
@@ -31,16 +32,29 @@ export function StatusActions({
   const [pending, startTransition] = useTransition();
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [confirmPublish, setConfirmPublish] = useState(false);
+  const [publishWarnings, setPublishWarnings] = useState<string[]>([]);
 
   const setStatus = (next: CandidateStatus) => {
     startTransition(async () => {
       const res = await setCandidateStatusAction(candidateId, next);
       if (res.ok) {
-        toast("success", "Status yangilandi");
+        toast("success", "Status yangilandi", res.warnings?.join(" · "));
         router.refresh();
       } else {
         toast("error", "Xatolik", res.error);
       }
+    });
+  };
+
+  const preflightPublish = () => {
+    startTransition(async () => {
+      const result = await checkCandidatePublicationAction(candidateId);
+      if (!result.ok) {
+        toast("error", "Profil nashrga tayyor emas", result.error);
+        return;
+      }
+      setPublishWarnings(result.warnings ?? []);
+      setConfirmPublish(true);
     });
   };
 
@@ -72,8 +86,8 @@ export function StatusActions({
         </Button>
       )}
       {status !== "published" && canPublish && (
-        <Button variant="success" size="sm" disabled={pending} onClick={() => setConfirmPublish(true)}>
-          <CheckCircle2 className="h-4 w-4" /> Nashr etish
+        <Button variant="success" size="sm" disabled={pending} onClick={preflightPublish}>
+          <CheckCircle2 className="h-4 w-4" /> {pending ? "Tekshirilmoqda…" : "Nashr etish"}
         </Button>
       )}
       {status === "published" && (
@@ -95,7 +109,7 @@ export function StatusActions({
           setStatus("published");
         }}
         title="Profilni nashr etish"
-        description="Profil liderlar.uz saytida ommaga ko‘rinadi va 30 kunlik yangilanish sikli boshlanadi."
+        description={`Profil liderlar.uz saytida ommaga ko‘rinadi va 30 kunlik yangilanish sikli boshlanadi.${publishWarnings.length ? ` Ogohlantirish: ${publishWarnings.join(" · ")}.` : ""}`}
         confirmLabel="Nashr etish"
       />
       <ConfirmDialog
