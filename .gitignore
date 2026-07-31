@@ -42,3 +42,6 @@ yarn-error.log*
 next-env.d.ts
 .env.local
 .env*.local
+
+# Supabase CLI temporary files
+supabase/.temp/
