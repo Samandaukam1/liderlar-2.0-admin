@@ -1,7 +1,10 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/login", "/api/auth"];
+// /api/public/* is a server-to-server public content API (own x-liderlar-api-key
+// check + is_visible filtering in the route itself) — it must never require an
+// admin session cookie, since callers like liderlar-web have none.
+const PUBLIC_PATHS = ["/login", "/api/auth", "/api/public"];
 
 // Candidate secure-link intake is public by design (token-gated at the route
 // layer). Only these paths are exempt from the admin session requirement.
