@@ -120,7 +120,7 @@ returns table (
   region jsonb,
   category jsonb,
   total_score numeric,
-  position integer,
+  rank_position integer,
   previous_position integer,
   view_count bigint,
   total_count bigint
@@ -142,7 +142,7 @@ as $$
     case when r.id is null then null else jsonb_build_object('name', r.name, 'slug', r.slug) end as region,
     case when cat.id is null then null else jsonb_build_object('name', cat.name, 'slug', cat.slug, 'color', cat.color) end as category,
     coalesce(score.total_score, 0) as total_score,
-    score.position,
+    score.position as rank_position,
     score.previous_position,
     coalesce(views.view_count, 0) as view_count,
     count(*) over() as total_count
