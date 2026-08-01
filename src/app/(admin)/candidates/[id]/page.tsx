@@ -11,9 +11,11 @@ import { CandidateEditor } from "../candidate-editor";
 import { StatusActions } from "./status-actions";
 import { EntriesPanel, type EntryRow } from "./entries-panel";
 import { AdabiyotXPanel } from "./adabiyotx-panel";
+import { CertificatePanel } from "./certificate-panel";
 import { cn, formatDate, daysUntil, timeAgo } from "@/lib/utils";
 import type { Candidate } from "@/lib/types";
 import { getCandidateEditorRecord, getCandidatePrompt } from "@/lib/candidates/repository";
+import { resolveCertificateTargetUrl } from "@/lib/certificates/target-url";
 
 export const dynamic = "force-dynamic";
 
@@ -86,6 +88,7 @@ export default async function CandidateDetailPage(props: {
 
   const dueDays = daysUntil(candidate.next_update_due_at);
   const publicUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "https://liderlar.uz"}/liderlar/${candidate.slug}`;
+  const certificateTarget = await resolveCertificateTargetUrl(candidate).catch(() => null);
 
   return (
     <>
@@ -296,6 +299,13 @@ export default async function CandidateDetailPage(props: {
           </Card>
         </aside>
       </div>
+
+      <CertificatePanel
+        candidateId={candidate.id}
+        fullName={candidate.full_name}
+        targetUrl={certificateTarget?.url ?? null}
+        targetSource={certificateTarget?.source ?? null}
+      />
     </>
   );
 }
