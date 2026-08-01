@@ -96,6 +96,20 @@ export async function generateCertificatePdf(request: CertificateRequest): Promi
   }
 
   // ---- QR code
+  // The background template's own raster already has a QR code baked into
+  // it at (nearly, but not exactly) this same spot. A plain white mask a
+  // few points larger than our QR fully covers that old one first, so any
+  // sub-pixel mismatch between the two doesn't show as ghosting/ragged
+  // edges behind the new code.
+  const qrMaskPadding = 8;
+  pdfPage.drawRectangle({
+    x: qrCode.x - qrMaskPadding,
+    y: page.height - qrCode.y - qrCode.size - qrMaskPadding,
+    width: qrCode.size + qrMaskPadding * 2,
+    height: qrCode.size + qrMaskPadding * 2,
+    color: rgb(1, 1, 1),
+  });
+
   const qrImage = await pdfDoc.embedPng(qrPngBytes);
   pdfPage.drawImage(qrImage, {
     x: qrCode.x,
