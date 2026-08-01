@@ -88,10 +88,12 @@ export default async function CandidateDetailPage(props: {
 
   const dueDays = daysUntil(candidate.next_update_due_at);
   const publicUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "https://liderlar.uz"}/liderlar/${candidate.slug}`;
-  const certificateTarget = await resolveCertificateTargetUrl(candidate).catch((err) => {
-    console.error("CERTIFICATE_TARGET_RESOLUTION_FAILED", err instanceof Error ? err.message : err);
-    return null;
-  });
+  const certificateTarget = await resolveCertificateTargetUrl(candidate).catch(
+    (err): Awaited<ReturnType<typeof resolveCertificateTargetUrl>> => {
+      console.error("CERTIFICATE_TARGET_RESOLUTION_FAILED", err instanceof Error ? err.message : err);
+      return { ok: false, reason: "query-failed", message: err instanceof Error ? err.message : "unknown" };
+    }
+  );
 
   return (
     <>
@@ -306,10 +308,8 @@ export default async function CandidateDetailPage(props: {
       <CertificatePanel
         candidateId={candidate.id}
         fullName={candidate.full_name}
-        candidateStatus={candidate.status}
         canPublish={canPublish}
-        targetUrl={certificateTarget?.url ?? null}
-        targetSource={certificateTarget?.source ?? null}
+        target={certificateTarget}
       />
     </>
   );

@@ -63,12 +63,16 @@ export async function GET(_request: Request, context: RouteContext) {
     console.error("CERTIFICATE_TARGET_URL_FAILED", err instanceof Error ? err.message : err);
     return certificateError("TARGET_URL_FAILED", "Sertifikat manzilini aniqlab bo'lmadi.", 500);
   }
-  if (!target) {
-    return certificateError(
-      "NOT_PUBLISHED",
-      "Sertifikat QR kodi uchun nomzodning public maqolasi yoki profili avval nashr qilinishi kerak.",
-      409
-    );
+  if (!target.ok) {
+    if (target.reason === "query-failed") {
+      console.error("CERTIFICATE_TARGET_QUERY_FAILED", target.message);
+      return certificateError("TARGET_URL_FAILED", "Sertifikat manzilini aniqlab bo'lmadi.", 500);
+    }
+    const message =
+      target.reason === "missing-slug"
+        ? "Nomzod nashr qilingan, lekin uning slug maydoni bo'sh — profilni tahrirlab slug kiriting."
+        : "Sertifikat QR kodi uchun nomzodning public maqolasi yoki profili avval nashr qilinishi kerak.";
+    return certificateError("NOT_PUBLISHED", message, 409);
   }
 
   let pdfBytes: Uint8Array;

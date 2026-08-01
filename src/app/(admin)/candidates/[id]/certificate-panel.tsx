@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   Award,
   CheckCircle2,
@@ -15,23 +16,20 @@ import { Button, Card } from "@/components/ui/primitives";
 import { ConfirmDialog } from "@/components/ui/overlays";
 import { useToast } from "@/components/ui/toast";
 import { checkCandidatePublicationAction, setCandidateStatusAction } from "@/lib/actions/candidates";
+import type { CertificateTargetResolution } from "@/lib/certificates/target-url";
 
 type GenerationState = "idle" | "loading" | "success" | "error";
 
 export function CertificatePanel({
   candidateId,
   fullName,
-  candidateStatus,
   canPublish,
-  targetUrl,
-  targetSource,
+  target,
 }: {
   candidateId: string;
   fullName: string;
-  candidateStatus: string;
   canPublish: boolean;
-  targetUrl: string | null;
-  targetSource: "article" | "candidate" | null;
+  target: CertificateTargetResolution;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -121,9 +119,11 @@ export function CertificatePanel({
     });
   }
 
-  const blocked = !targetUrl;
+  const blocked = !target.ok;
   const buttonLabel =
-    targetSource === "article" ? "Sertifikatni PDF shaklida yuklab olish" : "Sertifikatni yaratish";
+    target.ok && target.source === "article"
+      ? "Sertifikatni PDF shaklida yuklab olish"
+      : "Sertifikatni yaratish";
 
   return (
     <section className="mt-6">
@@ -143,14 +143,14 @@ export function CertificatePanel({
               <div className="flex justify-between gap-3">
                 <dt className="shrink-0 text-ink-soft">QR manzili</dt>
                 <dd className="min-w-0 truncate text-right font-mono text-xs text-ink">
-                  {targetUrl ?? "—"}
+                  {target.ok ? target.url : "—"}
                 </dd>
               </div>
             </dl>
 
-            {targetUrl && (
+            {target.ok && (
               <a
-                href={targetUrl}
+                href={target.url}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-1.5 text-xs font-bold text-brand hover:underline"
@@ -159,7 +159,7 @@ export function CertificatePanel({
               </a>
             )}
 
-            {blocked && candidateStatus !== "published" && (
+            {!target.ok && target.reason === "not-published" && (
               <div className="flex items-start gap-2 rounded-[12px] border border-coral/30 bg-coral/10 p-3.5 text-xs text-ink">
                 <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-coral" />
                 <div className="space-y-2">
@@ -182,17 +182,29 @@ export function CertificatePanel({
               </div>
             )}
 
-            {/* Candidate IS published, but a target URL still couldn't be
-                resolved — a different, real problem (bad slug, site-url
-                misconfiguration) that "please publish" would misdiagnose. */}
-            {blocked && candidateStatus === "published" && (
+            {!target.ok && target.reason === "missing-slug" && (
               <div className="flex items-start gap-2 rounded-[12px] border border-coral/30 bg-coral/10 p-3.5 text-xs text-ink">
                 <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-coral" />
-                <div className="space-y-1">
+                <div className="space-y-2">
                   <p>
-                    Nomzod nashr qilingan, lekin sertifikat uchun manzil aniqlanmadi (masalan,
-                    slug bo&apos;sh bo&apos;lishi mumkin).
+                    Nomzod nashr qilingan, lekin profilida <b>slug</b> maydoni bo&apos;sh — QR
+                    havolasi shu maydonsiz yaratilmaydi.
                   </p>
+                  <Link
+                    href={`/candidates/${candidateId}?tab=profile`}
+                    className="inline-flex items-center gap-1.5 rounded-[10px] bg-ink px-3 py-1.5 text-xs font-bold text-white hover:opacity-90"
+                  >
+                    Profilni tahrirlab slug kiritish
+                  </Link>
+                </div>
+              </div>
+            )}
+
+            {!target.ok && target.reason === "query-failed" && (
+              <div className="flex items-start gap-2 rounded-[12px] border border-coral/30 bg-coral/10 p-3.5 text-xs text-ink">
+                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-coral" />
+                <div className="space-y-2">
+                  <p>Sertifikat manzilini aniqlashda xatolik: {target.message}</p>
                   <Button variant="secondary" size="sm" onClick={() => router.refresh()}>
                     <RefreshCw className="h-3.5 w-3.5" /> Qayta tekshirish
                   </Button>
