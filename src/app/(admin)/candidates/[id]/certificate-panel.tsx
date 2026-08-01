@@ -159,7 +159,7 @@ export function CertificatePanel({
               </a>
             )}
 
-            {blocked && (
+            {blocked && candidateStatus !== "published" && (
               <div className="flex items-start gap-2 rounded-[12px] border border-coral/30 bg-coral/10 p-3.5 text-xs text-ink">
                 <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-coral" />
                 <div className="space-y-2">
@@ -167,7 +167,7 @@ export function CertificatePanel({
                     Sertifikat QR kodi uchun nomzodning public maqolasi yoki profili avval nashr
                     qilinishi kerak.
                   </p>
-                  {candidateStatus !== "published" && canPublish && (
+                  {canPublish && (
                     <Button
                       variant="success"
                       size="sm"
@@ -178,6 +178,24 @@ export function CertificatePanel({
                       {publishPending ? "Tekshirilmoqda…" : "Profilni hozir nashr etish"}
                     </Button>
                   )}
+                </div>
+              </div>
+            )}
+
+            {/* Candidate IS published, but a target URL still couldn't be
+                resolved — a different, real problem (bad slug, site-url
+                misconfiguration) that "please publish" would misdiagnose. */}
+            {blocked && candidateStatus === "published" && (
+              <div className="flex items-start gap-2 rounded-[12px] border border-coral/30 bg-coral/10 p-3.5 text-xs text-ink">
+                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-coral" />
+                <div className="space-y-1">
+                  <p>
+                    Nomzod nashr qilingan, lekin sertifikat uchun manzil aniqlanmadi (masalan,
+                    slug bo&apos;sh bo&apos;lishi mumkin).
+                  </p>
+                  <Button variant="secondary" size="sm" onClick={() => router.refresh()}>
+                    <RefreshCw className="h-3.5 w-3.5" /> Qayta tekshirish
+                  </Button>
                 </div>
               </div>
             )}

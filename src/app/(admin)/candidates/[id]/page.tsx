@@ -88,7 +88,10 @@ export default async function CandidateDetailPage(props: {
 
   const dueDays = daysUntil(candidate.next_update_due_at);
   const publicUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "https://liderlar.uz"}/liderlar/${candidate.slug}`;
-  const certificateTarget = await resolveCertificateTargetUrl(candidate).catch(() => null);
+  const certificateTarget = await resolveCertificateTargetUrl(candidate).catch((err) => {
+    console.error("CERTIFICATE_TARGET_RESOLUTION_FAILED", err instanceof Error ? err.message : err);
+    return null;
+  });
 
   return (
     <>
