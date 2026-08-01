@@ -303,6 +303,8 @@ export default async function CandidateDetailPage(props: {
       <CertificatePanel
         candidateId={candidate.id}
         fullName={candidate.full_name}
+        candidateStatus={candidate.status}
+        canPublish={canPublish}
         targetUrl={certificateTarget?.url ?? null}
         targetSource={certificateTarget?.source ?? null}
       />

@@ -1,29 +1,49 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Award, Download, ExternalLink, Loader2, RefreshCw, ShieldAlert } from "lucide-react";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import {
+  Award,
+  CheckCircle2,
+  Download,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+  ShieldAlert,
+} from "lucide-react";
 import { Button, Card } from "@/components/ui/primitives";
+import { ConfirmDialog } from "@/components/ui/overlays";
 import { useToast } from "@/components/ui/toast";
+import { checkCandidatePublicationAction, setCandidateStatusAction } from "@/lib/actions/candidates";
 
 type GenerationState = "idle" | "loading" | "success" | "error";
 
 export function CertificatePanel({
   candidateId,
   fullName,
+  candidateStatus,
+  canPublish,
   targetUrl,
   targetSource,
 }: {
   candidateId: string;
   fullName: string;
+  candidateStatus: string;
+  canPublish: boolean;
   targetUrl: string | null;
   targetSource: "article" | "candidate" | null;
 }) {
+  const router = useRouter();
   const { toast } = useToast();
   const [state, setState] = useState<GenerationState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const blobUrlRef = useRef<string | null>(null);
+
+  const [publishPending, startPublishTransition] = useTransition();
+  const [confirmPublish, setConfirmPublish] = useState(false);
+  const [publishWarnings, setPublishWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     return () => {
@@ -74,6 +94,33 @@ export function CertificatePanel({
     a.remove();
   }
 
+  function preflightPublish() {
+    startPublishTransition(async () => {
+      const result = await checkCandidatePublicationAction(candidateId);
+      if (!result.ok) {
+        toast("error", "Profil nashrga tayyor emas", result.error);
+        return;
+      }
+      setPublishWarnings(result.warnings ?? []);
+      setConfirmPublish(true);
+    });
+  }
+
+  function publish() {
+    setConfirmPublish(false);
+    startPublishTransition(async () => {
+      const res = await setCandidateStatusAction(candidateId, "published");
+      if (res.ok) {
+        toast("success", "Profil nashr etildi", "Sertifikat QR kodi endi tayyor.");
+        // Re-runs the server component, which re-resolves the QR target —
+        // the block above clears and the generate button unlocks on its own.
+        router.refresh();
+      } else {
+        toast("error", "Xatolik", res.error);
+      }
+    });
+  }
+
   const blocked = !targetUrl;
   const buttonLabel =
     targetSource === "article" ? "Sertifikatni PDF shaklida yuklab olish" : "Sertifikatni yaratish";
@@ -115,10 +162,23 @@ export function CertificatePanel({
             {blocked && (
               <div className="flex items-start gap-2 rounded-[12px] border border-coral/30 bg-coral/10 p-3.5 text-xs text-ink">
                 <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-coral" />
-                <p>
-                  Sertifikat QR kodi uchun nomzodning public maqolasi yoki profili avval nashr
-                  qilinishi kerak.
-                </p>
+                <div className="space-y-2">
+                  <p>
+                    Sertifikat QR kodi uchun nomzodning public maqolasi yoki profili avval nashr
+                    qilinishi kerak.
+                  </p>
+                  {candidateStatus !== "published" && canPublish && (
+                    <Button
+                      variant="success"
+                      size="sm"
+                      disabled={publishPending}
+                      onClick={preflightPublish}
+                    >
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      {publishPending ? "Tekshirilmoqda…" : "Profilni hozir nashr etish"}
+                    </Button>
+                  )}
+                </div>
               </div>
             )}
 
@@ -175,6 +235,15 @@ export function CertificatePanel({
           </div>
         </div>
       </Card>
+
+      <ConfirmDialog
+        open={confirmPublish}
+        onClose={() => setConfirmPublish(false)}
+        onConfirm={publish}
+        title="Profilni nashr etish"
+        description={`Profil liderlar.uz saytida ommaga ko‘rinadi va 30 kunlik yangilanish sikli boshlanadi.${publishWarnings.length ? ` Ogohlantirish: ${publishWarnings.join(" · ")}.` : ""}`}
+        confirmLabel="Nashr etish"
+      />
     </section>
   );
 }
