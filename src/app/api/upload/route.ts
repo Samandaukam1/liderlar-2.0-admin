@@ -93,6 +93,14 @@ export async function POST(request: Request) {
     .from(bucket)
     .upload(path, file, { contentType: file.type, upsert: false });
   if (uploadError) {
+    if (/bucket not found/i.test(uploadError.message)) {
+      return NextResponse.json(
+        {
+          error: `Saqlash joyi ("${bucket}" bucket) Supabase'da topilmadi. Tegishli migratsiya hali ishga tushirilmagan bo'lishi mumkin.`,
+        },
+        { status: 500 },
+      );
+    }
     return NextResponse.json({ error: uploadError.message }, { status: 500 });
   }
 
