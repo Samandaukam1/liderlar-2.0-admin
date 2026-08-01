@@ -57,6 +57,7 @@ export const PERMISSIONS = [
   "ai.use",
   "ai_prompts.view",
   "ai_prompts.edit",
+  "ai_assistant.manage",
   "notifications.view",
   "notifications.manage",
   "admins.manage",

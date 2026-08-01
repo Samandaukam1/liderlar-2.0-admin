@@ -18,6 +18,7 @@ import {
   ClipboardList,
   Image,
   Sparkles,
+  Bot,
   Wand2,
   Bell,
   ShieldCheck,
@@ -83,6 +84,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Aqlli vositalar",
     items: [
       { label: "Jaxongir AI", href: "/ai", icon: Sparkles, permission: "ai.use", keywords: "sun'iy intellekt muharrir" },
+      { label: "AI Assistant", href: "/ai-assistant", icon: Bot, permission: "ai_assistant.manage", keywords: "widget avatar animatsiya user panel jaxongir" },
     ],
   },
   {
