@@ -40,9 +40,20 @@ export interface AnswerFull {
   ai_fact_flags: { type: string; claim: string; explanation: string }[];
   ai_clarification_questions: string[];
   ai_confidence: number | null;
+  ai_fact_preservation: FactPreservationView | null;
   final_text: string | null;
   editor_state: string;
   moderation_flagged: boolean;
+}
+
+/** Written by the ai-improve route; absent on answers improved before the check existed. */
+export interface FactPreservationView {
+  ok: boolean;
+  detected: number;
+  preserved: number;
+  missing: { kind: string; value: string }[];
+  retries: number;
+  kept_original: boolean;
 }
 export interface PhotoEditView {
   id: string;
@@ -262,6 +273,33 @@ function AnswerCard({ intakeId, answer }: { intakeId: string; answer: AnswerFull
           <p className="whitespace-pre-wrap text-sm text-ink">{answer.ai_improved_text || "— (AI hali ishlamagan)"}</p>
         </div>
       </div>
+
+      {/* Lost facts — the loudest warning on the card: the AI variant dropped
+          something the candidate actually wrote. */}
+      {answer.ai_fact_preservation && !answer.ai_fact_preservation.ok && (
+        <div className="mt-3 rounded-field border border-coral/40 bg-coral/10 p-3">
+          <p className="mb-1 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-coral">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            Yo‘qolgan faktlar ({answer.ai_fact_preservation.missing.length})
+          </p>
+          <ul className="space-y-0.5 text-xs text-ink-soft">
+            {answer.ai_fact_preservation.missing.map((fact, i) => (
+              <li key={i}>• {fact.value}</li>
+            ))}
+          </ul>
+          {answer.ai_fact_preservation.kept_original && (
+            <p className="mt-1.5 text-xs font-semibold text-coral">
+              {answer.ai_fact_preservation.retries} marta qayta urinildi — fakt saqlanmagani uchun ASL matn qoldirildi.
+            </p>
+          )}
+        </div>
+      )}
+      {answer.ai_fact_preservation?.ok && answer.ai_fact_preservation.detected > 0 && (
+        <p className="mt-2 text-[11px] text-mint">
+          ✓ {answer.ai_fact_preservation.detected} ta aniq ma’lumot saqlandi
+          {answer.ai_fact_preservation.retries > 0 && ` (${answer.ai_fact_preservation.retries} marta qayta urinish bilan)`}
+        </p>
+      )}
 
       {/* Fact flags & removed segments */}
       {answer.ai_fact_flags.length > 0 && (

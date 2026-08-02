@@ -1,6 +1,7 @@
 import { CANDIDATE_MARKERS } from "./markers.ts";
 import type { CandidateStructuredData } from "./schema.ts";
 import { splitPipeValues } from "./parser.ts";
+import { joinShortBioItems, normalizeShortBioItems } from "./short-bio.ts";
 
 function scalar(marker: string, value: string): string | null {
   const clean = value.trim();
@@ -10,7 +11,12 @@ function scalar(marker: string, value: string): string | null {
 export function serializeCandidateData(data: CandidateStructuredData): string {
   const blocks: Array<string | null> = [
     scalar(CANDIDATE_MARKERS.fullName, data.fullName),
-    scalar(CANDIDATE_MARKERS.descriptionItems, splitPipeValues(data.descriptionItems).join(" | ")),
+    // "&&&" is the badge row, so the short-bio limits are applied at the single
+    // point every marker export goes through — a paragraph can never land here.
+    scalar(
+      CANDIDATE_MARKERS.descriptionItems,
+      joinShortBioItems(normalizeShortBioItems(data.descriptionItems).items),
+    ),
     scalar(CANDIDATE_MARKERS.birthYear, data.birthYear),
     scalar(CANDIDATE_MARKERS.birthPlace, data.birthPlace),
     scalar(CANDIDATE_MARKERS.currentLocation, data.currentLocation),

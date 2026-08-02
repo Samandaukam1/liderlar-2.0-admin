@@ -19,6 +19,7 @@ import { copyFinalPhotoToAvatar } from "@/lib/intake/promote";
 import type { AnswerState } from "@/lib/intake/constants";
 import { normalizeCandidateIntake } from "@/lib/candidates/normalize-intake";
 import { structureCandidateWithAi } from "@/lib/candidates/ai-service";
+import { composeArticleSections } from "@/lib/candidates/article-quality";
 import { saveCandidateProfile, updateCandidateAiMetadata } from "@/lib/candidates/repository";
 import { serializeCandidateData } from "@/lib/candidates/serializer";
 import { getCandidatePublicationReadiness } from "@/lib/candidates/publication-service";
@@ -442,14 +443,18 @@ export async function promoteIntakeAction(intakeId: string): Promise<IntakeActio
     ...normalized.data,
     candidateId: res.candidate_id,
     fullName: aiResult.data.fullName || String(intake.full_name),
-    descriptionItems: aiResult.data.description,
+    descriptionItems: aiResult.data.shortBioItems,
     birthYear: aiResult.data.birthYear,
     birthPlace: aiResult.data.birthPlace,
     currentLocation: aiResult.data.currentLocation,
     education: aiResult.data.education,
     activityField: aiResult.data.activityField,
     languages: aiResult.data.languages,
-    sections: aiResult.data.sections.map((section, order) => ({ ...section, id: crypto.randomUUID(), order })),
+    sections: composeArticleSections({
+      introduction: aiResult.data.introduction,
+      sections: aiResult.data.sections,
+      conclusion: aiResult.data.conclusion,
+    }).map((section) => ({ ...section, id: crypto.randomUUID() })),
     profilePhoto: avatarUrl ?? "",
     slug: res.candidate_slug,
     rawContent: normalized.rawContent,
@@ -464,6 +469,29 @@ export async function promoteIntakeAction(intakeId: string): Promise<IntakeActio
       model: aiResult.model,
       rawResponse: aiResult.rawResponse,
     });
+    // Facts card + quality report drive the admin preview warnings; a failure
+    // here must not undo a successfully saved article.
+    await admin
+      .from("candidates")
+      .update({
+        key_facts: aiResult.data.keyFacts,
+        article_word_count: aiResult.quality.wordCount,
+        fact_preservation_report: {
+          score: aiResult.quality.score,
+          word_count: aiResult.quality.wordCount,
+          too_short: aiResult.quality.tooShort,
+          below_target: aiResult.quality.belowTarget,
+          regenerations: aiResult.regenerations,
+          missing_facts: aiResult.quality.missingFacts.map((fact) => fact.value),
+          repeated_facts: aiResult.quality.repeatedFacts.map((entry) => ({
+            value: entry.fact.value,
+            count: entry.count,
+          })),
+          weak_sections: aiResult.quality.weakSections,
+          unresolved_issues: aiResult.data.unresolvedIssues,
+        },
+      })
+      .eq("id", res.candidate_id);
   } catch (saveError) {
     return {
       ok: false,

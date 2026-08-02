@@ -8,6 +8,8 @@ import {
   requestOpenAIImageEdit,
   standardizePhotoEditSource,
 } from "./photo-edit";
+import type { AnswerImprover } from "./answer-improvement";
+import { formatMissingFactsPrompt } from "./fact-preservation";
 
 let client: OpenAI | null = null;
 function openai(): OpenAI {
@@ -39,6 +41,7 @@ export const reviewedAnswerSchema = z.object({
   question_no: z.number().int(),
   original_text: z.string(),
   improved_text: z.string(),
+  preserved_facts: z.array(z.string()),
   removed_segments: z.array(removedSegmentSchema),
   fact_flags: z.array(factFlagSchema),
   clarification_questions: z.array(z.string()),
@@ -49,7 +52,7 @@ export const intakeReviewSchema = z.object({
   candidate_name: z.string(),
   answers: z.array(reviewedAnswerSchema),
   biography_draft: z.string(),
-  short_bio: z.string(),
+  short_bio_items: z.array(z.string()),
   global_fact_conflicts: z.array(z.string()),
   editorial_commentary: z.string(),
   moderation_summary: z.string(),
@@ -66,7 +69,7 @@ const INTAKE_REVIEW_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
   required: [
-    "candidate_name", "answers", "biography_draft", "short_bio",
+    "candidate_name", "answers", "biography_draft", "short_bio_items",
     "global_fact_conflicts", "editorial_commentary", "moderation_summary",
     "ready_for_editor_review",
   ],
@@ -78,13 +81,15 @@ const INTAKE_REVIEW_JSON_SCHEMA = {
         type: "object",
         additionalProperties: false,
         required: [
-          "question_no", "original_text", "improved_text", "removed_segments",
-          "fact_flags", "clarification_questions", "moderation_notes", "confidence",
+          "question_no", "original_text", "improved_text", "preserved_facts",
+          "removed_segments", "fact_flags", "clarification_questions",
+          "moderation_notes", "confidence",
         ],
         properties: {
           question_no: { type: "integer" },
           original_text: { type: "string" },
           improved_text: { type: "string" },
+          preserved_facts: { type: "array", items: { type: "string" } },
           removed_segments: {
             type: "array",
             items: {
@@ -114,7 +119,7 @@ const INTAKE_REVIEW_JSON_SCHEMA = {
       },
     },
     biography_draft: { type: "string" },
-    short_bio: { type: "string" },
+    short_bio_items: { type: "array", items: { type: "string" } },
     global_fact_conflicts: { type: "array", items: { type: "string" } },
     editorial_commentary: { type: "string" },
     moderation_summary: { type: "string" },
@@ -122,27 +127,77 @@ const INTAKE_REVIEW_JSON_SCHEMA = {
   },
 } as const;
 
-const SYSTEM_PROMPT = `Sen Liderlar.uz platformasining professional muharriri "Jaxongir AI"san.
-Nomzod bergan xom biografik javoblarni professional adabiy uslubga keltirasan.
+const SYSTEM_PROMPT = `SEN BIOGRAFIK MA'LUMOTLARNI TAHRIR QILUVCHI MUHARRIRSAN.
 
-QAT'IY TAQIQLAR — AI HECH QACHON:
-- yangi fakt ixtiro qilmaydi;
-- sanani, tashkilot nomini, mukofot darajasini, lavozimni O'ZGARTIRMAYDI yoki OSHIRMAYDI;
-- mavjud bo'lmagan yutuq qo'shmaydi;
-- noaniq faktni "aniq fakt" qilib yozmaydi.
+VAZIFANG — JAVOBNI QISQARTIRISH EMAS. Bu tahrir bosqichi, xulosa bosqichi emas.
 
-AI QILADI:
-- imlo va uslub xatolarini tuzatadi, takrorlarni kamaytiradi, ravon yozadi;
-- birinchi shaxsni UCHINCHI shaxsga o'tkazadi (nomzod ismi yoki "u" bilan);
-  masalan "Men Edinburg universitetida o'qiganman" -> "U Edinburg universitetida tahsil olgan";
-- so'kinish, haqorat va nomaqbul iboralarni yakuniy matndan olib tashlaydi va
-  ularni removed_segments'ga sabab bilan yozadi;
-- bir-biriga zid faktlarni fact_flags va global_fact_conflicts'ga chiqaradi;
-- aniqlashtirish kerak bo'lgan joylarga clarification_questions yozadi;
-- tahliliy editorial_commentary va ishonch darajasini (confidence 0..1) qaytaradi.
+Nomzod bergan BARCHA fakt, sana, son, foiz, tashkilot, universitet, fakultet,
+kurs, lavozim, mukofot, ko'krak nishoni, sertifikat, loyiha, tanlov, tadbir,
+til, qiziqish, shior, iqtibos, orzu va maqsadni TO'LIQ saqla.
 
-Har bir javob uchun original_text'ni O'ZGARTIRMASDAN qaytar, improved_text'ni alohida ber.
+Hech qanday aniq ma'lumotni umumiy jumlaga almashtirma.
+
+NOTO'G'RI: "U turli yutuqlarga erishgan."
+TO'G'RI:  "U 2024-yilda xalqaro do'stlik festivalida ishtirok etgan,
+           'Do'stlik elchisi' ko'krak nishoni va tashakkurnomalarga sazovor bo'lgan."
+
+NOTO'G'RI: "U buxgalteriya sohasida faoliyat yuritadi."
+TO'G'RI:  "U 2024-yilda faoliyatini 3 ta korxona bilan boshlagan. Bugungi kunda
+           esa 23 ta xususiy korxonaning hisob-kitoblarini yuritib kelmoqda."
+
+Har bir son va sana aynan saqlansin. Ikki javobni bitta umumiy gapga birlashtirma.
+
+FAQAT QUYIDAGILARNI O'ZGARTIR:
+- imlo va tinish belgilari xatolari;
+- uslub va gap tuzilishi;
+- birinchi shaxsni UCHINCHI shaxsga o'tkazish
+  ("Men Edinburg universitetida o'qiganman" -> "U Edinburg universitetida tahsil olgan");
+- chalkash jumlalarni tushunarli qilish;
+- faktlarni mantiqiy tartibga solish;
+- nomaqbul so'z va iboralarni olib tashlash (removed_segments'ga sabab bilan yoz).
+
+QAT'IY TAQIQLAR — HECH QACHON:
+- yangi fakt to'qima;
+- sanani, tashkilot nomini, mukofot darajasini yoki lavozimni o'zgartirma yoki oshirma;
+- noaniq faktni "aniq fakt" qilib yozma;
+- nomzod aytmagan yutuqni qo'shma.
+
+Javobda noaniqlik yoki ziddiyat bo'lsa, faktni O'ZGARTIRMA — uni fact_flags va
+clarification_questions'ga chiqar.
+
+Har bir javob uchun:
+- original_text'ni O'ZGARTIRMASDAN qaytar;
+- improved_text'ni alohida ber;
+- preserved_facts'ga o'sha javobdagi har bir aniq ma'lumotni (sana, son,
+  tashkilot, mukofot, iqtibos) alohida element sifatida yoz.
+
+short_bio_items — nomzodni ifodalovchi juda qisqa yorliqlar ro'yxati:
+ko'pi bilan 5 ta, har biri 1-5 so'z va 40 belgidan oshmasin, to'liq gap bo'lmasin,
+nuqta bilan tugamasin. Masalan: ["Filolog", "Kitobxon", "Yosh volontyor"].
+Bu maydonga uzun xatboshi yozish QAT'IYAN taqiqlanadi.
+
 Barcha matn o'zbek tilida. Faqat berilgan JSON sxemaga mos javob qaytar.`;
+
+/**
+ * Retry prompt for a single answer that lost facts on the previous pass. It
+ * carries the explicit missing list so the model repairs the omission instead
+ * of rewriting the answer from scratch.
+ */
+const ANSWER_RETRY_SYSTEM_PROMPT = `Sen biografik ma'lumotlarni tahrir qiluvchi muharrirsan.
+
+Oldingi tahriring nomzod bergan ba'zi aniq ma'lumotlarni TUSHIRIB QOLDIRDI.
+
+Endi javobni qayta yoz. Yo'qolgan ma'lumotlarning HAMMASI qaytarilsin va
+oldingi tahrirdagi to'g'ri qismlar saqlansin.
+
+Qoidalar:
+- matnni qisqartirma, aksincha yo'qolgan faktlarni qaytar;
+- har bir son, sana, tashkilot, mukofot va iqtibosni aynan yoz;
+- yangi fakt to'qima — faqat ORIGINAL javobdagi ma'lumotlar bilan ishla;
+- uchinchi shaxsda yoz;
+- o'zbek tilida yoz.
+
+Faqat tayyor tahrirlangan matnni qaytar. Izoh, sarlavha yoki marker yozma.`;
 
 export interface ReviewInputAnswer {
   question_no: number;
@@ -198,6 +253,35 @@ async function recordAiRun(params: {
     void err;
   }
 }
+
+/**
+ * Re-edits a single answer that dropped facts. Driven by
+ * enforceFactPreservation(), which decides whether the result is good enough to
+ * keep — this function only performs the call.
+ */
+export const improveAnswerPreservingFacts: AnswerImprover = async (request) => {
+  const completion = await openai().chat.completions.create({
+    model: textModel(),
+    messages: [
+      { role: "system", content: ANSWER_RETRY_SYSTEM_PROMPT },
+      {
+        role: "user",
+        content: [
+          `SAVOL: ${request.questionPrompt}`,
+          "",
+          "NOMZODNING ASL JAVOBI:",
+          request.original,
+          "",
+          "SENING OLDINGI TAHRIRING:",
+          request.previousAttempt,
+          "",
+          formatMissingFactsPrompt(request.missingFacts),
+        ].join("\n"),
+      },
+    ],
+  });
+  return completion.choices[0]?.message?.content?.trim() ?? "";
+};
 
 /**
  * Runs the structured editorial pass over a set of answers. Throws on OpenAI

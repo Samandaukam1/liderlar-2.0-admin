@@ -99,16 +99,23 @@ test("raw anketa aliaslari markaziy adapterda normalize qilinadi va noma’lum j
 test("AI candidate schema noto‘g‘ri javobni rad etadi", () => {
   const valid = candidateAiOutputSchema.safeParse({
     fullName: "Ali Valiyev",
-    description: ["Talaba"],
+    shortBioItems: ["Talaba"],
     birthYear: "2001",
     birthPlace: "Toshkent",
     currentLocation: "Toshkent",
     education: "Universitet",
     activityField: "IT",
     languages: ["O‘zbek tili"],
+    keyFacts: [{ label: "Tug‘ilgan yili", value: "2001" }],
+    introduction: "Kirish matni",
     sections: [{ title: "Ta’lim", content: "Mazmun", order: 0 }],
+    conclusion: "Yakun matni",
+    quotes: [],
+    usedFacts: ["2001"],
+    unresolvedIssues: [],
   });
   assert.equal(valid.success, true);
-  assert.equal(candidateAiOutputSchema.safeParse({ ...emptyCandidateData(), description: "Talaba" }).success, false);
+  // shortBioItems must be a list of badges, never a single string.
+  assert.equal(candidateAiOutputSchema.safeParse({ ...emptyCandidateData(), shortBioItems: "Talaba" }).success, false);
 });
 

@@ -7,6 +7,7 @@ import { slugify } from "@/lib/utils";
 import { candidateEditorPayloadSchema, candidateStructuredSchema, type CandidateStructuredData } from "@/lib/candidates/schema";
 import { serializeCandidateData } from "@/lib/candidates/serializer";
 import { structureCandidateWithAi } from "@/lib/candidates/ai-service";
+import { composeArticleSections } from "@/lib/candidates/article-quality";
 import {
   saveCandidateProfile,
   saveCandidatePrompt,
@@ -65,14 +66,18 @@ export async function structureCandidateWithAiAction(input: unknown): Promise<Ca
     const data: CandidateStructuredData = {
       ...parsed.data.current,
       fullName: result.data.fullName,
-      descriptionItems: result.data.description,
+      descriptionItems: result.data.shortBioItems,
       birthYear: result.data.birthYear,
       birthPlace: result.data.birthPlace,
       currentLocation: result.data.currentLocation,
       education: result.data.education,
       activityField: result.data.activityField,
       languages: result.data.languages,
-      sections: result.data.sections.map((section, order) => ({ ...section, id: crypto.randomUUID(), order })),
+      sections: composeArticleSections({
+        introduction: result.data.introduction,
+        sections: result.data.sections,
+        conclusion: result.data.conclusion,
+      }).map((section) => ({ ...section, id: crypto.randomUUID() })),
       rawContent: parsed.data.rawText,
       unparsedContent: "",
       formattedContent: "",

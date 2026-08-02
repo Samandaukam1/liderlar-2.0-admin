@@ -9,7 +9,12 @@ import { Card } from "@/components/ui/primitives";
 import { formatDate, timeAgo } from "@/lib/utils";
 import { signIntakeFileUrl, getIntakeSettings } from "@/lib/intake/data";
 import { AdminIntakeEditor } from "@/components/intake/admin-intake-editor";
-import { IntakeReview, type AnswerFull, type PhotoEditView } from "@/components/intake/intake-review";
+import {
+  IntakeReview,
+  type AnswerFull,
+  type FactPreservationView,
+  type PhotoEditView,
+} from "@/components/intake/intake-review";
 import { LinkPanel } from "@/components/intake/link-panel";
 import type {
   IntakeAnswerView,
@@ -116,6 +121,12 @@ export default async function IntakeDetailPage({
     ai_fact_flags: (a.ai_fact_flags as { type: string; claim: string; explanation: string }[]) ?? [],
     ai_clarification_questions: (a.ai_clarification_questions as string[]) ?? [],
     ai_confidence: (a.ai_confidence as number) ?? null,
+    // Answers improved before the fact check shipped have an empty object here;
+    // treat those as "no report" rather than rendering a false all-clear.
+    ai_fact_preservation:
+      a.ai_fact_preservation && typeof (a.ai_fact_preservation as { ok?: unknown }).ok === "boolean"
+        ? (a.ai_fact_preservation as FactPreservationView)
+        : null,
     final_text: (a.final_text as string) ?? null,
     editor_state: (a.editor_state as string) ?? "pending",
     moderation_flagged: (a.moderation_flagged as boolean) ?? false,
