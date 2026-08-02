@@ -160,7 +160,35 @@ export async function completePhotoEditWithAttachment(params: {
     .select("id")
     .single();
   if (attachmentError || !attachment) {
-    throw new Error(`Processed attachment insert failed: ${attachmentError?.message ?? "unknown"}`);
+    // PostgREST reports schema drift (missing column, failed check, bad FK) as a
+    // bare 400, so the code/details/hint must reach the logs — the message alone
+    // is not enough to tell those cases apart.
+    console.error(
+      "PHOTO_EDIT_ATTACHMENT_INSERT_FAILED",
+      JSON.stringify({
+        intakeId: params.intakeId,
+        photoEditId: params.photoEditId,
+        code: attachmentError?.code ?? null,
+        message: attachmentError?.message ?? null,
+        details: attachmentError?.details ?? null,
+        hint: attachmentError?.hint ?? null,
+        payloadKeys: [
+          "intake_id",
+          "bucket",
+          "path",
+          "file_name",
+          "mime_type",
+          "size_bytes",
+          "kind",
+          "scan_status",
+        ],
+      }),
+    );
+    throw new Error(
+      `Processed attachment insert failed: ${attachmentError?.code ?? "unknown"} ${
+        attachmentError?.message ?? "no attachment row returned"
+      }`,
+    );
   }
 
   const { error: completedError } = await db
@@ -176,7 +204,21 @@ export async function completePhotoEditWithAttachment(params: {
     .eq("id", params.photoEditId)
     .eq("intake_id", params.intakeId);
   if (completedError) {
-    throw new Error(`Photo edit status update failed: ${completedError.message}`);
+    console.error(
+      "PHOTO_EDIT_COMPLETION_UPDATE_FAILED",
+      JSON.stringify({
+        intakeId: params.intakeId,
+        photoEditId: params.photoEditId,
+        attachmentId: attachment.id,
+        code: completedError.code ?? null,
+        message: completedError.message ?? null,
+        details: completedError.details ?? null,
+        hint: completedError.hint ?? null,
+      }),
+    );
+    throw new Error(
+      `Photo edit status update failed: ${completedError.code ?? "unknown"} ${completedError.message}`,
+    );
   }
 }
 
