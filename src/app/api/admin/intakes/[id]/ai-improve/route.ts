@@ -109,7 +109,7 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
         });
       }
 
-      await db
+      const { error: answerWriteError } = await db
         .from("candidate_intake_answers")
         .update({
           ai_improved_text: outcome.improvedText,
@@ -133,6 +133,27 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
         })
         .eq("intake_id", intakeId)
         .eq("question_no", a.question_no);
+
+      // A failed write here used to pass silently, so the improved answer was
+      // simply never stored and the panel kept reporting "AI hali ishlamagan".
+      // Schema drift (a missing column) reports as a bare 400, so the whole
+      // PostgREST error has to reach the logs and the run has to fail loudly.
+      if (answerWriteError) {
+        console.error(
+          "AI_IMPROVE_ANSWER_WRITE_FAILED",
+          JSON.stringify({
+            intakeId,
+            questionNo: a.question_no,
+            code: answerWriteError.code ?? null,
+            message: answerWriteError.message ?? null,
+            details: answerWriteError.details ?? null,
+            hint: answerWriteError.hint ?? null,
+          }),
+        );
+        throw new Error(
+          `Javob saqlanmadi (savol ${a.question_no}): ${answerWriteError.code ?? "unknown"} ${answerWriteError.message}`,
+        );
+      }
     }
 
     // Candidate-visible AI feedback: replace the unresolved set with a fresh one
@@ -186,7 +207,7 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
     // here so a chatty model cannot put a sentence behind "&&&".
     const shortBio = normalizeShortBioItems(review.short_bio_items);
 
-    await db
+    const { error: intakeWriteError } = await db
       .from("candidate_intakes")
       .update({
         biography_draft: review.biography_draft,
@@ -199,6 +220,25 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
       })
       .eq("id", intakeId);
 
+    // This row carries the combined biography draft and the editorial
+    // commentary shown under the answers; losing the write silently is what
+    // made both disappear from the panel.
+    if (intakeWriteError) {
+      console.error(
+        "AI_IMPROVE_INTAKE_WRITE_FAILED",
+        JSON.stringify({
+          intakeId,
+          code: intakeWriteError.code ?? null,
+          message: intakeWriteError.message ?? null,
+          details: intakeWriteError.details ?? null,
+          hint: intakeWriteError.hint ?? null,
+        }),
+      );
+      throw new Error(
+        `Umumiy natija saqlanmadi: ${intakeWriteError.code ?? "unknown"} ${intakeWriteError.message}`,
+      );
+    }
+
     return NextResponse.json({
       ok: true,
       review,
@@ -208,8 +248,16 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
     });
   } catch (err) {
     await db.from("candidate_intakes").update({ status: "submitted" }).eq("id", intakeId);
-    console.error("intake ai-improve failed");
-    const msg = err instanceof Error && err.message.startsWith("AI rad etdi") ? err.message : "Jaxongir AI javob bera olmadi";
-    return NextResponse.json({ error: msg }, { status: 502 });
+    const detail = err instanceof Error ? err.message : "unknown";
+    console.error("intake ai-improve failed", JSON.stringify({ intakeId, message: detail }));
+    // The caller is an authenticated admin, so a save failure is reported as
+    // itself instead of being flattened into "AI javob bera olmadi" — that
+    // generic text sent us looking at OpenAI while the write was the problem.
+    const isAiRefusal = err instanceof Error && err.message.startsWith("AI rad etdi");
+    const isSaveFailure = /saqlanmadi/.test(detail);
+    return NextResponse.json(
+      { error: isAiRefusal || isSaveFailure ? detail : "Jaxongir AI javob bera olmadi" },
+      { status: isSaveFailure ? 500 : 502 },
+    );
   }
 }
