@@ -25,6 +25,7 @@ import {
   setArticleStatusAction,
 } from "@/lib/actions/articles";
 import { cn, formatDate, slugify } from "@/lib/utils";
+import { uploadToBucket } from "@/lib/upload-client";
 import type { Article, ArticleStatus } from "@/lib/types";
 
 export interface RevisionSummary {
@@ -147,13 +148,7 @@ export function ArticleEditor({
   async function uploadCover(file: File) {
     setUploading(true);
     try {
-      const fd = new FormData();
-      fd.set("file", file);
-      fd.set("bucket", "candidate-gallery");
-      const res = await fetch("/api/upload", { method: "POST", body: fd });
-      const json = (await res.json()) as { url?: string; error?: string };
-      if (!res.ok || !json.url) throw new Error(json.error ?? "Yuklab bo‘lmadi");
-      set("cover_url")(json.url);
+      set("cover_url")(await uploadToBucket(file, "candidate-gallery"));
       toast("success", "Muqova yuklandi");
     } catch (e) {
       toast("error", "Muqova yuklanmadi", e instanceof Error ? e.message : undefined);

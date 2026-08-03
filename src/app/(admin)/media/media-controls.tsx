@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/primitives";
 import { ConfirmDialog } from "@/components/ui/overlays";
 import { useToast } from "@/components/ui/toast";
 import { deleteMediaAction } from "@/lib/actions/system";
+import { uploadToBucket } from "@/lib/upload-client";
 
 export function MediaUploadButton() {
   const router = useRouter();
@@ -28,20 +29,17 @@ export function MediaUploadButton() {
           let okCount = 0;
           for (const f of files) {
             try {
-              const fd = new FormData();
-              fd.set("file", f);
-              fd.set(
-                "bucket",
+              await uploadToBucket(
+                f,
                 f.type.startsWith("image/") ? "candidate-gallery" : "admin-private-files",
               );
-              const res = await fetch("/api/upload", { method: "POST", body: fd });
-              if (res.ok) okCount++;
-              else {
-                const json = (await res.json()) as { error?: string };
-                toast("error", `${f.name} yuklanmadi`, json.error);
-              }
-            } catch {
-              toast("error", `${f.name} yuklanmadi`, "Tarmoq xatosi — qayta urinib ko‘ring");
+              okCount++;
+            } catch (err) {
+              toast(
+                "error",
+                `${f.name} yuklanmadi`,
+                err instanceof Error ? err.message : "Tarmoq xatosi — qayta urinib ko‘ring",
+              );
             }
           }
           if (okCount > 0) toast("success", `${okCount} ta fayl yuklandi`);

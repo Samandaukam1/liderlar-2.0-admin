@@ -2,62 +2,8 @@ import { NextResponse } from "next/server";
 import { checkPermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
+import { BUCKET_RULES, buildObjectPath, validateUpload } from "@/lib/upload-rules";
 
-const BUCKET_RULES: Record<
-  string,
-  { maxBytes: number; mime: string[]; isPublic: boolean }
-> = {
-  "candidate-avatars": {
-    maxBytes: 4 * 1024 * 1024,
-    mime: ["image/jpeg", "image/png", "image/webp"],
-    isPublic: true,
-  },
-  "candidate-gallery": {
-    maxBytes: 8 * 1024 * 1024,
-    mime: ["image/jpeg", "image/png", "image/webp"],
-    isPublic: true,
-  },
-  "monthly-update-media": {
-    maxBytes: 15 * 1024 * 1024,
-    mime: ["image/jpeg", "image/png", "image/webp", "application/pdf"],
-    isPublic: false,
-  },
-  "journal-covers": {
-    maxBytes: 6 * 1024 * 1024,
-    mime: ["image/jpeg", "image/png", "image/webp"],
-    isPublic: true,
-  },
-  "journal-pdfs": {
-    maxBytes: 50 * 1024 * 1024,
-    mime: ["application/pdf"],
-    isPublic: false,
-  },
-  "podcast-media": {
-    maxBytes: 10 * 1024 * 1024,
-    mime: ["image/jpeg", "image/png", "image/webp", "audio/mpeg"],
-    isPublic: true,
-  },
-  "application-files": {
-    maxBytes: 15 * 1024 * 1024,
-    mime: ["image/jpeg", "image/png", "image/webp", "application/pdf"],
-    isPublic: false,
-  },
-  "admin-private-files": {
-    maxBytes: 25 * 1024 * 1024,
-    mime: ["image/jpeg", "image/png", "image/webp", "application/pdf", "text/csv"],
-    isPublic: false,
-  },
-  "ai-assistant": {
-    maxBytes: 20 * 1024 * 1024,
-    mime: ["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml", "video/mp4", "video/webm"],
-    isPublic: true,
-  },
-  "corner-video": {
-    maxBytes: 40 * 1024 * 1024,
-    mime: ["image/jpeg", "image/png", "image/webp", "video/mp4", "video/webm"],
-    isPublic: true,
-  },
-};
 
 export async function POST(request: Request) {
   const ctx = await checkPermission("media.upload");
@@ -73,26 +19,14 @@ export async function POST(request: Request) {
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "Fayl topilmadi" }, { status: 400 });
   }
+  const check = validateUpload(bucket, file.type, file.size);
+  if ("error" in check) {
+    return NextResponse.json({ error: check.error }, { status: 400 });
+  }
   const rules = BUCKET_RULES[bucket];
-  if (!rules) {
-    return NextResponse.json({ error: "Noto‘g‘ri bucket" }, { status: 400 });
-  }
-  if (!rules.mime.includes(file.type)) {
-    return NextResponse.json(
-      { error: `Fayl turi qo‘llab-quvvatlanmaydi (${file.type})` },
-      { status: 400 },
-    );
-  }
-  if (file.size > rules.maxBytes) {
-    return NextResponse.json(
-      { error: `Fayl juda katta (maksimum ${Math.round(rules.maxBytes / 1024 / 1024)} MB)` },
-      { status: 400 },
-    );
-  }
 
   const admin = createSupabaseAdminClient();
-  const ext = file.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "bin";
-  const path = `${new Date().toISOString().slice(0, 7)}/${crypto.randomUUID()}.${ext}`;
+  const path = buildObjectPath(file.name);
 
   const { error: uploadError } = await admin.storage
     .from(bucket)

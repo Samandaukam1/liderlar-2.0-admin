@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Save, UploadCloud } from "lucide-react";
 import { Button, FormField, Input, Textarea, Select } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
+import { uploadToBucket } from "@/lib/upload-client";
 import { saveAiAssistantSettingsAction } from "@/lib/actions/ai-assistant";
 
 export interface AiAssistantSettingsRow {
@@ -98,13 +99,7 @@ function UploadField({
             if (!f) return;
             setUploading(true);
             try {
-              const fd = new FormData();
-              fd.set("file", f);
-              fd.set("bucket", "ai-assistant");
-              const res = await fetch("/api/upload", { method: "POST", body: fd });
-              const json = (await res.json()) as { url?: string; error?: string };
-              if (!res.ok || !json.url) throw new Error(json.error ?? "Xatolik");
-              setUrl(json.url);
+              setUrl(await uploadToBucket(f, "ai-assistant"));
               toast("success", "Fayl yuklandi");
             } catch (err) {
               toast("error", "Yuklab bo'lmadi", err instanceof Error ? err.message : undefined);

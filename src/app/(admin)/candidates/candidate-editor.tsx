@@ -37,6 +37,7 @@ import { parseCandidateText, splitPipeValues, stripCandidateMarkers, type Candid
 import { serializeCandidateData } from "@/lib/candidates/serializer";
 import type { CandidateSection, CandidateStructuredData } from "@/lib/candidates/schema";
 import { slugify } from "@/lib/utils";
+import { uploadToBucket } from "@/lib/upload-client";
 
 type MobileTab = "fields" | "text" | "preview";
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -249,14 +250,8 @@ export function CandidateEditor({
   const uploadPhoto = async (file: File) => {
     setUploading(true);
     try {
-      const form = new FormData();
-      form.set("file", file);
-      form.set("bucket", "candidate-avatars");
-      if (candidateId) form.set("candidate_id", candidateId);
-      const response = await fetch("/api/upload", { method: "POST", body: form });
-      const json = await response.json() as { url?: string; error?: string };
-      if (!response.ok || !json.url) throw new Error(json.error ?? "Rasm yuklanmadi");
-      update("profilePhoto", json.url);
+      const url = await uploadToBucket(file, "candidate-avatars", candidateId);
+      update("profilePhoto", url);
       toast("success", "Nomzod rasmi yuklandi");
     } catch (error) {
       toast("error", "Rasm yuklanmadi", error instanceof Error ? error.message : undefined);
