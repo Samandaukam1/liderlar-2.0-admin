@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
   ] = await Promise.all([
     admin
       .from("candidate_intake_questions")
-      .select("id")
+      .select("id, is_required, allow_no_answer")
       .eq("template_id", intake.template_id),
     admin
       .from("candidate_intake_answers")
@@ -61,7 +61,10 @@ export async function POST(request: NextRequest) {
   const answerByQuestion = new Map(
     (answers ?? []).map((answer) => [answer.question_id as string, answer]),
   );
+  // Every question that offers a "Yo‘q" escape may be left untouched — only a
+  // question that is required *and* refuses "Yo‘q" can block the submission.
   const missingAnswers = (questions ?? []).filter((question) => {
+    if (!question.is_required || question.allow_no_answer) return false;
     const answer = answerByQuestion.get(question.id as string);
     return (
       !answer ||
@@ -75,7 +78,7 @@ export async function POST(request: NextRequest) {
     return noStoreJson(
       {
         ok: false,
-        errors: [`${missingAnswers} ta savol javobsiz qolgan`],
+        errors: [`${missingAnswers} ta majburiy savol javobsiz qolgan`],
       },
       422,
     );

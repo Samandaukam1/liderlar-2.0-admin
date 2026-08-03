@@ -725,24 +725,40 @@ export function IntakeForm({
     return a && canAdvanceAnswer(a.answerState, a.plainText);
   }).length;
 
+  // A question offering the "Yo‘q" escape never blocks submission, even when
+  // left untouched — only a required question that refuses "Yo‘q" does.
+  const missingRequiredCount = questions.filter((q) => {
+    if (!q.required || q.allowNoAnswer) return false;
+    const a = answers.get(q.question_no);
+    return !(a && canAdvanceAnswer(a.answerState, a.plainText));
+  }).length;
+
   const doSubmit = useCallback(async () => {
     if (requiresPhotoConfirmation && !photoEdit?.selection.confirmed) {
       setSubmitErrors(["Yuborishdan oldin original yoki AI rasmni tasdiqlang"]);
       return;
     }
     setBusy(true);
-    await flushAll();
-    const resp = await transport.submit(contact);
-    setBusy(false);
-    if (resp.ok) {
-      setSubmitted(true);
-      try {
-        localStorage.removeItem(`intake-draft-${draftKey}`);
-      } catch {
-        /* ignore */
+    setSubmitErrors([]);
+    try {
+      await flushAll();
+      const resp = await transport.submit(contact);
+      if (resp.ok) {
+        setSubmitted(true);
+        try {
+          localStorage.removeItem(`intake-draft-${draftKey}`);
+        } catch {
+          /* ignore */
+        }
+      } else {
+        setSubmitErrors(resp.errors ?? ["Yuborib bo‘lmadi"]);
       }
-    } else {
-      setSubmitErrors(resp.errors ?? ["Yuborib bo‘lmadi"]);
+    } catch {
+      setSubmitErrors(["Yuborib bo‘lmadi — qayta urinib ko‘ring"]);
+    } finally {
+      // Must run even when flushAll() throws, otherwise the button stays
+      // disabled for the rest of the session.
+      setBusy(false);
     }
   }, [contact, draftKey, flushAll, photoEdit?.selection.confirmed, requiresPhotoConfirmation, transport]);
 
@@ -909,6 +925,7 @@ export function IntakeForm({
             contact={contact}
             answeredCount={answeredCount}
             total={questions.length}
+            missingRequiredCount={missingRequiredCount}
             busy={busy}
             confirming={photoConfirming}
             actionError={photoActionError}
@@ -1150,6 +1167,7 @@ function FinalConfirmationStage({
   contact,
   answeredCount,
   total,
+  missingRequiredCount,
   busy,
   confirming,
   actionError,
@@ -1163,6 +1181,7 @@ function FinalConfirmationStage({
   contact: { phone: string; telegram: string; consent: boolean };
   answeredCount: number;
   total: number;
+  missingRequiredCount: number;
   busy: boolean;
   confirming: boolean;
   actionError: string | null;
@@ -1179,13 +1198,21 @@ function FinalConfirmationStage({
   // Authoritative, server-derived confirmation (photo_confirmed_at + matching
   // selected_photo_source/id) — never the local "Tanlandi" choice.
   const confirmed = photoEdit?.selection.confirmed ?? false;
-  const answersComplete = answeredCount === total;
+  const answersComplete = missingRequiredCount === 0;
   const contactValid = validateContact(contact).ok;
   const canSubmit = canSubmitCandidateFinal({
     everyAnswerValid: answersComplete,
     contactValid,
     photoConfirmed: confirmed,
   });
+
+  // Spell out every outstanding requirement — a disabled button with no
+  // explanation is what made this look broken.
+  const blockers = [
+    missingRequiredCount > 0 && `${missingRequiredCount} ta majburiy savol javobsiz`,
+    !contactValid && "Telefon raqami, Telegram username va rozilik to‘ldirilishi kerak",
+    !confirmed && "Original yoki AI rasmni tasdiqlang",
+  ].filter(Boolean) as string[];
 
   // Safe diagnostics only — no token/phone/telegram/name/PII.
   console.info("INTAKE_FINAL_STATE", {
@@ -1310,10 +1337,17 @@ function FinalConfirmationStage({
         {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
         Anketani yuborish
       </Button>
-      {!confirmed && (
-        <p className="flex items-center justify-center gap-1.5 text-center text-xs text-ink-soft">
-          <ShieldCheck className="h-3.5 w-3.5" /> Yuborish uchun original yoki AI rasmni tasdiqlang
-        </p>
+      {blockers.length > 0 && (
+        <div className="rounded-field border border-amber/40 bg-amber/5 p-3">
+          <p className="flex items-center gap-1.5 text-xs font-bold text-ink">
+            <ShieldCheck className="h-3.5 w-3.5" /> Yuborish uchun quyidagilar kerak:
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {blockers.map((b) => (
+              <li key={b} className="text-xs text-ink-soft">• {b}</li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );
@@ -1543,9 +1577,12 @@ function ContactStage({
           Anketani yuborish
         </Button>
       )}
-      {!contact.consent && !readOnly && showSubmit && (
+      {!validateContact(contact).ok && !readOnly && showSubmit && (
         <p className="flex items-center justify-center gap-1.5 text-center text-xs text-ink-soft">
-          <ShieldCheck className="h-3.5 w-3.5" /> Yuborish uchun rozilikni belgilang
+          <ShieldCheck className="h-3.5 w-3.5" />
+          {!contact.consent
+            ? "Yuborish uchun rozilikni belgilang"
+            : "Telefon (+998…) va Telegram username (@…) to‘g‘ri kiritilishi kerak"}
         </p>
       )}
     </div>

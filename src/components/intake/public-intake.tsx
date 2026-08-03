@@ -177,8 +177,23 @@ export function PublicIntake({ token }: { token: string }) {
         };
       },
       async submit(c) {
-        const r = await postJson("/api/intake/submit", c);
-        return r.json();
+        // Every sibling method already guards this way. Without it a network
+        // blip or a non-JSON platform error (413/502/504 come back as plain
+        // text) threw, leaving the form stuck in its "busy" state with the
+        // submit button permanently disabled and nothing explaining why.
+        try {
+          const r = await postJson("/api/intake/submit", c);
+          const j = (await r.json()) as { ok?: boolean; errors?: string[]; error?: string };
+          if (j.ok) return { ok: true };
+          // The route reports validation failures as `errors`, but its generic
+          // helpers (403/404/429/500) use a single `error` — accept both.
+          return { ok: false, errors: j.errors ?? (j.error ? [j.error] : undefined) };
+        } catch {
+          return {
+            ok: false,
+            errors: ["Tarmoq xatosi — internetni tekshirib, qayta urinib ko‘ring"],
+          };
+        }
       },
       async heartbeat() {
         await postJson("/api/intake/heartbeat", {}).catch(() => {});
