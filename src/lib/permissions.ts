@@ -58,6 +58,7 @@ export const PERMISSIONS = [
   "ai_prompts.view",
   "ai_prompts.edit",
   "ai_assistant.manage",
+  "corner_video.manage",
   "notifications.view",
   "notifications.manage",
   "admins.manage",

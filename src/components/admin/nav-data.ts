@@ -19,6 +19,7 @@ import {
   Image,
   Sparkles,
   Bot,
+  MonitorPlay,
   Wand2,
   Bell,
   ShieldCheck,
@@ -85,6 +86,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Jaxongir AI", href: "/ai", icon: Sparkles, permission: "ai.use", keywords: "sun'iy intellekt muharrir" },
       { label: "AI Assistant", href: "/ai-assistant", icon: Bot, permission: "ai_assistant.manage", keywords: "widget avatar animatsiya user panel jaxongir" },
+      { label: "Burchak video", href: "/corner-video", icon: MonitorPlay, permission: "corner_video.manage", keywords: "video burchak widget tugma havola user panel pip" },
     ],
   },
   {

@@ -52,6 +52,11 @@ const BUCKET_RULES: Record<
     mime: ["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml", "video/mp4", "video/webm"],
     isPublic: true,
   },
+  "corner-video": {
+    maxBytes: 40 * 1024 * 1024,
+    mime: ["image/jpeg", "image/png", "image/webp", "video/mp4", "video/webm"],
+    isPublic: true,
+  },
 };
 
 export async function POST(request: Request) {
