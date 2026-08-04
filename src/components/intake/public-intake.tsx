@@ -8,8 +8,8 @@ import {
   type IntakeTemplateView,
   type IntakeAnswerView,
   type CandidatePhotoStateView,
-  type PhotoJobStatus,
 } from "@/components/intake/intake-form";
+import type { Gender } from "@/lib/intake/constants";
 
 interface ResolvedState {
   full_name: string;
@@ -198,21 +198,6 @@ export function PublicIntake({ token }: { token: string }) {
       async heartbeat() {
         await postJson("/api/intake/heartbeat", {}).catch(() => {});
       },
-      async generatePhoto(params) {
-        try {
-          const r = await postJson("/api/intake/photo-edit", params);
-          const j = await r.json();
-          if (!r.ok || !j.ok) return { ok: false, error: j.error ?? "Rasmni yaratib bo‘lmadi" };
-          return {
-            ok: true,
-            photoEditId: j.photoEditId as string,
-            status: j.status as PhotoJobStatus,
-            existing: j.existing === true,
-          };
-        } catch {
-          return { ok: false, error: "Tarmoq xatosi" };
-        }
-      },
       async getPhotoStatus() {
         try {
           const r = await fetch("/api/intake/photo-edit/status", {
@@ -300,6 +285,7 @@ export function PublicIntake({ token }: { token: string }) {
         maxUploadBytes={state.settings.maxUploadBytes}
         draftKey={draftKey}
         transport={transport}
+        gender={state.gender === "male" || state.gender === "female" ? (state.gender as Gender) : null}
         readOnly={readOnly}
         feedback={state.feedback}
       />

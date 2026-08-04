@@ -134,6 +134,32 @@ export const COLOR_LABELS: Record<PhotoColor, string> = {
   navy: "To‘q ko‘k",
 };
 
+/* ----------------------------- manual photo prompt ----------------------------- */
+
+// The candidate flow no longer generates the portrait — the candidate takes this
+// text to their own AI image tool and uploads the result, so the prompt has to
+// stand on its own without any of the clothing/color fragments the server used.
+const PHOTO_PROMPT_BASE =
+  "Ushbu fotosuratni professional biografik portretga aylantiring. Yuz identifikatsiyasi, yosh va shaxsiy xususiyatlar AYNAN saqlansin — yuz almashtirilmasin, ortiqcha silliqlanmasin, tabiiy teri teksturasi saqlansin. " +
+  "Fon: butunlay bir xil, soyasiz oq siklorama (professional studiya foni), fonda hech qanday boshqa element yoki predmet bo‘lmasin. " +
+  "Kadr orqa fonida O‘zbekiston davlat bayrog‘i tik holatda biroz katta, tabiiy ravishda osilgan, yoyilmagan holda tursin. " +
+  "Sub’ekt kameraga to‘g‘ridan-to‘g‘ri, tik qarab tursin: bosh tik, ikkala yelka bir xil balandlikda va tekis. " +
+  "Qo‘llar tana yoniga neytral holatda tushirilgan, keskin harakat yoki imo-ishora yo‘q. " +
+  "Kadr sub’ektning kindik chizig‘idan yuqori qismini (ko‘krak, yelka, bo‘yin, bosh) qamrab olsin, kindikdan pastki qism kadrga kirmasin. " +
+  "Yoritish: yumshoq, bir tekis, old tomondan tushuvchi tabiiy studiya yorug‘ligi bo‘lsin, yuzda qattiq soyalar yoki ortiqcha yorqin nuqtalar bo‘lmasin.";
+
+const PHOTO_PROMPT_FEMALE_CLOTHING =
+  "Kiyim uslubi vazmin va rasmiy, sub’ektning roziligi va tanloviga mos bo‘lsin; diniy yoki madaniy atributlar o‘zboshimchalik bilan qo‘shilmasin yoki olib tashlanmasin.";
+
+const PHOTO_PROMPT_TAIL =
+  "Natija professional, rasmiy, yuqori sifatli portret bo‘lsin.\n\nRASMNING FORMATI 1154 GA 1423 PX BO‘LSIN";
+
+/** Prompt the candidate copies into their own AI image tool, per gender. */
+export const MANUAL_PHOTO_PROMPTS: Record<Gender, string> = {
+  male: `${PHOTO_PROMPT_BASE} ${PHOTO_PROMPT_TAIL}`,
+  female: `${PHOTO_PROMPT_BASE} ${PHOTO_PROMPT_FEMALE_CLOTHING} ${PHOTO_PROMPT_TAIL}`,
+};
+
 /** site_settings keys used by the intake system. */
 export const SETTINGS_KEYS = {
   defaultPhotoPrompt: "candidate_intake.default_photo_prompt",

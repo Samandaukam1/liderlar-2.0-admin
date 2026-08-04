@@ -16,7 +16,7 @@ import {
   MessageCircleQuestion,
   ChevronDown,
   Info,
-  Clock3,
+  Copy,
   Maximize2,
   AlertTriangle,
 } from "lucide-react";
@@ -26,13 +26,9 @@ import { RichEditor } from "@/components/intake/rich-editor";
 import {
   canAdvanceAnswer,
   NO_ANSWER_TEXT,
-  CLOTHING_TYPES,
-  COLORS,
-  CLOTHING_LABELS,
-  COLOR_LABELS,
+  MANUAL_PHOTO_PROMPTS,
   type AnswerState,
-  type ClothingType,
-  type PhotoColor,
+  type Gender,
 } from "@/lib/intake/constants";
 import { validateContact } from "@/lib/intake/schemas";
 import {
@@ -88,13 +84,6 @@ export interface UploadResp {
   attachment?: IntakeAttachmentView;
   error?: string;
 }
-export interface PhotoGenResp {
-  ok: boolean;
-  photoEditId?: string;
-  status?: PhotoJobStatus;
-  existing?: boolean;
-  error?: string;
-}
 export type PhotoJobStatus = "queued" | "processing" | "completed" | "failed";
 export type PhotoSelectionKind = "original" | "ai";
 export interface CandidatePhotoStateView {
@@ -133,8 +122,10 @@ export interface IntakeTransport {
   upload(file: File, opts: { purpose: "photo" | "attachment"; question_no?: number }): Promise<UploadResp>;
   submit(c: { phone: string; telegram: string; consent: boolean }): Promise<{ ok: boolean; errors?: string[] }>;
   heartbeat(): Promise<void>;
-  /** Candidate-side AI photo generation (public flow only). */
-  generatePhoto?(params: { clothing_type: string; color: string | null }): Promise<PhotoGenResp>;
+  /**
+   * Candidates no longer start photo jobs — they bring a portrait they made
+   * themselves. Status polling stays so an admin-started edit still surfaces.
+   */
   getPhotoStatus?(): Promise<{ ok: boolean; photoEdit?: CandidatePhotoStateView; error?: string }>;
   confirmPhoto?(selection: {
     kind: PhotoSelectionKind;
@@ -195,6 +186,7 @@ export function IntakeForm({
   maxUploadBytes,
   draftKey,
   transport,
+  gender = null,
   readOnly = false,
   feedback = [],
 }: {
@@ -209,6 +201,8 @@ export function IntakeForm({
   maxUploadBytes: number;
   draftKey: string;
   transport: IntakeTransport;
+  /** Picks which manual photo prompt the candidate is shown. */
+  gender?: Gender | null;
   readOnly?: boolean;
   feedback?: IntakeFeedbackView[];
 }) {
@@ -224,10 +218,6 @@ export function IntakeForm({
   );
   const [photo, setPhoto] = useState(initialPhoto);
   const [photoEdit, setPhotoEdit] = useState<CandidatePhotoStateView | null>(initialPhotoEdit ?? null);
-  const [photoPreferences, setPhotoPreferences] = useState<{
-    clothing: ClothingType;
-    color: PhotoColor;
-  }>({ clothing: "suit", color: "navy" });
   const [photoActionError, setPhotoActionError] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<IntakeAttachmentView[]>(initialAttachments ?? []);
   const [contact, setContact] = useState({
@@ -239,7 +229,6 @@ export function IntakeForm({
   const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [photoGenerating, setPhotoGenerating] = useState(false);
   const [photoConfirming, setPhotoConfirming] = useState(false);
 
   const { feedbackByQuestion, generalFeedback } = useMemo(() => {
@@ -623,37 +612,6 @@ export function IntakeForm({
 
   /* ----------------------------- background photo job ----------------------------- */
 
-  const startPhotoGeneration = useCallback(async () => {
-    if (!transport.generatePhoto || !photo) return;
-    setPhotoGenerating(true);
-    setPhotoActionError(null);
-    try {
-      const response = await transport.generatePhoto({
-        clothing_type: photoPreferences.clothing,
-        color: photoPreferences.clothing === "own_clothes" ? null : photoPreferences.color,
-      });
-      if (!response.ok || !response.photoEditId || !response.status) {
-        setPhotoActionError(response.error ?? "Rasmni tayyorlashni boshlab bo‘lmadi");
-        return;
-      }
-      setPhotoEdit((previous) => ({
-        job: {
-          id: response.photoEditId!,
-          status: response.status!,
-          createdAt: new Date().toISOString(),
-          finishedAt: null,
-        },
-        completed: previous?.completed ?? null,
-        selection:
-          previous?.selection ?? { kind: null, editId: null, originalAttachmentId: null, confirmedAt: null, confirmed: false },
-      }));
-    } catch {
-      setPhotoActionError("Tarmoq xatosi. Qayta urinib ko‘ring.");
-    } finally {
-      setPhotoGenerating(false);
-    }
-  }, [photo, photoPreferences, transport]);
-
   const photoJob = photoEdit?.job;
   useEffect(() => {
     if (
@@ -735,7 +693,7 @@ export function IntakeForm({
 
   const doSubmit = useCallback(async () => {
     if (requiresPhotoConfirmation && !photoEdit?.selection.confirmed) {
-      setSubmitErrors(["Yuborishdan oldin original yoki AI rasmni tasdiqlang"]);
+      setSubmitErrors(["Yuborishdan oldin rasmingizni tasdiqlang"]);
       return;
     }
     setBusy(true);
@@ -857,15 +815,11 @@ export function IntakeForm({
             title={template.photoTitle}
             instruction={template.photoInstruction}
             photo={photo}
-            photoEdit={photoEdit}
-            preferences={photoPreferences}
-            generating={photoGenerating}
-            actionError={photoActionError}
+            gender={gender}
+            showPromptGuide={mode === "public" && !readOnly}
             busy={busy}
             readOnly={readOnly}
             onPick={(f) => doUpload(f, "photo")}
-            onPreferencesChange={setPhotoPreferences}
-            onGenerate={transport.generatePhoto ? startPhotoGeneration : undefined}
           />
         )}
 
@@ -930,7 +884,6 @@ export function IntakeForm({
             confirming={photoConfirming}
             actionError={photoActionError}
             onConfirm={confirmPhoto}
-            onRegenerate={startPhotoGeneration}
             onSubmit={doSubmit}
             submitErrors={submitErrors}
           />
@@ -992,44 +945,33 @@ function PhotoStage({
   title,
   instruction,
   photo,
-  photoEdit,
-  preferences,
-  generating,
-  actionError,
+  gender,
+  showPromptGuide,
   busy,
   readOnly,
   onPick,
-  onPreferencesChange,
-  onGenerate,
 }: {
   title: string;
   instruction: string;
   photo: { url: string | null; file_name: string } | null;
-  photoEdit: CandidatePhotoStateView | null;
-  preferences: { clothing: ClothingType; color: PhotoColor };
-  generating: boolean;
-  actionError: string | null;
+  gender: Gender | null;
+  showPromptGuide: boolean;
   busy: boolean;
   readOnly: boolean;
   onPick: (f: File) => void;
-  onPreferencesChange: (value: { clothing: ClothingType; color: PhotoColor }) => void;
-  onGenerate?: () => Promise<void>;
 }) {
   const ref = useRef<HTMLInputElement>(null);
-  const processing = photoEdit?.job?.status === "queued" || photoEdit?.job?.status === "processing";
-  const completed = photoEdit?.job?.status === "completed" || !!photoEdit?.completed;
-  const failed = photoEdit?.job?.status === "failed";
 
   return (
     <div className="text-center">
-      {!completed && (
+      {showPromptGuide && (
         <div className="mb-6 flex items-start gap-3 rounded-[22px] border border-cyan/35 bg-gradient-to-br from-brand/[0.07] to-cyan/[0.09] p-4 text-left">
           <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-brand/10 text-brand">
             <Info className="h-4 w-4" />
           </span>
           <p className="text-sm leading-relaxed text-ink">
-            Vaqtdan yutish uchun avval rasmingizni yuklab, «Jaxongir AI bilan yaxshilash» tugmasini bosing.
-            Rasm fon rejimida tayyorlanayotgan paytda qolgan savollarni to‘ldiravering.
+            Avval quyidagi matnni nusxalab oling, rasmingiz bilan birga sun’iy intellektga bering va
+            tayyor bo‘lgan natijani shu yerga yuklang.
           </p>
         </div>
       )}
@@ -1069,93 +1011,74 @@ function PhotoStage({
         </div>
       )}
 
-      {/* AI photo generation (candidate flow) */}
-      {onGenerate && photo?.url && !readOnly && (
-        <div className="mt-6 rounded-field border border-line bg-surface/40 p-4 text-left">
-          <p className="mb-3 flex items-center gap-1.5 text-sm font-bold text-ink">
-            <Sparkles className="h-4 w-4 text-brand" /> AI bilan professional rasm
-          </p>
+      {showPromptGuide && <PhotoPromptCard gender={gender} />}
+    </div>
+  );
+}
 
-          <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-ink-soft">Kiyim turi</p>
-          <div className="mb-3 flex flex-wrap gap-1.5">
-            {CLOTHING_TYPES.map((c) => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => onPreferencesChange({ ...preferences, clothing: c })}
-                disabled={processing}
-                className={cn(
-                  "rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
-                  preferences.clothing === c ? "border-brand bg-brand/10 text-brand" : "border-line text-ink-soft hover:border-brand/40",
-                )}
-              >
-                {CLOTHING_LABELS[c]}
-              </button>
-            ))}
-          </div>
+/**
+ * The candidate improves the photo themselves: they copy this prompt into any AI
+ * image tool and upload the result. Replaces the old in-form generation button.
+ */
+function PhotoPromptCard({ gender }: { gender: Gender | null }) {
+  // Gender is nullable on the intake row; without it the candidate picks, so
+  // nobody is handed the wrong prompt silently.
+  const [promptGender, setPromptGender] = useState<Gender>(gender ?? "male");
+  const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const prompt = MANUAL_PHOTO_PROMPTS[promptGender];
 
-          {preferences.clothing !== "own_clothes" && (
-            <>
-              <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-ink-soft">Rang</p>
-              <div className="mb-3 flex flex-wrap gap-1.5">
-                {COLORS.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => onPreferencesChange({ ...preferences, color: c })}
-                    disabled={processing}
-                    className={cn(
-                      "rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
-                      preferences.color === c ? "border-brand bg-brand/10 text-brand" : "border-line text-ink-soft hover:border-brand/40",
-                    )}
-                  >
-                    {COLOR_LABELS[c]}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setCopyFailed(false);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopyFailed(true);
+    }
+  };
 
-          <Button variant="ai" className="w-full" onClick={() => void onGenerate()} disabled={generating || processing}>
-            {generating || processing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {processing ? "Rasm allaqachon tayyorlanmoqda" : "Jaxongir AI bilan yaxshilash"}
-          </Button>
-          {actionError && <p role="status" className="mt-2 text-xs font-semibold text-coral">{actionError}</p>}
+  return (
+    <div className="mt-6 rounded-field border border-line bg-surface/40 p-4 text-left">
+      <p className="flex items-center gap-1.5 text-sm font-bold text-ink">
+        <Sparkles className="h-4 w-4 text-brand" /> Rasmingizni sun’iy intellektga bering va natijani yuboring
+      </p>
+      <p className="mt-1.5 text-xs leading-relaxed text-ink-soft">
+        Quyidagi matnni nusxalang va rasmingiz bilan birga o‘zingiz foydalanadigan sun’iy intellekt
+        xizmatiga yuboring. Tayyor rasmni yuqoridagi «Rasm yuklash» tugmasi orqali joylang.
+      </p>
 
-          {processing && (
-            <div aria-live="polite" className="mt-4 rounded-[20px] border border-cyan/35 bg-brand/[0.05] p-4">
-              <div className="flex items-start gap-3">
-                <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-brand" />
-                <div className="min-w-0">
-                  <p className="text-sm font-bold text-ink">
-                    Jaxongir AI rasmingizni tayyorlamoqda. Savollarni to‘ldirishda davom etishingiz mumkin.
-                  </p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-ink-soft">
-                    <span className="rounded-full bg-cyan/15 px-2 py-1 font-bold text-brand">Fon rejimida ishlanmoqda</span>
-                    {photoEdit?.job?.createdAt && (
-                      <span className="inline-flex items-center gap-1">
-                        <Clock3 className="h-3 w-3" />
-                        {new Date(photoEdit.job.createdAt).toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit" })}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {completed && (
-            <p aria-live="polite" className="mt-3 rounded-[20px] border border-mint/50 bg-mint/10 p-3 text-sm font-semibold text-green">
-              Rasmingiz tayyor. Yakuniy bosqichda uni ko‘rib, tasdiqlashingiz mumkin.
-            </p>
-          )}
-
-          {failed && (
-            <div role="status" className="mt-3 rounded-[20px] border border-coral/35 bg-coral/5 p-3 text-sm text-coral">
-              Rasmni tayyorlashda muammo yuz berdi. Qayta urinishingiz yoki original rasmni tanlashingiz mumkin.
-            </div>
-          )}
+      {!gender && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {(["male", "female"] as const).map((g) => (
+            <button
+              key={g}
+              type="button"
+              onClick={() => setPromptGender(g)}
+              className={cn(
+                "rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
+                promptGender === g ? "border-brand bg-brand/10 text-brand" : "border-line text-ink-soft hover:border-brand/40",
+              )}
+            >
+              {g === "male" ? "Erkaklar uchun" : "Ayollar uchun"}
+            </button>
+          ))}
         </div>
+      )}
+
+      <p className="mt-3 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-[18px] border border-line bg-card p-3 text-xs leading-relaxed text-ink">
+        {prompt}
+      </p>
+
+      <Button variant="ai" className="mt-3 w-full" onClick={() => void copy()}>
+        {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+        {copied ? "Nusxalandi" : "Matnni nusxalash"}
+      </Button>
+      {copyFailed && (
+        <p role="status" className="mt-2 text-xs font-semibold text-coral">
+          Nusxalab bo‘lmadi — matnni qo‘lda belgilab nusxalang.
+        </p>
       )}
     </div>
   );
@@ -1172,7 +1095,6 @@ function FinalConfirmationStage({
   confirming,
   actionError,
   onConfirm,
-  onRegenerate,
   onSubmit,
   submitErrors,
 }: {
@@ -1186,7 +1108,6 @@ function FinalConfirmationStage({
   confirming: boolean;
   actionError: string | null;
   onConfirm: (kind: PhotoSelectionKind, editId?: string | null) => Promise<boolean>;
-  onRegenerate: () => Promise<void>;
   onSubmit: () => void;
   submitErrors: string[];
 }) {
@@ -1194,6 +1115,9 @@ function FinalConfirmationStage({
   const completed = photoEdit?.completed ?? null;
   const processing = photoEdit?.job?.status === "queued" || photoEdit?.job?.status === "processing";
   const failed = photoEdit?.job?.status === "failed";
+  // Candidates no longer start AI edits, but an admin-run one (or a job from
+  // before the switch) still deserves a choice here.
+  const hasAiOption = !!completed || processing || failed;
   const choice = pendingChoice ?? photoEdit?.selection.kind ?? null;
   // Authoritative, server-derived confirmation (photo_confirmed_at + matching
   // selected_photo_source/id) — never the local "Tanlandi" choice.
@@ -1211,7 +1135,7 @@ function FinalConfirmationStage({
   const blockers = [
     missingRequiredCount > 0 && `${missingRequiredCount} ta majburiy savol javobsiz`,
     !contactValid && "Telefon raqami, Telegram username va rozilik to‘ldirilishi kerak",
-    !confirmed && "Original yoki AI rasmni tasdiqlang",
+    !confirmed && (hasAiOption ? "Original yoki AI rasmni tasdiqlang" : "Yuklagan rasmingizni tasdiqlang"),
   ].filter(Boolean) as string[];
 
   // Safe diagnostics only — no token/phone/telegram/name/PII.
@@ -1237,7 +1161,9 @@ function FinalConfirmationStage({
           Rasm va ma’lumotlarni tasdiqlash
         </h3>
         <p className="mt-1 text-sm text-ink-soft">
-          Yakuniy rasmni ongli ravishda tanlang, so‘ng ma’lumotlaringizni yuboring.
+          {hasAiOption
+            ? "Yakuniy rasmni ongli ravishda tanlang, so‘ng ma’lumotlaringizni yuboring."
+            : "Yuklagan rasmingizni tasdiqlang, so‘ng ma’lumotlaringizni yuboring."}
         </p>
       </div>
 
@@ -1260,24 +1186,30 @@ function FinalConfirmationStage({
         </div>
       )}
 
-      <div role="radiogroup" aria-label="Yakuniy rasm" className="grid gap-4 sm:grid-cols-2">
+      <div
+        role="radiogroup"
+        aria-label="Yakuniy rasm"
+        className={cn("grid gap-4", hasAiOption ? "sm:grid-cols-2" : "mx-auto max-w-xs")}
+      >
         <PhotoChoiceCard
-          label="Original rasm"
+          label={hasAiOption ? "Original rasm" : "Yuklagan rasmingiz"}
           url={photo?.url ?? null}
-          alt={photo?.file_name ?? "Original rasm"}
+          alt={photo?.file_name ?? "Yuklangan rasm"}
           selected={choice === "original"}
           confirmed={confirmed && photoEdit?.selection.kind === "original"}
           onSelect={() => setPendingChoice("original")}
         />
-        <PhotoChoiceCard
-          label="Jaxongir AI bilan yaxshilangan"
-          url={completed?.url ?? null}
-          alt="Jaxongir AI bilan yaxshilangan rasm"
-          selected={choice === "ai"}
-          confirmed={confirmed && photoEdit?.selection.kind === "ai"}
-          loading={processing && !completed}
-          onSelect={() => completed && setPendingChoice("ai")}
-        />
+        {hasAiOption && (
+          <PhotoChoiceCard
+            label="Jaxongir AI bilan yaxshilangan"
+            url={completed?.url ?? null}
+            alt="Jaxongir AI bilan yaxshilangan rasm"
+            selected={choice === "ai"}
+            confirmed={confirmed && photoEdit?.selection.kind === "ai"}
+            loading={processing && !completed}
+            onSelect={() => completed && setPendingChoice("ai")}
+          />
+        )}
       </div>
 
       <div className="grid grid-cols-3 gap-3">
@@ -1318,11 +1250,8 @@ function FinalConfirmationStage({
         {confirming ? <Loader2 className="h-[22px] w-[22px] animate-spin" /> : <Check className="h-[22px] w-[22px]" />}
         {confirmed && choice === (photoEdit?.selection.kind ?? null) ? "Rasm tasdiqlandi" : "Shu rasmni tasdiqlash"}
       </button>
-      <Button variant="secondary" className="w-full" onClick={() => void onRegenerate()} disabled={processing}>
-        <RefreshCw className="h-4 w-4" /> Qayta ishlash
-      </Button>
 
-      {photo?.url && photoEdit?.selection.kind !== "original" && (
+      {hasAiOption && photo?.url && photoEdit?.selection.kind !== "original" && (
         <Button
           variant="secondary"
           className="w-full"
