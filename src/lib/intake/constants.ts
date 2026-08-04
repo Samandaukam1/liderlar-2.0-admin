@@ -148,15 +148,22 @@ const PHOTO_PROMPT_BASE =
   "Kadr sub’ektning kindik chizig‘idan yuqori qismini (ko‘krak, yelka, bo‘yin, bosh) qamrab olsin, kindikdan pastki qism kadrga kirmasin. " +
   "Yoritish: yumshoq, bir tekis, old tomondan tushuvchi tabiiy studiya yorug‘ligi bo‘lsin, yuzda qattiq soyalar yoki ortiqcha yorqin nuqtalar bo‘lmasin.";
 
+const PHOTO_PROMPT_MALE_CLOTHING =
+  "Kiyim: to‘q ko‘k (navy) rangdagi rasmiy erkaklar kostyumi kiydirilsin. Bo‘yinbog‘ shart emas — bo‘yinbog‘siz, ochiq yoqali rasmiy ko‘rinish ham maqbul.";
+
+// Headwear is the candidate's own, not a styling choice: the tool must keep a
+// hijab/scarf/national cap exactly as photographed and never add one.
 const PHOTO_PROMPT_FEMALE_CLOTHING =
-  "Kiyim uslubi vazmin va rasmiy, sub’ektning roziligi va tanloviga mos bo‘lsin; diniy yoki madaniy atributlar o‘zboshimchalik bilan qo‘shilmasin yoki olib tashlanmasin.";
+  "Kiyim: to‘q ko‘k (navy) rangdagi vazmin, rasmiy ayollar kostyumi kiydirilsin. " +
+  "Agar sub’ektda diniy kiyim yoki milliy bosh kiyim (ro‘mol, hijob, do‘ppi va shu kabilar) bo‘lsa, u ALBATTA saqlansin — olib tashlanmasin, boshqasiga almashtirilmasin, rangi va bog‘lanish uslubi o‘zgartirilmasin. " +
+  "Bosh kiyim bo‘lmasa, o‘zboshimchalik bilan qo‘shilmasin.";
 
 const PHOTO_PROMPT_TAIL =
   "Natija professional, rasmiy, yuqori sifatli portret bo‘lsin.\n\nRASMNING FORMATI 1154 GA 1423 PX BO‘LSIN";
 
 /** Prompt the candidate copies into their own AI image tool, per gender. */
 export const MANUAL_PHOTO_PROMPTS: Record<Gender, string> = {
-  male: `${PHOTO_PROMPT_BASE} ${PHOTO_PROMPT_TAIL}`,
+  male: `${PHOTO_PROMPT_BASE} ${PHOTO_PROMPT_MALE_CLOTHING} ${PHOTO_PROMPT_TAIL}`,
   female: `${PHOTO_PROMPT_BASE} ${PHOTO_PROMPT_FEMALE_CLOTHING} ${PHOTO_PROMPT_TAIL}`,
 };
 
