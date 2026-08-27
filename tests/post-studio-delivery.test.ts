@@ -344,21 +344,78 @@ test("an older candidate with no structured extras still produces a layout", () 
 test("the /start and /stop flow replies in Uzbek and toggles is_active", () => {
   const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
 
-  assert.match(
-    telegram,
-    /START_REPLY = "Liderlar\.uz botiga xush kelibsiz\. Yangi nomzod postlari shu yerga yuboriladi\."/,
+  assert.ok(telegram.includes("Assalomu alaykum! 👋"), "/start greeting");
+  assert.ok(
+    telegram.includes("post yetkazib beruvchi botiga muvaffaqiyatli ulandingiz."),
+    "/start confirmation",
   );
-  assert.match(
-    telegram,
-    /STOP_REPLY = "Post yuborish to‘xtatildi\. Qayta yoqish uchun \/start bosing\."/,
+  assert.ok(telegram.includes("Obunani to‘xtatish: /stop"), "/start explains /stop");
+  assert.ok(
+    telegram.includes("Post xabarnomalari to‘xtatildi. Qayta ulanish uchun /start yuboring."),
+    "/stop reply",
   );
+  assert.ok(telegram.includes("/start — postlarni olish"), "help reply");
 
   // /start re-activates, /stop deactivates and stamps stopped_at.
   assert.match(telegram, /is_active: true,\s*\n\s*started_at:/);
   assert.match(telegram, /is_active: false, stopped_at: new Date\(\)\.toISOString\(\)/);
+});
 
-  // A command sent in a group arrives as "/start@botname".
-  assert.match(telegram, /\.replace\(\/@\[a-z0-9_\]\+\$\/i, ""\)/);
+test("a command sent in a group keeps working", async () => {
+  const { parseTelegramCommand } = await import(
+    "../src/lib/post-studio/telegram-command.ts"
+  );
+  assert.equal(parseTelegramCommand("/start"), "/start");
+  assert.equal(parseTelegramCommand("/start@liderlaruz_bot"), "/start");
+  assert.equal(parseTelegramCommand("  /STOP  "), "/stop");
+  assert.equal(parseTelegramCommand("/start salom"), "/start");
+  assert.equal(parseTelegramCommand("salom"), "salom");
+  assert.equal(parseTelegramCommand(undefined), "");
+});
+
+test("a database failure never silences the bot", () => {
+  const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
+
+  // The upsert/deactivate calls must be inside try/catch, with the reply after
+  // the catch — a bare `await upsertSubscriber(...)` in front of sendMessage is
+  // exactly what made /start return nothing when the table was unreachable.
+  const startBlock = telegram.slice(
+    telegram.indexOf('if (command === "/start")'),
+    telegram.indexOf('if (command === "/stop")'),
+  );
+  assert.match(startBlock, /try \{[\s\S]*await upsertSubscriber\([\s\S]*\} catch/);
+  assert.match(startBlock, /\} catch[\s\S]*await sendTelegramMessage\(chatId, START_REPLY\)/);
+
+  // Any unknown text still gets an answer.
+  assert.match(telegram, /await sendTelegramMessage\(chatId, HELP_REPLY\)/);
+});
+
+test("machine callers are exempt from the admin session redirect", () => {
+  // Telegram and Vercel Cron have no cookie jar and cannot follow a 307 to
+  // /login; both authenticate inside their own route instead.
+  const proxy = fs.readFileSync("src/proxy.ts", "utf8");
+  const publicPaths = proxy.match(/const PUBLIC_PATHS = \[([\s\S]*?)\];/)?.[1] ?? "";
+  assert.ok(publicPaths.includes('"/api/telegram"'), "telegram webhook is exempt");
+  assert.ok(publicPaths.includes('"/api/cron"'), "cron is exempt");
+});
+
+test("the webhook checks its secret in constant time and awaits the reply", () => {
+  const route = fs.readFileSync("src/app/api/telegram/webhook/route.ts", "utf8");
+  assert.match(route, /timingSafeEqual/);
+  assert.match(route, /x-telegram-bot-api-secret-token/);
+  // The update is fully handled before the 200 goes back to Telegram.
+  assert.match(route, /await handleTelegramUpdate\(/);
+  assert.match(route, /\[telegram-webhook\] update received/);
+  // The token itself is never logged.
+  assert.ok(!/console\.[a-z]+\([^)]*TELEGRAM_BOT_TOKEN\b[^)]*\$\{/.test(route));
+});
+
+test("a failed Telegram API call logs its response body, never the token", () => {
+  const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
+  assert.match(telegram, /\[telegram-api\] \$\{method\} failed status=/);
+  assert.match(telegram, /body=\$\{raw\.slice\(0, 500\)\}/);
+  // The request URL embeds the bot token, so it must not be interpolated in.
+  assert.ok(!/console\.error\([^)]*TELEGRAM_API/.test(telegram));
 });
 
 test("a blocked or deleted chat deactivates that subscriber instead of retrying forever", () => {

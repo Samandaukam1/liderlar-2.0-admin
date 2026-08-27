@@ -4,7 +4,20 @@ import { NextResponse, type NextRequest } from "next/server";
 // /api/public/* is a server-to-server public content API (own x-liderlar-api-key
 // check + is_visible filtering in the route itself) — it must never require an
 // admin session cookie, since callers like liderlar-web have none.
-const PUBLIC_PATHS = ["/login", "/api/auth", "/api/public"];
+//
+// /api/telegram/* and /api/cron/* are machine callers with no cookie jar and no
+// ability to follow a login redirect: Telegram reported every delivery as
+// "Wrong response from the webhook: 307 Temporary Redirect" until they were
+// listed here, and Vercel Cron would have hit the same wall. Both carry their
+// own auth inside the route (X-Telegram-Bot-Api-Secret-Token and CRON_SECRET),
+// so exempting them from the session gate does not open anything up.
+const PUBLIC_PATHS = [
+  "/login",
+  "/api/auth",
+  "/api/public",
+  "/api/telegram",
+  "/api/cron",
+];
 
 // Candidate secure-link intake is public by design (token-gated at the route
 // layer). Only these paths are exempt from the admin session requirement.

@@ -3,6 +3,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getSiteUrl } from "@/lib/site-url";
 import { logAudit } from "@/lib/audit";
 import { buildTelegramCaption, captionExceedsLimit } from "./telegram-markdown.ts";
+import { parseTelegramCommand } from "./telegram-command.ts";
 
 /**
  * Private Telegram delivery bot.
@@ -110,11 +111,21 @@ async function callTelegram<T>(method: string, body: FormData | Record<string, u
     body: isForm ? body : JSON.stringify(body),
   });
 
-  const payload = (await response.json().catch(() => null)) as
-    | { ok: boolean; result?: T; description?: string; error_code?: number }
-    | null;
+  const raw = await response.text();
+  let payload: { ok: boolean; result?: T; description?: string; error_code?: number } | null = null;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    payload = null;
+  }
 
   if (!payload?.ok) {
+    // The API's own description is the only thing that explains a 400 ("chat
+    // not found", "can't parse entities", ...), so it has to reach the logs.
+    // The URL is never logged — it carries the bot token.
+    console.error(
+      `[telegram-api] ${method} failed status=${response.status} body=${raw.slice(0, 500)}`,
+    );
     throw new TelegramSendError(
       payload?.description ?? `Telegram ${method} xatosi (${response.status})`,
       payload?.error_code ?? response.status,
@@ -146,8 +157,25 @@ export async function sendTelegramPhoto(
  * Subscribers
  * ------------------------------------------------------------------ */
 
-export const START_REPLY = "Liderlar.uz botiga xush kelibsiz. Yangi nomzod postlari shu yerga yuboriladi.";
-export const STOP_REPLY = "Post yuborish to‘xtatildi. Qayta yoqish uchun /start bosing.";
+export const START_REPLY = [
+  "Assalomu alaykum! 👋",
+  "",
+  "Siz O‘zbekiston Lider Yoshlari post yetkazib beruvchi botiga muvaffaqiyatli ulandingiz.",
+  "",
+  "Endi LIDERLAR.UZ ensiklopediyasida yangi lider maqolasi va posti e’lon qilinganda, tayyor postlarni shu yerda qabul qilishingiz mumkin.",
+  "",
+  "Obunani to‘xtatish: /stop",
+].join("\n");
+
+export const STOP_REPLY =
+  "Post xabarnomalari to‘xtatildi. Qayta ulanish uchun /start yuboring.";
+
+/** Anything that is not a known command still gets an answer. */
+export const HELP_REPLY = [
+  "Botdan foydalanish uchun:",
+  "/start — postlarni olish",
+  "/stop — postlarni to‘xtatish",
+].join("\n");
 
 export interface TelegramFrom {
   id: number;
@@ -178,7 +206,15 @@ export async function upsertSubscriber(from: TelegramFrom, chatId: number): Prom
     },
     { onConflict: "telegram_user_id" },
   );
-  if (error) throw new Error(`Obunachini saqlab bo‘lmadi: ${error.message}`);
+  if (error) {
+    // code/details/hint are what distinguish "table missing" (unapplied
+    // migration) from a constraint problem; the message alone is not enough.
+    console.error(
+      "[telegram-webhook] upsert error",
+      JSON.stringify({ code: error.code, message: error.message, details: error.details, hint: error.hint }),
+    );
+    throw new Error(`Obunachini saqlab bo‘lmadi: ${error.message}`);
+  }
 }
 
 export async function deactivateSubscriber(telegramUserId: number): Promise<void> {
@@ -205,30 +241,62 @@ export interface TelegramUpdate {
   };
 }
 
-/** Handles one webhook update. Only /start and /stop are meaningful. */
+/**
+ * Handles one webhook update.
+ *
+ * The subscriber write is deliberately non-fatal. It used to run as
+ * `await upsertSubscriber(...)` directly in front of the reply, so any database
+ * problem — a missing migration, an RLS change, a transient PostgREST error —
+ * threw before sendMessage was ever reached and the user got total silence
+ * while Telegram still saw a 200. The reply now goes out regardless, and the
+ * database failure is logged loudly instead of swallowing the conversation.
+ */
 export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void> {
   const message = update.message;
   const chatId = message?.chat?.id;
   const from = message?.from;
-  if (!chatId || !from?.id) return;
 
-  // Telegram appends "@botname" to commands sent in groups; strip it so
-  // "/start@liderlaruz_bot" subscribes just like a plain "/start".
-  const command = (message?.text ?? "")
-    .trim()
-    .split(/\s+/)[0]
-    ?.toLowerCase()
-    .replace(/@[a-z0-9_]+$/i, "");
-
-  if (command === "/start") {
-    await upsertSubscriber(from, chatId);
-    await sendTelegramMessage(chatId, START_REPLY);
+  if (!chatId || !from?.id) {
+    console.log("[telegram-webhook] update ignored: no chat or sender");
     return;
   }
-  if (command === "/stop") {
-    await deactivateSubscriber(from.id);
-    await sendTelegramMessage(chatId, STOP_REPLY);
+
+  const command = parseTelegramCommand(message?.text);
+  console.log(`[telegram-webhook] command=${command || "(none)"}`);
+
+  if (command === "/start") {
+    try {
+      await upsertSubscriber(from, chatId);
+      console.log("[telegram-webhook] subscriber upserted");
+    } catch (err) {
+      console.error(
+        "[telegram-webhook] subscriber upsert failed:",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    await sendTelegramMessage(chatId, START_REPLY);
+    console.log("[telegram-webhook] sendMessage success command=/start");
+    return;
   }
+
+  if (command === "/stop") {
+    try {
+      await deactivateSubscriber(from.id);
+      console.log("[telegram-webhook] subscriber deactivated");
+    } catch (err) {
+      console.error(
+        "[telegram-webhook] subscriber deactivate failed:",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    await sendTelegramMessage(chatId, STOP_REPLY);
+    console.log("[telegram-webhook] sendMessage success command=/stop");
+    return;
+  }
+
+  // Never leave a message unanswered.
+  await sendTelegramMessage(chatId, HELP_REPLY);
+  console.log("[telegram-webhook] sendMessage success command=help");
 }
 
 export interface SubscriberStats {
@@ -402,3 +470,4 @@ export async function getPostDeliveryStats(postId: string): Promise<{
 }
 
 export { buildTelegramCaption };
+export { parseTelegramCommand };
