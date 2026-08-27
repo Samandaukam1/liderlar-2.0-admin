@@ -18,6 +18,18 @@ export interface QuoteCandidate {
 
 const PRIORITY: PostQuoteSource[] = ["featured_quote", "article_quote", "life_motto", "manual"];
 
+/**
+ * `articles.excerpt` is not reliably a quote. In production 10 of 11 published
+ * articles carry the short-bio badge row there ("Marketing mutaxassisi | SMM
+ * mutaxassisi | Targetolog | ..."), which would have been promoted straight
+ * into the poster as the headline quote. A pipe is the badge separator
+ * (SHORT_BIO_SEPARATOR) and effectively never appears in real prose, so it is
+ * a precise signal that the text is a list, not a quotation.
+ */
+export function looksLikeBadgeRow(text: string): boolean {
+  return text.includes("|");
+}
+
 function tidy(value: string): string {
   return value.replace(/\s+/g, " ").trim().replace(/^["“«]|["”»]$/g, "").trim();
 }
@@ -30,6 +42,9 @@ export function rankQuoteCandidates(candidates: QuoteCandidate[]): QuoteCandidat
   for (const candidate of candidates) {
     const text = tidy(candidate.text ?? "");
     if (!text) continue;
+    // Never let a badge row masquerade as a quote; an empty result becomes
+    // quote_missing -> needs_review, which is the correct outcome.
+    if (looksLikeBadgeRow(text)) continue;
     const key = text.toLocaleLowerCase("uz");
     if (seen.has(key)) continue;
     seen.add(key);

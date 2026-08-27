@@ -421,3 +421,24 @@ test("a missing quote or name is reported instead of rendering an empty post", (
   assert.ok(codes.includes("portrait_missing"));
   assert.equal(layout.needsReview, true);
 });
+
+test("a short-bio badge row is never promoted into the poster as a quote", async () => {
+  const { pickQuote, rankQuoteCandidates, looksLikeBadgeRow } = await import(
+    "../src/lib/post-studio/quote-source.ts"
+  );
+
+  // This is the real shape of articles.excerpt for most published candidates.
+  const badgeRow = "Marketing mutaxassisi | SMM mutaxassisi | Targetolog | Kitobxon";
+  assert.equal(looksLikeBadgeRow(badgeRow), true);
+  assert.equal(looksLikeBadgeRow("Bilim olishdan qo‘rqmaslik kerak"), false);
+
+  assert.equal(pickQuote([{ text: badgeRow, source: "article_quote" }]), null);
+
+  // A genuine quote alongside it still wins.
+  const ranked = rankQuoteCandidates([
+    { text: badgeRow, source: "article_quote" },
+    { text: "Orzular tomon yurish shart", source: "featured_quote" },
+  ]);
+  assert.equal(ranked.length, 1);
+  assert.equal(ranked[0].text, "Orzular tomon yurish shart");
+});
