@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { runDuePipelines } from "@/lib/post-studio/pipeline";
+import { sendDueScheduledPosts } from "@/lib/post-studio/scheduler";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,12 +22,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Ruxsat yo‘q" }, { status: 401 });
   }
 
+  // Pipeline first: a run that finishes here can be picked up by the very next
+  // tick's scheduled sweep rather than waiting a full cycle.
   const results = await runDuePipelines();
+  const scheduled = await sendDueScheduledPosts();
+
   return NextResponse.json({
     ok: true,
     processed: results.length,
     needsReview: results.filter((r) => r.needsReview).length,
     failed: results.filter((r) => !r.ok).length,
+    scheduledSent: scheduled.filter((r) => r.ok).length,
     results,
+    scheduled,
   });
 }

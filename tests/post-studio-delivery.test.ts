@@ -377,3 +377,16 @@ test("every delivery attempt is logged with its outcome", () => {
   }
   assert.match(MIGRATION, /sent_at timestamptz not null default now\(\)/);
 });
+
+test("a scheduled post is actually sent when its time arrives", () => {
+  const cron = fs.readFileSync("src/app/api/cron/post-pipeline/route.ts", "utf8");
+  assert.match(cron, /sendDueScheduledPosts\(\)/, "the cron sweeps scheduled posts");
+
+  const scheduler = fs.readFileSync("src/lib/post-studio/scheduler.ts", "utf8");
+  assert.match(scheduler, /\.eq\("status", "scheduled"\)/);
+  assert.match(scheduler, /\.lte\("scheduled_at", new Date\(\)\.toISOString\(\)\)/);
+  // A partial send must resume, not duplicate: delivery skips 'sent' rows.
+  assert.match(scheduler, /deliverPostToSubscribers\(/);
+  // Missing caption or render parks the post instead of sending something broken.
+  assert.match(scheduler, /status: "needs_review"/);
+});
