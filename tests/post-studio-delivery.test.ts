@@ -536,3 +536,16 @@ test("a hand-confirmed article URL must be a real http(s) link", () => {
   // Changing the URL rebuilds the caption that embeds it.
   assert.match(actions, /await refreshPostCaption\(updated\)/);
 });
+
+test("the cron endpoint fails closed when CRON_SECRET is missing", () => {
+  // It is exempt from the session middleware, so the secret is the only guard.
+  // Without this it ran for anyone who knew the URL, spending OpenAI credit.
+  const cron = fs.readFileSync("src/app/api/cron/post-pipeline/route.ts", "utf8");
+  assert.match(cron, /if \(!secret\) \{[\s\S]*?status: 503/);
+  assert.match(cron, /request\.headers\.get\("authorization"\) !== `Bearer \$\{secret\}`/);
+
+  // The refusal must come before any work is started.
+  const refusal = cron.indexOf("CRON_SECRET sozlanmagan");
+  const work = cron.indexOf("runDuePipelines()");
+  assert.ok(refusal > 0 && refusal < work, "refuses before running the pipeline");
+});

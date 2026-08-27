@@ -13,12 +13,25 @@ export const maxDuration = 300;
  * GET /api/cron/post-pipeline
  *
  * Vercel Cron entry point for the two-hour automated pipeline. Vercel signs its
- * cron requests with CRON_SECRET; without that header the route is a no-op, so
- * a public hit cannot burn OpenAI credit.
+ * cron requests with `Authorization: Bearer $CRON_SECRET`.
+ *
+ * This route is exempt from the admin session middleware (cron has no cookie),
+ * so the secret is the ONLY thing standing in front of it. It therefore fails
+ * closed: with CRON_SECRET unset the endpoint was publicly callable and anyone
+ * could start pipeline runs that spend OpenAI credit and publish candidates.
+ * Refusing to run is the safe default — the pipeline pausing is visible and
+ * recoverable, an open endpoint is neither.
  */
 export async function GET(request: NextRequest) {
   const secret = process.env.CRON_SECRET;
-  if (secret && request.headers.get("authorization") !== `Bearer ${secret}`) {
+  if (!secret) {
+    console.error("[cron] CRON_SECRET sozlanmagan — pipeline ishga tushirilmadi");
+    return NextResponse.json(
+      { error: "CRON_SECRET sozlanmagan", processed: 0 },
+      { status: 503 },
+    );
+  }
+  if (request.headers.get("authorization") !== `Bearer ${secret}`) {
     return NextResponse.json({ error: "Ruxsat yo‘q" }, { status: 401 });
   }
 
