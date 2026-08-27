@@ -219,6 +219,51 @@ export async function saveCaptionAction(formData: FormData): Promise<PostActionR
   return { ok: true, postId };
 }
 
+/**
+ * Lets an admin confirm the canonical article URL by hand.
+ *
+ * Needed while the public site's own address is in flux: the resolver refuses
+ * to guess a domain, so without this the post would sit at needs_review with no
+ * way forward. Only http(s) origins are accepted — the value ends up as a link
+ * in a message sent to every subscriber.
+ */
+export async function saveArticleUrlAction(formData: FormData): Promise<PostActionResult> {
+  const ctx = await requirePermission("posts.manage");
+  const postId = String(formData.get("post_id") ?? "");
+  const raw = String(formData.get("article_url") ?? "").trim();
+
+  if (raw) {
+    let parsed: URL;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      return { ok: false, error: "URL formati noto‘g‘ri" };
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { ok: false, error: "Faqat http(s) havola qabul qilinadi" };
+    }
+  }
+
+  const post = await getPost(postId);
+  if (!post) return { ok: false, error: "Post topilmadi" };
+
+  await updatePost(postId, { article_url: raw || null });
+  await logAudit({
+    actorId: ctx.userId,
+    action: "post.article_url_confirmed",
+    entityType: "candidate_social_posts",
+    entityId: postId,
+    metadata: { articleUrl: raw || null },
+  });
+
+  // The caption embeds the URL, so it has to be rebuilt from the new value.
+  const updated = await getPost(postId);
+  if (updated) await refreshPostCaption(updated);
+
+  revalidatePost(postId);
+  return { ok: true, postId, message: "Maqola havolasi saqlandi." };
+}
+
 export async function regenerateCaptionAction(postId: string): Promise<PostActionResult> {
   await requirePermission("posts.manage");
   const post = await getPost(postId);

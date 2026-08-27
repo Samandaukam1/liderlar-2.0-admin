@@ -26,6 +26,7 @@ import {
   preparePortraitAction,
   regenerateCaptionAction,
   rerenderPostAction,
+  saveArticleUrlAction,
   saveCaptionAction,
   savePostContentAction,
   schedulePostAction,
@@ -475,6 +476,32 @@ export function PostStudio(props: StudioProps) {
               <dd className="font-bold text-[#c43d3d]">{delivery.failed}</dd>
             </div>
           </dl>
+
+          <form
+            action={(formData) => run(() => saveArticleUrlAction(formData))}
+            className="mb-3 space-y-2"
+          >
+            <input type="hidden" name="post_id" value={post.id} />
+            <Label htmlFor="article_url">Maqola havolasi (caption uchun)</Label>
+            <Input
+              id="article_url"
+              name="article_url"
+              type="url"
+              defaultValue={post.articleUrl ?? candidate.articleUrl ?? ""}
+              placeholder="https://…/liderlar/slug"
+              disabled={!canManage}
+            />
+            <p className="text-[11px] text-ink-soft">
+              {candidate.articleUrl
+                ? "Avtomatik aniqlandi — kerak bo‘lsa qo‘lda o‘zgartiring."
+                : "Public sayt manzili hali sozlanmagan. Havolani qo‘lda tasdiqlang."}
+            </p>
+            {canManage ? (
+              <Button type="submit" variant="ghost" size="sm" disabled={pending}>
+                Havolani saqlash
+              </Button>
+            ) : null}
+          </form>
 
           <form action={(formData) => run(() => saveCaptionAction(formData))} className="space-y-2">
             <input type="hidden" name="post_id" value={post.id} />

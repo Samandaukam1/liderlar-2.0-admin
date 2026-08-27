@@ -172,7 +172,8 @@ export type PostWarningCode =
   | "portrait_missing"
   | "portrait_low_quality"
   | "portrait_removal_failed"
-  | "article_unpublished";
+  | "article_unpublished"
+  | "article_url_unconfigured";
 
 export interface PostWarning {
   code: PostWarningCode;

@@ -24,6 +24,12 @@ import { preparePortrait, refreshPostCaption, renderAndStorePost } from "./servi
  */
 
 export const PIPELINE_MAX_ATTEMPTS = 3;
+/**
+ * Upper bound on how far back the sweep will reach. Defence in depth against a
+ * backfill or a manual status change ever turning a long history of intakes
+ * into one mass automated run of AI calls, approvals and publications.
+ */
+export const PIPELINE_MAX_AGE_DAYS = 14;
 /** How many intakes one cron invocation will process, to stay inside the budget. */
 export const PIPELINE_BATCH_SIZE = 3;
 
@@ -59,11 +65,16 @@ interface DueIntake {
 /** Intakes whose two-hour window has elapsed and that have attempts left. */
 export async function findDueIntakes(limit = PIPELINE_BATCH_SIZE): Promise<DueIntake[]> {
   const db = createSupabaseAdminClient();
+  const oldestAllowed = new Date(
+    Date.now() - PIPELINE_MAX_AGE_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
+
   const { data } = await db
     .from("candidate_intakes")
     .select("id, status, candidate_id, post_pipeline_attempts")
     .in("post_pipeline_status", ["pending", "failed"])
     .lte("post_pipeline_process_after", new Date().toISOString())
+    .gte("post_pipeline_process_after", oldestAllowed)
     .lt("post_pipeline_attempts", PIPELINE_MAX_ATTEMPTS)
     .order("post_pipeline_process_after", { ascending: true })
     .limit(limit);

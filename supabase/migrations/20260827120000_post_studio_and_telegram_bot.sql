@@ -233,12 +233,19 @@ create trigger trg_intake_pipeline_schedule
   before update on public.candidate_intakes
   for each row execute function public.set_post_pipeline_schedule();
 
--- Allaqachon yuborilgan anketalar uchun ham rejani to'ldiramiz.
+-- Tarixiy anketalar RETROAKTIV ishlanmaydi.
+--
+-- Ularni 'pending' qilib, process_after ni o'tmishga qo'yish birinchi cron
+-- tikida barcha eski anketalarni bir vaqtda avtomatik qayta ishlashni
+-- boshlab yuborardi: AI chaqiruvlari, avtomatik tasdiqlash va hech kim
+-- so'ramagan nashrlar. Avtomatika faqat shu migratsiyadan keyingi YANGI
+-- topshiriqlarga tegishli, shuning uchun mavjud qatorlar 'skipped' bo'ladi.
+-- Kerak bo'lsa admin ularni qo'lda qayta navbatga qo'ya oladi
+-- (requeueIntakePipeline).
 update public.candidate_intakes
-set post_pipeline_process_after = submitted_at + interval '2 hours',
-    post_pipeline_status = coalesce(post_pipeline_status, 'pending')
+set post_pipeline_status = 'skipped'
 where submitted_at is not null
-  and post_pipeline_process_after is null;
+  and post_pipeline_status is null;
 
 -- ------------------------------------------------------------
 -- 8. Telegram caption sozlamalari (hardcode qilinmaydi)
@@ -246,5 +253,5 @@ where submitted_at is not null
 insert into public.site_settings (key, value) values
   ('telegram_bot.application_url', 'https://liderlar.uz/ariza'),
   ('telegram_bot.instagram_url', 'https://instagram.com/liderlar.uz'),
-  ('telegram_bot.username', 'liderlaruz')
+  ('telegram_bot.username', 'uzlye_rasmiy')
 on conflict (key) do nothing;

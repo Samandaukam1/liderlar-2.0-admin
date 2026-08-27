@@ -1,7 +1,7 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { getSiteUrl } from "@/lib/site-url";
 import { logAudit } from "@/lib/audit";
+import { resolvePublicWebUrl } from "./site-origin.ts";
 import { buildTelegramCaption, captionExceedsLimit } from "./telegram-markdown.ts";
 import { parseTelegramCommand } from "./telegram-command.ts";
 
@@ -23,8 +23,9 @@ export const TELEGRAM_SETTINGS_KEYS = {
 } as const;
 
 export interface TelegramSettings {
-  applicationUrl: string;
-  siteUrl: string;
+  /** Null until public_web.base_url (or its env override) is configured. */
+  siteUrl: string | null;
+  applicationUrl: string | null;
   instagramUrl: string;
   username: string;
 }
@@ -43,6 +44,10 @@ export function isTelegramConfigured(): boolean {
  * Caption links come from site_settings first and env second — never hardcoded,
  * and never from the request's own host, so a Vercel preview URL cannot leak
  * into a caption that thousands of subscribers receive.
+ *
+ * `siteUrl` resolves through public-web-url.ts, which has no domain fallback:
+ * liderlar.uz still serves the OLD site, so guessing it would link every
+ * subscriber to the wrong page. Unconfigured means "no caption yet".
  */
 export async function getTelegramSettings(): Promise<TelegramSettings> {
   const db = createSupabaseAdminClient();
@@ -55,20 +60,22 @@ export async function getTelegramSettings(): Promise<TelegramSettings> {
   const pick = (key: string, envValue: string | undefined, fallback: string) =>
     (settings.get(key) || envValue || fallback).trim();
 
-  const siteUrl = getSiteUrl();
+  const siteUrl = await resolvePublicWebUrl();
+  const applicationUrl = pick(
+    TELEGRAM_SETTINGS_KEYS.applicationUrl,
+    process.env.NEXT_PUBLIC_APPLICATION_URL,
+    siteUrl ? `${siteUrl}/ariza` : "",
+  );
+
   return {
     siteUrl,
-    applicationUrl: pick(
-      TELEGRAM_SETTINGS_KEYS.applicationUrl,
-      process.env.NEXT_PUBLIC_APPLICATION_URL,
-      `${siteUrl}/ariza`,
-    ),
+    applicationUrl: applicationUrl || null,
     instagramUrl: pick(
       TELEGRAM_SETTINGS_KEYS.instagramUrl,
       process.env.NEXT_PUBLIC_INSTAGRAM_URL,
       "https://instagram.com/liderlar.uz",
     ),
-    username: pick(TELEGRAM_SETTINGS_KEYS.username, process.env.TELEGRAM_BOT_USERNAME, "liderlaruz")
+    username: pick(TELEGRAM_SETTINGS_KEYS.username, process.env.TELEGRAM_BOT_USERNAME, "uzlye_rasmiy")
       .replace(/^@/, ""),
   };
 }

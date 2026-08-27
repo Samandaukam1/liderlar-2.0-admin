@@ -1,8 +1,8 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { getSiteUrl } from "@/lib/site-url";
 import { normalizeShortBioItems, splitShortBioItems } from "@/lib/candidates/short-bio";
 import { signIntakeFileUrl } from "@/lib/intake/data";
+import { buildCandidateArticleUrl } from "./site-origin.ts";
 import { pickQuote, rankQuoteCandidates, type QuoteCandidate } from "./quote-source.ts";
 import { splitNameIntoLines } from "./name-lines.ts";
 import { DEFAULT_POST_TEMPLATE_ID, pickTemplateForCandidate } from "./layout-config.ts";
@@ -34,8 +34,13 @@ export interface CandidateSourceData {
   shortBioItems: string[];
   quotes: QuoteCandidate[];
   article: { id: string; slug: string; status: string; publishedAt: string | null } | null;
-  /** Candidate's canonical published article URL, or null when unpublished. */
+  /**
+   * Canonical published article URL, or null when the article is unpublished
+   * OR the public site's origin has not been configured yet.
+   */
   articleUrl: string | null;
+  /** False when public_web.base_url is unset — the admin must confirm a URL. */
+  publicWebConfigured: boolean;
   portraitSourceUrl: string | null;
 }
 
@@ -113,7 +118,10 @@ export async function loadCandidateSourceData(
   if (!candidate || candidate.deleted_at) return null;
 
   const article = articleRows?.[0] ?? null;
-  const siteUrl = getSiteUrl();
+  const articleUrl =
+    article?.status === "published"
+      ? await buildCandidateArticleUrl(candidate.slug as string)
+      : null;
 
   const quotes: QuoteCandidate[] = (quoteRows ?? []).map((row) => ({
     id: row.id as string,
@@ -145,10 +153,8 @@ export async function loadCandidateSourceData(
           publishedAt: (article.published_at as string | null) ?? null,
         }
       : null,
-    articleUrl:
-      article?.status === "published"
-        ? `${siteUrl}/liderlar/${candidate.slug as string}`
-        : null,
+    articleUrl,
+    publicWebConfigured: (await buildCandidateArticleUrl("probe")) !== null,
     portraitSourceUrl: await resolvePortraitSource(
       candidate.id as string,
       (candidate.avatar_url as string | null) ?? null,
@@ -168,12 +174,14 @@ const LIST_COLUMNS =
 
 const DETAIL_COLUMNS = `${LIST_COLUMNS}, quote, quote_source, name_lines, short_bio_items, ` +
   "portrait_source_url, portrait_processed_url, portrait_transform, font_size_overrides, " +
-  "rendered_image_url, telegram_caption, error, metadata";
+  "rendered_image_url, telegram_caption, article_url, error, metadata";
 
 export interface PostRecord {
   id: string;
   candidateId: string;
   articleId: string | null;
+  /** Admin-confirmed canonical article URL; overrides the derived one. */
+  articleUrl: string | null;
   templateId: PostTemplateId;
   status: PostStatus;
   quote: string;
@@ -211,6 +219,7 @@ export function mapPostRow(row: Row): PostRecord {
     id: row.id as string,
     candidateId: row.candidate_id as string,
     articleId: (row.article_id as string | null) ?? null,
+    articleUrl: (row.article_url as string | null) ?? null,
     templateId: isPostTemplateId(row.template_id) ? row.template_id : DEFAULT_POST_TEMPLATE_ID,
     status: (row.status as PostStatus) ?? "draft",
     quote: (row.quote as string) ?? "",

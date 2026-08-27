@@ -453,3 +453,86 @@ test("a scheduled post is actually sent when its time arrives", () => {
   // Missing caption or render parks the post instead of sending something broken.
   assert.match(scheduler, /status: "needs_review"/);
 });
+
+test("applying the migration does not retroactively queue historical intakes", () => {
+  // Marking existing submitted intakes 'pending' with a past process_after
+  // would make the first cron tick process the whole history at once — AI
+  // calls, auto-approvals and publications nobody asked for.
+  assert.match(
+    MIGRATION,
+    /update public\.candidate_intakes\s+set post_pipeline_status = 'skipped'\s+where submitted_at is not null\s+and post_pipeline_status is null;/,
+  );
+  assert.ok(
+    !/post_pipeline_status = coalesce\(post_pipeline_status, 'pending'\)/.test(MIGRATION),
+    "no retroactive pending backfill",
+  );
+
+  // Defence in depth: the sweep also refuses anything older than the cap.
+  const pipeline = fs.readFileSync("src/lib/post-studio/pipeline.ts", "utf8");
+  assert.match(pipeline, /PIPELINE_MAX_AGE_DAYS = \d+/);
+  assert.match(pipeline, /\.gte\("post_pipeline_process_after", oldestAllowed\)/);
+});
+
+test("the caption handle comes from settings, not a hardcoded string", () => {
+  const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
+  // site_settings wins, then env, and only then the documented default.
+  assert.match(
+    telegram,
+    /pick\(TELEGRAM_SETTINGS_KEYS\.username, process\.env\.TELEGRAM_BOT_USERNAME, "uzlye_rasmiy"\)/,
+  );
+  assert.match(MIGRATION, /\('telegram_bot\.username', 'uzlye_rasmiy'\)/);
+});
+
+test("the public site origin is never guessed as liderlar.uz", async () => {
+  const { normalizePublicWebUrl, PUBLIC_WEB_SETTING_KEY } = await import(
+    "../src/lib/post-studio/public-web-url.ts"
+  );
+
+  // liderlar.uz currently still serves the OLD site, so there is no fallback:
+  // unconfigured must resolve to null, not to a guessed domain.
+  assert.equal(normalizePublicWebUrl(""), null);
+  assert.equal(normalizePublicWebUrl(null), null);
+  assert.equal(normalizePublicWebUrl("   "), null);
+  assert.equal(normalizePublicWebUrl("http://localhost:3000"), null);
+  assert.equal(normalizePublicWebUrl("javascript:alert(1)"), null);
+
+  assert.equal(normalizePublicWebUrl("liderlar-web.vercel.app"), "https://liderlar-web.vercel.app");
+  assert.equal(normalizePublicWebUrl("https://example.uz/"), "https://example.uz");
+  assert.equal(PUBLIC_WEB_SETTING_KEY, "public_web.base_url");
+
+  // The old domain may appear in a comment explaining why it is not used; what
+  // matters is that no code path can produce it.
+  for (const file of [
+    "src/lib/post-studio/public-web-url.ts",
+    "src/lib/post-studio/site-origin.ts",
+  ]) {
+    const code = fs
+      .readFileSync(file, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    assert.ok(!code.includes("liderlar.uz"), `${file} has no hardcoded old domain`);
+  }
+});
+
+test("an unconfigured public site holds the post at needs_review instead of linking the old domain", () => {
+  const service = fs.readFileSync("src/lib/post-studio/service.ts", "utf8");
+  assert.match(service, /code: "article_url_unconfigured"/);
+  // An admin-confirmed URL is the way forward while the domain is in flux.
+  assert.match(service, /post\.articleUrl\?\.trim\(\) \|\| source\.articleUrl/);
+  // refreshPostCaption parks the post when no caption could be built.
+  assert.match(service, /status: "needs_review",\s*\n\s*error: warning\?\.message/);
+
+  const repository = fs.readFileSync("src/lib/post-studio/repository.ts", "utf8");
+  assert.ok(!repository.includes("getSiteUrl"), "article links no longer use the old fallback");
+
+  const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
+  assert.ok(!telegram.includes("getSiteUrl"), "caption links no longer use the old fallback");
+});
+
+test("a hand-confirmed article URL must be a real http(s) link", () => {
+  const actions = fs.readFileSync("src/lib/actions/post-studio.ts", "utf8");
+  assert.match(actions, /saveArticleUrlAction/);
+  assert.match(actions, /parsed\.protocol !== "http:" && parsed\.protocol !== "https:"/);
+  // Changing the URL rebuilds the caption that embeds it.
+  assert.match(actions, /await refreshPostCaption\(updated\)/);
+});

@@ -217,22 +217,44 @@ export async function buildCaptionForPost(
   const source = await loadCandidateSourceData(post.candidateId);
   if (!source) return { caption: null, warning: { code: "name_missing", message: "Nomzod topilmadi." } };
 
-  if (!source.articleUrl) {
+  // An admin-confirmed URL always wins: it is the escape hatch for the period
+  // where the public site's own address is still moving.
+  const articleUrl = post.articleUrl?.trim() || source.articleUrl;
+
+  if (!articleUrl) {
     return {
       caption: null,
-      warning: {
-        code: "article_unpublished",
-        message: "Nomzodning maqolasi hali nashr qilinmagan — caption havolasi yo‘q.",
-      },
+      warning: source.publicWebConfigured
+        ? {
+            code: "article_unpublished",
+            message: "Nomzodning maqolasi hali nashr qilinmagan — caption havolasi yo‘q.",
+          }
+        : {
+            code: "article_url_unconfigured",
+            message:
+              "Public sayt manzili sozlanmagan (site_settings → public_web.base_url). " +
+              "Eski liderlar.uz havolasi yaratilmadi; maqola URL'ini qo‘lda tasdiqlang.",
+          },
     };
   }
 
   const settings = await getTelegramSettings();
+  if (!settings.siteUrl || !settings.applicationUrl) {
+    return {
+      caption: null,
+      warning: {
+        code: "article_url_unconfigured",
+        message:
+          "Caption'dagi sayt va ariza havolalari uchun public_web.base_url sozlanmagan.",
+      },
+    };
+  }
+
   return {
     caption: buildTelegramCaption({
       quote: post.quote,
       fullName: source.fullName,
-      articleUrl: source.articleUrl,
+      articleUrl,
       applicationUrl: settings.applicationUrl,
       siteUrl: settings.siteUrl,
       instagramUrl: settings.instagramUrl,
