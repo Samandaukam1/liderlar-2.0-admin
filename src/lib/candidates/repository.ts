@@ -129,7 +129,8 @@ export async function getCandidateEditorRecord(candidateId: string): Promise<Can
 
 export async function saveCandidateProfile(
   payload: CandidateEditorPayload,
-  actorId: string,
+  /** Null for automated (pipeline) runs that have no human actor. */
+  actorId: string | null,
 ): Promise<{ candidateId: string; slug: string }> {
   const admin = createSupabaseAdminClient();
   const { data, error } = await admin.rpc("save_candidate_profile_v2", {

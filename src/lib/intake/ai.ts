@@ -210,7 +210,8 @@ async function recordAiRun(params: {
   kind: string;
   status: "completed" | "failed";
   model: string;
-  actorId: string;
+  /** Null for automated (pipeline) runs that have no human actor. */
+  actorId: string | null;
   idempotencyKey?: string | null;
   inputSummary: Record<string, unknown>;
   output?: unknown;
@@ -291,7 +292,8 @@ export async function reviewIntakeAnswers(params: {
   intakeId: string;
   candidateName: string;
   answers: ReviewInputAnswer[];
-  actorId: string;
+  /** Null when the automated pipeline runs the pass with no human actor. */
+  actorId: string | null;
   idempotencyKey?: string | null;
 }): Promise<IntakeReview> {
   const model = textModel();

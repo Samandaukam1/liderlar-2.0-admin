@@ -20,6 +20,7 @@ import {
   Sparkles,
   Bot,
   MonitorPlay,
+  Megaphone,
   Wand2,
   Bell,
   ShieldCheck,
@@ -59,6 +60,18 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Yuborilgan yangilanishlar", href: "/monthly-updates", icon: Inbox, permission: "updates.view", keywords: "oylik submission" },
       { label: "Biografik maqolalar", href: "/articles", icon: FileText, permission: "articles.view", keywords: "maqola editor" },
       { label: "Arizalar", href: "/applications", icon: ClipboardList, permission: "applications.view" },
+    ],
+  },
+  {
+    label: "Postlar",
+    items: [
+      {
+        label: "Postlar",
+        href: "/postlar",
+        icon: Megaphone,
+        permission: "posts.view",
+        keywords: "post studio telegram bot iqtibos shablon 1080 ijtimoiy tarmoq",
+      },
     ],
   },
   {

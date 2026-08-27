@@ -175,7 +175,8 @@ function toArticleInput(data: CandidateAiOutput) {
 export async function structureCandidateWithAi(params: {
   rawText: string;
   current: CandidateStructuredData;
-  actorId: string;
+  /** Null for automated (pipeline) runs that have no human actor. */
+  actorId: string | null;
   candidateId?: string | null;
   intakeId?: string | null;
 }): Promise<CandidateAiResult> {
