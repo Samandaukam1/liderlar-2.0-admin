@@ -11,13 +11,16 @@ import { NextResponse, type NextRequest } from "next/server";
 // listed here, and Vercel Cron would have hit the same wall. Both carry their
 // own auth inside the route (X-Telegram-Bot-Api-Secret-Token and CRON_SECRET),
 // so exempting them from the session gate does not open anything up.
-const PUBLIC_PATHS = [
-  "/login",
-  "/api/auth",
-  "/api/public",
-  "/api/telegram",
-  "/api/cron",
-];
+const PUBLIC_PATHS = ["/login", "/api/auth", "/api/public"];
+
+/**
+ * Callers with no cookie jar that cannot follow a redirect: Telegram reported
+ * every webhook delivery as "Wrong response from the webhook: 307 Temporary
+ * Redirect" until this existed, and Vercel Cron would have hit the same wall.
+ * Each authenticates itself inside its route — X-Telegram-Bot-Api-Secret-Token
+ * and CRON_SECRET respectively.
+ */
+const MACHINE_PATHS = ["/api/telegram", "/api/cron"];
 
 // Candidate secure-link intake is public by design (token-gated at the route
 // layer). Only these paths are exempt from the admin session requirement.
@@ -28,6 +31,14 @@ const INTAKE_PUBLIC_PREFIXES = ["/anketa", "/api/intake"];
  * Fine-grained role checks live in requirePermission (lib/auth.ts) and RLS.
  */
 export async function proxy(request: NextRequest) {
+  // Machine callers short-circuit before the Supabase session lookup: they can
+  // never have a cookie to refresh, and putting an auth round-trip in front of
+  // the Telegram webhook would make bot replies depend on Supabase auth being
+  // reachable. Their own secrets are checked inside the route.
+  if (MACHINE_PATHS.some((p) => request.nextUrl.pathname.startsWith(p))) {
+    return NextResponse.next({ request });
+  }
+
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(

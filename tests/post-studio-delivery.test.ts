@@ -394,9 +394,15 @@ test("machine callers are exempt from the admin session redirect", () => {
   // Telegram and Vercel Cron have no cookie jar and cannot follow a 307 to
   // /login; both authenticate inside their own route instead.
   const proxy = fs.readFileSync("src/proxy.ts", "utf8");
-  const publicPaths = proxy.match(/const PUBLIC_PATHS = \[([\s\S]*?)\];/)?.[1] ?? "";
-  assert.ok(publicPaths.includes('"/api/telegram"'), "telegram webhook is exempt");
-  assert.ok(publicPaths.includes('"/api/cron"'), "cron is exempt");
+  const machinePaths = proxy.match(/const MACHINE_PATHS = \[([\s\S]*?)\];/)?.[1] ?? "";
+  assert.ok(machinePaths.includes('"/api/telegram"'), "telegram webhook is exempt");
+  assert.ok(machinePaths.includes('"/api/cron"'), "cron is exempt");
+
+  // The exemption must come before the session lookup, so a Supabase auth
+  // outage cannot stop the bot from replying.
+  const shortCircuit = proxy.indexOf("MACHINE_PATHS.some");
+  const sessionLookup = proxy.indexOf("supabase.auth.getUser()");
+  assert.ok(shortCircuit > 0 && shortCircuit < sessionLookup, "exemption precedes auth");
 });
 
 test("the webhook checks its secret in constant time and awaits the reply", () => {
