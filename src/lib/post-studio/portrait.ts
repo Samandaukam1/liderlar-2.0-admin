@@ -26,6 +26,15 @@ export interface PortraitCutout {
   coverage: number;
 }
 
+export interface EnhancedPortrait {
+  buffer: Buffer;
+  width: number;
+  height: number;
+  saturation: number;
+  alphaCoverageBefore: number;
+  alphaCoverageAfter: number;
+}
+
 export type PortraitFailureCode =
   | "no_provider"
   | "provider_failed"
@@ -55,6 +64,9 @@ const MAX_CUTOUT_EDGE = 1400;
  */
 const MIN_COVERAGE = 0.08;
 const MAX_COVERAGE = 0.88;
+
+/** Deliberately modest: colour lift only, with no skin/shape/image generation. */
+export const POST_PORTRAIT_SATURATION = 1.12;
 
 export function activeProvider(): BackgroundRemovalProvider {
   if (process.env.REMOVEBG_API_KEY) return "removebg";
@@ -119,6 +131,71 @@ export async function measureCoverage(cutout: Buffer): Promise<number> {
   return alpha ? alpha.mean / 255 : 0;
 }
 
+/** Rejects an opaque provider response even if it happens to be encoded as PNG. */
+export async function validateTransparentPortrait(cutout: Buffer): Promise<{
+  width: number;
+  height: number;
+  coverage: number;
+}> {
+  const image = sharp(cutout);
+  const metadata = await image.metadata();
+  if (!metadata.hasAlpha || !metadata.width || !metadata.height) {
+    throw new PortraitProcessingError(
+      "Fon olib tashlash natijasida alpha channel topilmadi.",
+      "low_quality",
+    );
+  }
+
+  const { channels } = await image.stats();
+  const alpha = channels[channels.length - 1];
+  const coverage = alpha ? alpha.mean / 255 : 1;
+  if (!alpha || alpha.min >= 255 || alpha.max <= 0) {
+    throw new PortraitProcessingError(
+      "Fon olib tashlash natijasi haqiqiy shaffof portret emas.",
+      "low_quality",
+    );
+  }
+  return { width: metadata.width, height: metadata.height, coverage };
+}
+
+/**
+ * Applies a small saturation lift to RGB only. Sharp carries the existing
+ * alpha channel through `modulate`; the before/after gate makes that guarantee
+ * executable rather than an assumption.
+ */
+export async function enhancePortraitColor(
+  cutout: Buffer,
+  saturation = POST_PORTRAIT_SATURATION,
+): Promise<EnhancedPortrait> {
+  const before = await validateTransparentPortrait(cutout);
+  const output = await sharp(cutout)
+    .ensureAlpha()
+    .modulate({ saturation })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+  const after = await validateTransparentPortrait(output);
+
+  if (
+    before.width !== after.width ||
+    before.height !== after.height ||
+    Math.abs(before.coverage - after.coverage) > 0.000_001
+  ) {
+    throw new PortraitProcessingError(
+      "Rangni boyitish vaqtida portret shaffofligi o‘zgardi.",
+      "low_quality",
+    );
+  }
+
+  return {
+    buffer: output,
+    width: after.width,
+    height: after.height,
+    saturation,
+    alphaCoverageBefore: before.coverage,
+    alphaCoverageAfter: after.coverage,
+  };
+}
+
 /**
  * Trims fully transparent margins so the stored asset is the subject's own
  * bounding box — the layout frame is bottom-anchored, and stray transparent
@@ -161,7 +238,8 @@ export async function removePortraitBackground(source: Buffer): Promise<Portrait
 
   const raw = provider === "removebg" ? await callRemoveBg(source) : await callPhotoRoom(source);
   const { buffer, width, height } = await normalizeCutout(raw);
-  const coverage = await measureCoverage(buffer);
+  const validated = await validateTransparentPortrait(buffer);
+  const coverage = validated.coverage;
 
   if (coverage < MIN_COVERAGE || coverage > MAX_COVERAGE) {
     throw new PortraitProcessingError(

@@ -42,6 +42,7 @@ import {
 
 export interface IntakeQuestionView {
   question_no: number;
+  canonicalKey: string | null;
   prompt: string;
   help: string | null;
   required: boolean;
@@ -835,7 +836,21 @@ export function IntakeForm({
                   <SaveIndicator status={questionSaveStatuses.get(currentQuestion.question_no) ?? "idle"} />
                 </span>
               </div>
-              {currentQuestion.help && <p className="mt-1 text-xs text-ink-soft">{currentQuestion.help}</p>}
+              {currentQuestion.help && (
+                <p
+                  className={cn(
+                    "mt-2 text-xs",
+                    currentQuestion.canonicalKey === "post_quote"
+                      ? "flex items-start gap-2 rounded-[12px] border border-brand/30 bg-brand/[0.07] p-3 font-semibold leading-relaxed text-ink"
+                      : "text-ink-soft",
+                  )}
+                >
+                  {currentQuestion.canonicalKey === "post_quote" ? (
+                    <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand" />
+                  ) : null}
+                  <span>{currentQuestion.help}</span>
+                </p>
+              )}
             </div>
             <RichEditor
               key={currentQuestion.question_no}

@@ -54,6 +54,7 @@ export async function POST(request: NextRequest) {
       footer: state.template.footer_text,
       questions: state.template.questions.map((q) => ({
         question_no: q.question_no,
+        canonicalKey: q.canonical_key,
         prompt: q.prompt,
         help: q.help_text,
         required: q.is_required,

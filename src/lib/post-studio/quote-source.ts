@@ -4,9 +4,10 @@ import type { PostQuoteSource } from "./types.ts";
  * Quote selection — pure, so the priority order is unit-tested rather than
  * buried in a query.
  *
- * The AI never writes a quote for a post: every candidate quote must already
- * exist as approved content. The order is fixed by the brief:
- *   featured quote -> quote approved inside the article -> life motto -> manual.
+ * The AI never writes a quote for a post. The only automatic source is the
+ * intake question carrying canonical_key=post_quote. `manual` remains an admin
+ * escape hatch when that answer is blank; legacy source types are retained in
+ * the type/schema only so existing rows stay readable.
  */
 
 export interface QuoteCandidate {
@@ -16,7 +17,14 @@ export interface QuoteCandidate {
   id?: string | null;
 }
 
-const PRIORITY: PostQuoteSource[] = ["featured_quote", "article_quote", "life_motto", "manual"];
+const PRIORITY: PostQuoteSource[] = [
+  "intake_quote",
+  "manual",
+  "featured_quote",
+  "article_quote",
+  "life_motto",
+  "none",
+];
 
 /**
  * `articles.excerpt` is not reliably a quote. In production 10 of 11 published
@@ -56,5 +64,5 @@ export function rankQuoteCandidates(candidates: QuoteCandidate[]): QuoteCandidat
 
 /** The quote a freshly created post should start with, or null if there is none. */
 export function pickQuote(candidates: QuoteCandidate[]): QuoteCandidate | null {
-  return rankQuoteCandidates(candidates)[0] ?? null;
+  return rankQuoteCandidates(candidates).find((candidate) => candidate.source === "intake_quote") ?? null;
 }

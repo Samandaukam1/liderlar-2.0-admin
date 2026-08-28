@@ -194,6 +194,7 @@ export interface PostLayout {
 }
 
 export type PostQuoteSource =
+  | "intake_quote"
   | "featured_quote"
   | "article_quote"
   | "life_motto"

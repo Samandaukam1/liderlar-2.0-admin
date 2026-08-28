@@ -171,6 +171,14 @@ Har bir javob uchun:
 - preserved_facts'ga o'sha javobdagi har bir aniq ma'lumotni (sana, son,
   tashkilot, mukofot, iqtibos) alohida element sifatida yoz.
 
+[CANONICAL_POST_QUOTE] bilan belgilangan javob POST UCHUN IQTIBOSDIR. Unga
+alohida qat'iy qoida qo'llanadi:
+- ma'nosini o'zgartirma va uchinchi shaxsga o'tkazma;
+- yangi fakt yoki so'z qo'shma;
+- kengaytirma, qisqartirma yoki bir nechta gapga aylantirma;
+- faqat zarur imlo va punktuatsiyani tuzat;
+- nomzodning original fikri va ohangi saqlansin.
+
 short_bio_items — nomzodni ifodalovchi juda qisqa yorliqlar ro'yxati:
 ko'pi bilan 5 ta, har biri 1-5 so'z va 40 belgidan oshmasin, to'liq gap bo'lmasin,
 nuqta bilan tugamasin. Masalan: ["Filolog", "Kitobxon", "Yosh volontyor"].
@@ -203,6 +211,7 @@ export interface ReviewInputAnswer {
   question_no: number;
   prompt: string;
   plain_text: string;
+  canonicalQuote?: boolean;
 }
 
 async function recordAiRun(params: {
@@ -301,7 +310,9 @@ export async function reviewIntakeAnswers(params: {
     `Nomzod ismi: ${params.candidateName}`,
     "Quyidagi savollar va nomzodning xom javoblari:",
     ...params.answers.map(
-      (a) => `#${a.question_no}. ${a.prompt}\nJAVOB: ${a.plain_text || "(bo'sh)"}`,
+      (a) =>
+        `${a.canonicalQuote ? "[CANONICAL_POST_QUOTE] " : ""}#${a.question_no}. ${a.prompt}\n` +
+        `JAVOB: ${a.plain_text || "(bo'sh)"}`,
     ),
   ].join("\n\n");
 

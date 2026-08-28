@@ -3,12 +3,22 @@ import { logAudit } from "@/lib/audit";
 import { buildPostLayout } from "./compose.ts";
 import { renderPostImage, toDataUri } from "./render.ts";
 import {
-  fetchPortraitSource,
+  activeProvider,
+  enhancePortraitColor,
   PortraitProcessingError,
   removePortraitBackground,
 } from "./portrait.ts";
 import { downloadPostAsset, uploadPostAsset } from "./storage.ts";
-import { getPost, loadCandidateSourceData, updatePost, type PostRecord } from "./repository.ts";
+import {
+  downloadCandidatePortraitSource,
+  getPost,
+  loadCandidateSourceData,
+  portraitSourceReference,
+  resolveCandidatePortraitSource,
+  synchronizePostSourceData,
+  updatePost,
+  type PostRecord,
+} from "./repository.ts";
 import { buildTelegramCaption, getTelegramSettings } from "./telegram.ts";
 import type { PostLayout, PostWarning } from "./types.ts";
 
@@ -27,29 +37,132 @@ export interface PreparePortraitResult {
   warning: PostWarning | null;
 }
 
+export const PORTRAIT_REMOVAL_FAILED_MESSAGE =
+  "Portret fonini olib tashlash amalga oshmadi";
+
+function postStudioLog(message: string, details: Record<string, unknown>): void {
+  // Details contain only internal ids, dimensions and provider labels. Storage
+  // paths, signed URLs, tokens and API keys are intentionally excluded.
+  console.info(`[post-studio] ${message}`, details);
+}
+
 /**
  * Produces the transparent cut-out and stores it beside the candidate. The
  * source photo is only read, never replaced.
  */
 export async function preparePortrait(post: PostRecord): Promise<PreparePortraitResult> {
-  if (!post.portraitSourceUrl) {
+  const source = await resolveCandidatePortraitSource(post.candidateId);
+  if (!source) {
+    await updatePost(post.id, {
+      status: "needs_review",
+      error: "Nomzod uchun manba rasm topilmadi.",
+    });
     return {
       processedUrl: null,
       warning: { code: "portrait_missing", message: "Nomzod uchun manba rasm topilmadi." },
     };
   }
 
+  postStudioLog("source portrait found", {
+    postId: post.id,
+    candidateId: post.candidateId,
+    selection: source.selection,
+    sourceKind: source.kind,
+  });
+
   try {
-    const source = await fetchPortraitSource(post.portraitSourceUrl);
-    const cutout = await removePortraitBackground(source);
+    // A previously stored transparent cut-out remains usable even when a
+    // provider key is temporarily absent. It can still receive the local RGB
+    // saturation pass without touching the original photo.
+    if (activeProvider() === "none" && post.portraitProcessedUrl) {
+      const existing = await downloadPostAsset(post.candidateId, "portrait-transparent");
+      if (existing) {
+        postStudioLog("portrait downloaded", {
+          postId: post.id,
+          candidateId: post.candidateId,
+          sourceKind: "existing_cutout",
+        });
+        postStudioLog("background removed", {
+          postId: post.id,
+          candidateId: post.candidateId,
+          reused: true,
+        });
+        const enhanced = await enhancePortraitColor(existing);
+        postStudioLog("saturation applied", {
+          postId: post.id,
+          candidateId: post.candidateId,
+          saturation: enhanced.saturation,
+          alphaPreserved:
+            enhanced.alphaCoverageBefore === enhanced.alphaCoverageAfter,
+        });
+        const processedUrl = await uploadPostAsset(
+          post.candidateId,
+          "portrait-transparent",
+          enhanced.buffer,
+        );
+        postStudioLog("portrait stored", {
+          postId: post.id,
+          candidateId: post.candidateId,
+          width: enhanced.width,
+          height: enhanced.height,
+          reused: true,
+        });
+        await updatePost(post.id, {
+          portrait_source_url: portraitSourceReference(source),
+          portrait_processed_url: processedUrl,
+          error: null,
+          metadata: {
+            ...post.metadata,
+            portrait: {
+              provider: "existing_cutout",
+              saturation: enhanced.saturation,
+              alphaPreserved: true,
+              width: enhanced.width,
+              height: enhanced.height,
+              processedAt: new Date().toISOString(),
+            },
+          },
+        });
+        return { processedUrl, warning: null };
+      }
+    }
+
+    const sourceBuffer = await downloadCandidatePortraitSource(source);
+    postStudioLog("portrait downloaded", {
+      postId: post.id,
+      candidateId: post.candidateId,
+      sourceKind: source.kind,
+    });
+    const cutout = await removePortraitBackground(sourceBuffer);
+    postStudioLog("background removed", {
+      postId: post.id,
+      candidateId: post.candidateId,
+      provider: cutout.provider,
+      coverage: Number(cutout.coverage.toFixed(4)),
+    });
+    const enhanced = await enhancePortraitColor(cutout.buffer);
+    postStudioLog("saturation applied", {
+      postId: post.id,
+      candidateId: post.candidateId,
+      saturation: enhanced.saturation,
+      alphaPreserved: enhanced.alphaCoverageBefore === enhanced.alphaCoverageAfter,
+    });
     const processedUrl = await uploadPostAsset(
       post.candidateId,
       "portrait-transparent",
-      cutout.buffer,
+      enhanced.buffer,
     );
+    postStudioLog("portrait stored", {
+      postId: post.id,
+      candidateId: post.candidateId,
+      width: enhanced.width,
+      height: enhanced.height,
+    });
 
     await updatePost(post.id, {
+      portrait_source_url: portraitSourceReference(source),
       portrait_processed_url: processedUrl,
+      error: null,
       metadata: {
         ...post.metadata,
         portrait: {
@@ -57,6 +170,8 @@ export async function preparePortrait(post: PostRecord): Promise<PreparePortrait
           coverage: Number(cutout.coverage.toFixed(4)),
           width: cutout.width,
           height: cutout.height,
+          saturation: enhanced.saturation,
+          alphaPreserved: enhanced.alphaCoverageBefore === enhanced.alphaCoverageAfter,
           processedAt: new Date().toISOString(),
         },
       },
@@ -64,20 +179,25 @@ export async function preparePortrait(post: PostRecord): Promise<PreparePortrait
 
     return { processedUrl, warning: null };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const detail = err instanceof Error ? err.message : String(err);
     const code =
       err instanceof PortraitProcessingError && err.code === "low_quality"
         ? ("portrait_low_quality" as const)
         : ("portrait_removal_failed" as const);
 
     await updatePost(post.id, {
+      status: "needs_review",
+      error: PORTRAIT_REMOVAL_FAILED_MESSAGE,
       metadata: {
         ...post.metadata,
-        portrait: { error: message, failedAt: new Date().toISOString() },
+        portrait: { error: detail, failedAt: new Date().toISOString() },
       },
     });
 
-    return { processedUrl: null, warning: { code, message } };
+    return {
+      processedUrl: post.portraitProcessedUrl,
+      warning: { code, message: PORTRAIT_REMOVAL_FAILED_MESSAGE },
+    };
   }
 }
 
@@ -85,7 +205,13 @@ export async function preparePortrait(post: PostRecord): Promise<PreparePortrait
 async function portraitHrefFor(post: PostRecord): Promise<string | null> {
   if (!post.portraitProcessedUrl) return null;
   const stored = await downloadPostAsset(post.candidateId, "portrait-transparent");
-  return stored ? toDataUri(stored, "image/png") : null;
+  if (!stored) return null;
+  postStudioLog("portrait attached to layout", {
+    postId: post.id,
+    candidateId: post.candidateId,
+    target: "final",
+  });
+  return toDataUri(stored, "image/png");
 }
 
 export async function buildLayoutForPost(post: PostRecord): Promise<PostLayout> {
@@ -107,12 +233,25 @@ export async function buildLayoutForPost(post: PostRecord): Promise<PostLayout> 
  * payload for no benefit — the browser can fetch the image itself.
  */
 export async function buildLayoutForPreview(post: PostRecord): Promise<PostLayout> {
+  // Verify the same stable storage object the final renderer downloads. A
+  // stale database URL must not make preview show an asset final cannot read.
+  const stored = post.portraitProcessedUrl
+    ? await downloadPostAsset(post.candidateId, "portrait-transparent")
+    : null;
+  const previewPortraitHref = stored ? post.portraitProcessedUrl : null;
+  if (previewPortraitHref) {
+    postStudioLog("portrait attached to layout", {
+      postId: post.id,
+      candidateId: post.candidateId,
+      target: "preview",
+    });
+  }
   return buildPostLayout({
     templateId: post.templateId,
     quote: post.quote,
     nameLines: post.nameLines,
     shortBioItems: post.shortBioItems,
-    portraitHref: post.portraitProcessedUrl,
+    portraitHref: previewPortraitHref,
     portraitTransform: post.portraitTransform,
     fontSizeOverrides: post.fontSizeOverrides,
   });
@@ -138,6 +277,8 @@ export async function renderAndStorePost(
   let post = await getPost(postId);
   if (!post) throw new Error("Post topilmadi.");
 
+  post = await synchronizePostSourceData(post);
+
   await updatePost(post.id, { status: "rendering", error: null });
 
   const warnings: PostWarning[] = [];
@@ -161,13 +302,21 @@ export async function renderAndStorePost(
     const allWarnings = [...warnings, ...layout.warnings];
     const needsReview = layout.needsReview || warnings.length > 0;
     const keepStatus = ["approved", "scheduled", "published"].includes(post.status);
+    const portraitWarning = allWarnings.find((warning) =>
+      ["portrait_missing", "portrait_removal_failed", "portrait_low_quality"].includes(
+        warning.code,
+      ),
+    );
 
     const updated = await updatePost(post.id, {
       status: needsReview ? "needs_review" : keepStatus ? post.status : "ready",
       rendered_image_url: imageUrl,
       rendered_thumbnail_url: thumbnailUrl,
       rendered_at: new Date().toISOString(),
-      error: null,
+      // Keep the actionable portrait failure visible after the renderer stores
+      // a review-only proof. Clearing it here made the retry instruction vanish
+      // even though no portrait had been attached to the post.
+      error: portraitWarning?.message ?? null,
       metadata: {
         ...post.metadata,
         warnings: allWarnings,
@@ -188,6 +337,15 @@ export async function renderAndStorePost(
       entityId: post.id,
       severity: needsReview ? "warning" : "info",
       metadata: { templateId: post.templateId, warnings: allWarnings.map((w) => w.code) },
+    });
+
+    postStudioLog("render complete", {
+      postId: post.id,
+      candidateId: post.candidateId,
+      width: rendered.width,
+      height: rendered.height,
+      portraitAttached: Boolean(layout.portrait.href),
+      templateId: post.templateId,
     });
 
     return { post: updated, layout, warnings: allWarnings };
@@ -266,12 +424,13 @@ export async function buildCaptionForPost(
 
 /** Refreshes and persists the caption, so the admin can edit it afterwards. */
 export async function refreshPostCaption(post: PostRecord): Promise<PostRecord> {
-  const { caption, warning } = await buildCaptionForPost(post);
+  const synchronized = await synchronizePostSourceData(post);
+  const { caption, warning } = await buildCaptionForPost(synchronized);
   if (!caption) {
-    return updatePost(post.id, {
+    return updatePost(synchronized.id, {
       status: "needs_review",
       error: warning?.message ?? "Caption yaratilmadi.",
     });
   }
-  return updatePost(post.id, { telegram_caption: caption });
+  return updatePost(synchronized.id, { telegram_caption: caption });
 }

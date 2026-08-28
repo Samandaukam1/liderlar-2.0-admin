@@ -77,6 +77,7 @@ interface StudioProps {
 }
 
 const QUOTE_SOURCE_LABELS: Record<string, string> = {
+  intake_quote: "Anketa 15-savoli",
   featured_quote: "Tanlangan iqtibos",
   article_quote: "Maqoladagi iqtibos",
   life_motto: "Hayotiy shior",
@@ -205,9 +206,11 @@ export function PostStudio(props: StudioProps) {
           </p>
         </Panel>
 
-        <Panel title="Mavjud iqtiboslar">
+        <Panel title="Canonical iqtibos">
           {candidate.quotes.length === 0 ? (
-            <p className="text-xs text-ink-soft">Tasdiqlangan iqtibos topilmadi.</p>
+            <p className="text-xs text-ink-soft">
+              15-savol javobi bo‘sh. Iqtibosni qo‘lda kiriting.
+            </p>
           ) : (
             <ul className="space-y-2">
               {candidate.quotes.map((q, i) => (
@@ -255,7 +258,7 @@ export function PostStudio(props: StudioProps) {
               onClick={() => run(() => preparePortraitAction(post.id))}
             >
               <Scissors className="h-3.5 w-3.5" />
-              Fonni olib tashlash
+              {post.portraitProcessedUrl ? "Qayta ishlash" : "Fonni olib tashlash"}
             </Button>
           ) : null}
         </Panel>
@@ -290,6 +293,12 @@ export function PostStudio(props: StudioProps) {
                 <li key={w.code}>{w.message}</li>
               ))}
             </ul>
+          </div>
+        ) : null}
+
+        {post.error ? (
+          <div className="rounded-card border border-coral/50 bg-coral/10 p-3 text-xs font-semibold text-coral">
+            {post.error}
           </div>
         ) : null}
 

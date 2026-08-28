@@ -1,10 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
   MAX_FACT_RETRIES,
   enforceFactPreservation,
   type AnswerImproveRequest,
 } from "../src/lib/intake/answer-improvement.ts";
+import { preserveCanonicalPostQuote } from "../src/lib/intake/canonical-quote.ts";
 
 const ORIGINAL = "2024-yilda 3 ta korxona bilan ish boshladim, hozir 23 ta korxonaga xizmat ko'rsataman.";
 const FAITHFUL =
@@ -130,4 +132,29 @@ test("an answer with no extractable facts never triggers a retry", async () => {
   assert.equal(calls.length, 0);
   assert.equal(outcome.report.ok, true);
   assert.equal(outcome.fellBackToOriginal, false);
+});
+
+test("Jaxongir never generatively rewrites the canonical post quote", async () => {
+  const original = "  Xatolar yo‘lning bir qismidir, muvaffaqiyatsizlik emas.  ";
+  const preserved = preserveCanonicalPostQuote(original);
+  let calls = 0;
+  const outcome = await enforceFactPreservation({
+    original,
+    questionPrompt: "Canonical iqtibos",
+    firstImproved: preserved,
+    improve: async () => {
+      calls += 1;
+      return "AI o‘ylab topgan boshqa iqtibos";
+    },
+    maxRetries: 0,
+  });
+  assert.equal(calls, 0);
+  assert.equal(outcome.improvedText, preserved);
+
+  const service = fs.readFileSync("src/lib/intake/improve-service.ts", "utf8");
+  assert.match(
+    service,
+    /firstImproved: canonicalQuote[\s\S]*?preserveCanonicalPostQuote\(original\)/,
+  );
+  assert.match(service, /maxRetries: canonicalQuote \? 0/);
 });

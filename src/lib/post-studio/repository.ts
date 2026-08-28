@@ -1,7 +1,12 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { normalizeShortBioItems, splitShortBioItems } from "@/lib/candidates/short-bio";
-import { signIntakeFileUrl } from "@/lib/intake/data";
+import { INTAKE_BUCKET } from "@/lib/intake/constants";
+import {
+  CANONICAL_POST_QUOTE_KEY,
+  isCanonicalPostQuoteQuestion,
+  preserveCanonicalPostQuote,
+} from "@/lib/intake/canonical-quote";
 import { buildCandidateArticleUrl } from "./site-origin.ts";
 import { pickQuote, rankQuoteCandidates, type QuoteCandidate } from "./quote-source.ts";
 import { splitNameIntoLines } from "./name-lines.ts";
@@ -42,50 +47,274 @@ export interface CandidateSourceData {
   /** False when public_web.base_url is unset — the admin must confirm a URL. */
   publicWebConfigured: boolean;
   portraitSourceUrl: string | null;
+  canonicalQuote: CanonicalIntakeQuote | null;
 }
 
-/**
- * Portrait source priority, per the brief:
- *   final candidate photo -> selected AI photo -> selected original intake photo.
- * The original is never overwritten; this only decides what to feed the
- * background remover.
- */
-async function resolvePortraitSource(
+export interface CanonicalIntakeQuote {
+  intakeId: string;
+  questionId: string;
+  answerId: string | null;
+  originalText: string;
+  text: string;
+}
+
+export type CandidatePortraitSource =
+  | {
+      kind: "storage";
+      bucket: string;
+      path: string;
+      sourceId: string;
+      selection: "confirmed_original" | "confirmed_ai" | "primary_photo";
+    }
+  | {
+      kind: "remote";
+      url: string;
+      sourceId: string;
+      selection: "candidate_avatar";
+    };
+
+interface CandidateIntakeRef {
+  id: string;
+  templateId: string;
+  selectedPhotoSource: string | null;
+  selectedOriginalAttachmentId: string | null;
+  selectedPhotoEditId: string | null;
+}
+
+async function resolveCandidateIntake(
   candidateId: string,
-  avatarUrl: string | null,
-): Promise<string | null> {
-  if (avatarUrl?.trim()) return avatarUrl.trim();
+  sourceIntakeId?: string | null,
+): Promise<CandidateIntakeRef | null> {
+  const db = createSupabaseAdminClient();
+  let query = db
+    .from("candidate_intakes")
+    .select(
+      "id, template_id, selected_photo_source, selected_original_attachment_id, selected_photo_edit_id",
+    );
+
+  query = sourceIntakeId
+    ? query.eq("id", sourceIntakeId)
+    : query.eq("candidate_id", candidateId).order("created_at", { ascending: false }).limit(1);
+
+  const { data } = await query.maybeSingle();
+  if (!data?.id || !data.template_id) return null;
+  return {
+    id: data.id as string,
+    templateId: data.template_id as string,
+    selectedPhotoSource: (data.selected_photo_source as string | null) ?? null,
+    selectedOriginalAttachmentId:
+      (data.selected_original_attachment_id as string | null) ?? null,
+    selectedPhotoEditId: (data.selected_photo_edit_id as string | null) ?? null,
+  };
+}
+
+/** Resolves the answer by semantic key/id, never by array position. */
+export async function loadCanonicalIntakeQuote(
+  candidateId: string,
+  sourceIntakeId?: string | null,
+): Promise<CanonicalIntakeQuote | null> {
+  const intake = await resolveCandidateIntake(candidateId, sourceIntakeId);
+  if (!intake) return null;
 
   const db = createSupabaseAdminClient();
-  const { data: intake } = await db
-    .from("candidate_intakes")
-    .select("id, selected_photo_source, selected_photo_edit_id, selected_original_attachment_id")
-    .eq("candidate_id", candidateId)
-    .order("created_at", { ascending: false })
+  let { data: question } = await db
+    .from("candidate_intake_questions")
+    .select("id, question_no, canonical_key, prompt")
+    .eq("template_id", intake.templateId)
+    .eq("canonical_key", CANONICAL_POST_QUOTE_KEY)
     .limit(1)
     .maybeSingle();
 
-  if (!intake) return null;
+  // Compatibility for historical templates which have not yet been tagged.
+  if (!question) {
+    const { data: legacyQuestions } = await db
+      .from("candidate_intake_questions")
+      .select("id, question_no, canonical_key, prompt")
+      .eq("template_id", intake.templateId)
+      .order("question_no");
+    question =
+      legacyQuestions?.find((row) =>
+        isCanonicalPostQuoteQuestion({
+          canonical_key: row.canonical_key as string | null,
+          prompt: row.prompt as string,
+          question_no: row.question_no as number,
+        }),
+      ) ?? null;
+  }
+  if (!question) return null;
 
-  if (intake.selected_photo_edit_id) {
+  const { data: answer } = await db
+    .from("candidate_intake_answers")
+    .select("id, answer_state, plain_text, final_text, editor_state")
+    .eq("intake_id", intake.id)
+    .eq("question_id", question.id)
+    .maybeSingle();
+
+  const originalText = preserveCanonicalPostQuote(answer?.plain_text as string | null);
+  // Only an explicitly manual editor value may replace the raw wording. Old
+  // generative ai_improved/final values are intentionally not trusted here.
+  const manuallyEdited =
+    answer?.editor_state === "manual"
+      ? preserveCanonicalPostQuote(answer.final_text as string | null)
+      : "";
+  const text = answer?.answer_state === "answered" ? manuallyEdited || originalText : "";
+
+  return {
+    intakeId: intake.id,
+    questionId: question.id as string,
+    answerId: (answer?.id as string | null) ?? null,
+    originalText,
+    text,
+  };
+}
+
+function isUsablePhotoAttachment(
+  row: Record<string, unknown> | null | undefined,
+): row is Record<string, unknown> & { id: string; bucket: string; path: string } {
+  return Boolean(
+    row?.id &&
+      row.path &&
+      row.status === "active" &&
+      (row.kind === "photo" || row.kind === "image"),
+  );
+}
+
+async function loadAttachmentById(
+  attachmentId: string,
+): Promise<Record<string, unknown> | null> {
+  const db = createSupabaseAdminClient();
+  const { data } = await db
+    .from("candidate_intake_attachments")
+    .select("id, bucket, path, kind, is_primary_photo, status, mime_type, answer_id")
+    .eq("id", attachmentId)
+    .maybeSingle();
+  return (data as Record<string, unknown> | null) ?? null;
+}
+
+/**
+ * Selects the confirmed/primary intake portrait by explicit metadata. A random
+ * first attachment is never used; the copied candidate avatar is legacy-only
+ * fallback for profiles that predate intake attachments.
+ */
+export async function resolveCandidatePortraitSource(
+  candidateId: string,
+  options: { sourceIntakeId?: string | null; avatarUrl?: string | null } = {},
+): Promise<CandidatePortraitSource | null> {
+  const db = createSupabaseAdminClient();
+  let sourceIntakeId = options.sourceIntakeId;
+  let avatarUrl = options.avatarUrl;
+  if (sourceIntakeId === undefined || avatarUrl === undefined) {
+    const { data: candidate } = await db
+      .from("candidates")
+      .select("source_intake_id, avatar_url")
+      .eq("id", candidateId)
+      .maybeSingle();
+    if (sourceIntakeId === undefined) {
+      sourceIntakeId = (candidate?.source_intake_id as string | null) ?? null;
+    }
+    if (avatarUrl === undefined) avatarUrl = (candidate?.avatar_url as string | null) ?? null;
+  }
+  const intake = await resolveCandidateIntake(candidateId, sourceIntakeId);
+
+  if (intake?.selectedPhotoSource === "ai" && intake.selectedPhotoEditId) {
     const { data: edit } = await db
       .from("candidate_intake_photo_edits")
-      .select("result_path")
-      .eq("id", intake.selected_photo_edit_id)
+      .select("id, status, result_bucket, result_path, processed_attachment_id")
+      .eq("id", intake.selectedPhotoEditId)
       .maybeSingle();
-    if (edit?.result_path) return signIntakeFileUrl(edit.result_path as string);
+    if (edit?.status === "completed") {
+      const processedAttachmentId = edit.processed_attachment_id as string | null;
+      const attachment = processedAttachmentId
+        ? await loadAttachmentById(processedAttachmentId)
+        : null;
+      if (isUsablePhotoAttachment(attachment)) {
+        return {
+          kind: "storage",
+          bucket: (attachment.bucket as string) || INTAKE_BUCKET,
+          path: attachment.path as string,
+          sourceId: attachment.id as string,
+          selection: "confirmed_ai",
+        };
+      }
+      if (edit.result_path) {
+        return {
+          kind: "storage",
+          bucket: (edit.result_bucket as string | null) || INTAKE_BUCKET,
+          path: edit.result_path as string,
+          sourceId: edit.id as string,
+          selection: "confirmed_ai",
+        };
+      }
+    }
   }
 
-  if (intake.selected_original_attachment_id) {
-    const { data: attachment } = await db
+  if (intake?.selectedOriginalAttachmentId) {
+    const attachment = await loadAttachmentById(intake.selectedOriginalAttachmentId);
+    if (isUsablePhotoAttachment(attachment)) {
+      return {
+        kind: "storage",
+        bucket: (attachment.bucket as string) || INTAKE_BUCKET,
+        path: attachment.path as string,
+        sourceId: attachment.id as string,
+        selection: "confirmed_original",
+      };
+    }
+  }
+
+  if (intake) {
+    const { data: primary } = await db
       .from("candidate_intake_attachments")
-      .select("storage_path")
-      .eq("id", intake.selected_original_attachment_id)
+      .select("id, bucket, path, kind, is_primary_photo, status, mime_type, answer_id")
+      .eq("intake_id", intake.id)
+      .eq("is_primary_photo", true)
+      .eq("status", "active")
+      .in("kind", ["photo", "image"])
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
-    if (attachment?.storage_path) return signIntakeFileUrl(attachment.storage_path as string);
+    if (isUsablePhotoAttachment(primary as Record<string, unknown> | null)) {
+      return {
+        kind: "storage",
+        bucket: (primary!.bucket as string) || INTAKE_BUCKET,
+        path: primary!.path as string,
+        sourceId: primary!.id as string,
+        selection: "primary_photo",
+      };
+    }
   }
 
+  if (avatarUrl?.trim()) {
+    return {
+      kind: "remote",
+      url: avatarUrl.trim(),
+      sourceId: candidateId,
+      selection: "candidate_avatar",
+    };
+  }
   return null;
+}
+
+/** A token-free locator safe to persist/log; private files are still downloaded server-side. */
+export function portraitSourceReference(source: CandidatePortraitSource | null): string | null {
+  if (!source) return null;
+  return source.kind === "remote"
+    ? source.url
+    : `supabase-storage://${encodeURIComponent(source.bucket)}/${encodeURIComponent(source.path)}`;
+}
+
+export async function downloadCandidatePortraitSource(
+  source: CandidatePortraitSource,
+): Promise<Buffer> {
+  if (source.kind === "remote") {
+    const response = await fetch(source.url);
+    if (!response.ok) throw new Error(`remote portrait download failed (${response.status})`);
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  const db = createSupabaseAdminClient();
+  const { data, error } = await db.storage.from(source.bucket).download(source.path);
+  if (error || !data) throw new Error(`private portrait download failed: ${error?.message ?? "empty"}`);
+  return Buffer.from(await data.arrayBuffer());
 }
 
 export async function loadCandidateSourceData(
@@ -93,22 +322,19 @@ export async function loadCandidateSourceData(
 ): Promise<CandidateSourceData | null> {
   const db = createSupabaseAdminClient();
 
-  // Candidate, quotes and article are independent reads — run them together.
-  const [{ data: candidate }, { data: quoteRows }, { data: articleRows }] = await Promise.all([
+  // Candidate and article are independent reads — run them together. Quote and
+  // portrait need the candidate's source_intake_id, so they follow below.
+  const [{ data: candidate }, { data: articleRows }] = await Promise.all([
     db
       .from("candidates")
-      .select("id, full_name, slug, avatar_url, description_items, short_bio, deleted_at")
+      .select(
+        "id, full_name, slug, avatar_url, description_items, short_bio, source_intake_id, deleted_at",
+      )
       .eq("id", candidateId)
       .maybeSingle(),
     db
-      .from("quotes")
-      .select("id, text, is_featured, status")
-      .eq("candidate_id", candidateId)
-      .order("is_featured", { ascending: false })
-      .limit(20),
-    db
       .from("articles")
-      .select("id, slug, status, published_at, excerpt")
+      .select("id, slug, status, published_at")
       .eq("candidate_id", candidateId)
       .is("deleted_at", null)
       .order("published_at", { ascending: false, nullsFirst: false })
@@ -123,16 +349,25 @@ export async function loadCandidateSourceData(
       ? await buildCandidateArticleUrl(candidate.slug as string)
       : null;
 
-  const quotes: QuoteCandidate[] = (quoteRows ?? []).map((row) => ({
-    id: row.id as string,
-    text: (row.text as string) ?? "",
-    source: (row.is_featured ? "featured_quote" : "life_motto") as PostQuoteSource,
-  }));
+  const sourceIntakeId = (candidate.source_intake_id as string | null) ?? null;
+  const [canonicalQuote, portraitSource, publicWebConfigured] = await Promise.all([
+    loadCanonicalIntakeQuote(candidate.id as string, sourceIntakeId),
+    resolveCandidatePortraitSource(candidate.id as string, {
+      sourceIntakeId,
+      avatarUrl: (candidate.avatar_url as string | null) ?? null,
+    }),
+    buildCandidateArticleUrl("probe").then((url) => url !== null),
+  ]);
 
-  // An excerpt approved on the published article is the second-priority quote.
-  if (article?.excerpt) {
-    quotes.push({ id: null, text: article.excerpt as string, source: "article_quote" });
-  }
+  const quotes: QuoteCandidate[] = canonicalQuote?.text
+    ? [
+        {
+          id: canonicalQuote.answerId,
+          text: canonicalQuote.text,
+          source: "intake_quote" as PostQuoteSource,
+        },
+      ]
+    : [];
 
   const rawItems = Array.isArray(candidate.description_items)
     ? (candidate.description_items as string[])
@@ -154,11 +389,9 @@ export async function loadCandidateSourceData(
         }
       : null,
     articleUrl,
-    publicWebConfigured: (await buildCandidateArticleUrl("probe")) !== null,
-    portraitSourceUrl: await resolvePortraitSource(
-      candidate.id as string,
-      (candidate.avatar_url as string | null) ?? null,
-    ),
+    publicWebConfigured,
+    portraitSourceUrl: portraitSourceReference(portraitSource),
+    canonicalQuote,
   };
 }
 
@@ -347,13 +580,63 @@ export interface CreatePostInput {
 }
 
 /**
+ * Refreshes automatic source fields before every render/caption generation.
+ * Manual quote overrides are respected; every other legacy quote source is
+ * replaced with the canonical intake answer (or cleared for human review).
+ */
+export async function synchronizePostSourceData(post: PostRecord): Promise<PostRecord> {
+  const source = await loadCandidateSourceData(post.candidateId);
+  if (!source) return post;
+
+  const patch: Row = {};
+  const sourceReference = source.portraitSourceUrl;
+  if (sourceReference !== post.portraitSourceUrl) {
+    patch.portrait_source_url = sourceReference;
+  }
+
+  if (post.quoteSource !== "manual") {
+    const canonical = source.canonicalQuote;
+    patch.quote = canonical?.text ?? "";
+    patch.quote_source = canonical?.text ? "intake_quote" : "none";
+    patch.metadata = {
+      ...post.metadata,
+      quote_provenance: canonical
+        ? {
+            canonical_key: CANONICAL_POST_QUOTE_KEY,
+            intake_id: canonical.intakeId,
+            question_id: canonical.questionId,
+            answer_id: canonical.answerId,
+            original_preserved: canonical.originalText === canonical.text,
+          }
+        : {
+            canonical_key: CANONICAL_POST_QUOTE_KEY,
+            missing: true,
+          },
+    };
+    if (!canonical?.text) {
+      patch.status = "needs_review";
+      patch.error = "15-savol iqtibosi bo‘sh. Iqtibosni qo‘lda kiriting.";
+    }
+  }
+
+  const changed =
+    Object.keys(patch).length > 0 &&
+    (patch.portrait_source_url !== post.portraitSourceUrl ||
+      patch.quote !== post.quote ||
+      patch.quote_source !== post.quoteSource ||
+      patch.status !== undefined ||
+      patch.metadata !== undefined);
+  return changed ? updatePost(post.id, patch) : post;
+}
+
+/**
  * Creates the draft for a candidate, seeding it from approved content only —
  * quote by priority, name split into design lines, short bio as already
  * normalized. Returns the existing post if one is already there.
  */
 export async function createPostDraft(input: CreatePostInput): Promise<PostRecord> {
   const existing = await getPostByCandidate(input.candidateId);
-  if (existing) return existing;
+  if (existing) return synchronizePostSourceData(existing);
 
   const source = await loadCandidateSourceData(input.candidateId);
   if (!source) throw new Error("Nomzod topilmadi.");
@@ -372,7 +655,20 @@ export async function createPostDraft(input: CreatePostInput): Promise<PostRecor
       name_lines: splitNameIntoLines(source.fullName),
       short_bio_items: source.shortBioItems,
       portrait_source_url: source.portraitSourceUrl,
-      status: "draft",
+      status: quote ? "draft" : "needs_review",
+      error: quote ? null : "15-savol iqtibosi bo‘sh. Iqtibosni qo‘lda kiriting.",
+      metadata: {
+        quote_provenance: source.canonicalQuote
+          ? {
+              canonical_key: CANONICAL_POST_QUOTE_KEY,
+              intake_id: source.canonicalQuote.intakeId,
+              question_id: source.canonicalQuote.questionId,
+              answer_id: source.canonicalQuote.answerId,
+              original_preserved:
+                source.canonicalQuote.originalText === source.canonicalQuote.text,
+            }
+          : { canonical_key: CANONICAL_POST_QUOTE_KEY, missing: true },
+      },
       created_by: input.createdBy ?? null,
     })
     .select(DETAIL_COLUMNS)

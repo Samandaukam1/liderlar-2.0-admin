@@ -49,6 +49,7 @@ export async function getIntakeSettings(): Promise<IntakeSettings> {
 export interface IntakeQuestion {
   id: string;
   question_no: number;
+  canonical_key: string | null;
   prompt: string;
   help_text: string | null;
   answer_type: string;
@@ -78,7 +79,9 @@ export async function getActiveTemplate(): Promise<IntakeTemplate | null> {
 
   const { data: questions } = await admin
     .from("candidate_intake_questions")
-    .select("id, question_no, prompt, help_text, answer_type, is_required, allow_no_answer")
+    .select(
+      "id, question_no, canonical_key, prompt, help_text, answer_type, is_required, allow_no_answer",
+    )
     .eq("template_id", tpl.id)
     .order("question_no");
 

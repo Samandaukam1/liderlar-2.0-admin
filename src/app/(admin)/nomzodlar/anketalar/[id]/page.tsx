@@ -40,7 +40,7 @@ export default async function IntakeDetailPage({
   const [{ data: tpl }, { data: questions }, { data: answers }, { data: attachments }, { data: edits }, { data: link }, settings] =
     await Promise.all([
       admin.from("candidate_intake_templates").select("*").eq("id", intake.template_id).maybeSingle(),
-      admin.from("candidate_intake_questions").select("id, question_no, prompt, help_text, is_required, allow_no_answer, answer_type").eq("template_id", intake.template_id).order("question_no"),
+      admin.from("candidate_intake_questions").select("id, question_no, canonical_key, prompt, help_text, is_required, allow_no_answer, answer_type").eq("template_id", intake.template_id).order("question_no"),
       admin.from("candidate_intake_answers").select("*").eq("intake_id", id).order("question_no"),
       admin.from("candidate_intake_attachments").select("*").eq("intake_id", id).eq("status", "active"),
       admin.from("candidate_intake_photo_edits").select("*").eq("intake_id", id).order("created_at", { ascending: false }),
@@ -48,7 +48,7 @@ export default async function IntakeDetailPage({
       getIntakeSettings(),
     ]);
 
-  const questionRows = (questions ?? []) as { id: string; question_no: number; prompt: string; help_text: string | null; is_required: boolean; allow_no_answer: boolean; answer_type: string }[];
+  const questionRows = (questions ?? []) as { id: string; question_no: number; canonical_key: string | null; prompt: string; help_text: string | null; is_required: boolean; allow_no_answer: boolean; answer_type: string }[];
   const answerRows = (answers ?? []) as Record<string, unknown>[];
   const attachmentRows = (attachments ?? []) as Record<string, unknown>[];
   const editRows = (edits ?? []) as Record<string, unknown>[];
@@ -74,6 +74,7 @@ export default async function IntakeDetailPage({
     footer: (tpl?.footer_text as string) ?? "",
     questions: questionRows.map((q) => ({
       question_no: q.question_no,
+      canonicalKey: q.canonical_key,
       prompt: q.prompt,
       help: q.help_text,
       required: q.is_required,

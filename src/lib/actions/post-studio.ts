@@ -128,6 +128,7 @@ export async function savePostContentAction(formData: FormData): Promise<PostAct
     });
 
     const result = await renderAndStorePost(postId, { actorId: ctx.userId });
+    await refreshPostCaption(result.post);
     revalidatePost(postId);
     return {
       ok: true,
@@ -146,6 +147,7 @@ export async function rerenderPostAction(postId: string): Promise<PostActionResu
       actorId: ctx.userId,
       autoPreparePortrait: true,
     });
+    await refreshPostCaption(result.post);
     revalidatePost(postId);
     return {
       ok: true,

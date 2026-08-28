@@ -5,6 +5,10 @@ import { enforceFactPreservation } from "@/lib/intake/answer-improvement";
 import { joinShortBioItems, normalizeShortBioItems } from "@/lib/candidates/short-bio";
 import type { IntakeReview } from "@/lib/intake/ai";
 import type { ShortBioRejection } from "@/lib/candidates/short-bio";
+import {
+  isCanonicalPostQuoteQuestion,
+  preserveCanonicalPostQuote,
+} from "@/lib/intake/canonical-quote";
 
 /**
  * The Jaxongir AI editorial pass over an intake's answers, extracted from the
@@ -75,17 +79,34 @@ export async function runIntakeAiImprovement(
   if (!intake) throw new IntakeImprovementError("Anketa topilmadi", "not_found");
 
   const [{ data: questions }, { data: answers }] = await Promise.all([
-    db.from("candidate_intake_questions").select("question_no, prompt").eq("template_id", intake.template_id).order("question_no"),
-    db.from("candidate_intake_answers").select("id, question_no, plain_text, answer_state").eq("intake_id", intakeId).order("question_no"),
+    db.from("candidate_intake_questions").select("id, question_no, canonical_key, prompt").eq("template_id", intake.template_id).order("question_no"),
+    db.from("candidate_intake_answers").select("id, question_id, question_no, plain_text, answer_state").eq("intake_id", intakeId).order("question_no"),
   ]);
 
   const promptByNo = new Map((questions ?? []).map((q) => [q.question_no as number, q.prompt as string]));
+  const canonicalQuestionIds = new Set(
+    (questions ?? [])
+      .filter((q) =>
+        isCanonicalPostQuoteQuestion({
+          canonical_key: q.canonical_key as string | null,
+          prompt: q.prompt as string,
+          question_no: q.question_no as number,
+        }),
+      )
+      .map((q) => q.id as string),
+  );
+  const canonicalQuestionNos = new Set(
+    (questions ?? [])
+      .filter((q) => canonicalQuestionIds.has(q.id as string))
+      .map((q) => q.question_no as number),
+  );
   const reviewInput = (answers ?? [])
     .filter((a) => (a.answer_state as string) === "answered" && (a.plain_text as string)?.trim())
     .map((a) => ({
       question_no: a.question_no as number,
       prompt: promptByNo.get(a.question_no as number) ?? "",
       plain_text: a.plain_text as string,
+      canonicalQuote: canonicalQuestionIds.has(a.question_id as string),
     }));
 
   if (reviewInput.length === 0) {
@@ -118,11 +139,18 @@ export async function runIntakeAiImprovement(
 
     for (const a of review.answers) {
       const original = originalByNo.get(a.question_no) ?? a.original_text ?? "";
+      // The canonical post quote never goes through a generative rewrite. The
+      // structured review still sees it (for the biography), but its per-answer
+      // saved value is deterministically kept in the candidate's own voice.
+      const canonicalQuote = canonicalQuestionNos.has(a.question_no);
       const outcome = await enforceFactPreservation({
         original,
         questionPrompt: promptByNoForRetry.get(a.question_no) ?? "",
-        firstImproved: a.improved_text,
+        firstImproved: canonicalQuote
+          ? preserveCanonicalPostQuote(original)
+          : a.improved_text,
         improve: improveAnswerPreservingFacts,
+        maxRetries: canonicalQuote ? 0 : undefined,
       });
 
       if (!outcome.report.ok) {

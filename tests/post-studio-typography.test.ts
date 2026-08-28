@@ -422,7 +422,7 @@ test("a missing quote or name is reported instead of rendering an empty post", (
   assert.equal(layout.needsReview, true);
 });
 
-test("a short-bio badge row is never promoted into the poster as a quote", async () => {
+test("only the canonical intake answer is promoted into the poster as a quote", async () => {
   const { pickQuote, rankQuoteCandidates, looksLikeBadgeRow } = await import(
     "../src/lib/post-studio/quote-source.ts"
   );
@@ -434,11 +434,15 @@ test("a short-bio badge row is never promoted into the poster as a quote", async
 
   assert.equal(pickQuote([{ text: badgeRow, source: "article_quote" }]), null);
 
-  // A genuine quote alongside it still wins.
+  // Even a genuine legacy featured quote cannot replace the intake answer.
   const ranked = rankQuoteCandidates([
     { text: badgeRow, source: "article_quote" },
     { text: "Orzular tomon yurish shart", source: "featured_quote" },
+    { text: "15-savol javobi", source: "intake_quote" },
   ]);
-  assert.equal(ranked.length, 1);
-  assert.equal(ranked[0].text, "Orzular tomon yurish shart");
+  assert.equal(pickQuote(ranked)?.text, "15-savol javobi");
+  assert.equal(
+    pickQuote([{ text: "Orzular tomon yurish shart", source: "featured_quote" }]),
+    null,
+  );
 });

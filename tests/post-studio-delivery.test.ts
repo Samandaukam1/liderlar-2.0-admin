@@ -11,11 +11,23 @@ import {
   TELEGRAM_CAPTION_LIMIT,
 } from "../src/lib/post-studio/telegram-markdown.ts";
 import { pickQuote, rankQuoteCandidates } from "../src/lib/post-studio/quote-source.ts";
-import { measureCoverage } from "../src/lib/post-studio/portrait.ts";
+import {
+  enhancePortraitColor,
+  measureCoverage,
+  POST_PORTRAIT_SATURATION,
+  validateTransparentPortrait,
+} from "../src/lib/post-studio/portrait.ts";
 import { buildPostLayout } from "../src/lib/post-studio/compose.ts";
 import { renderPostImage, toDataUri } from "../src/lib/post-studio/render.ts";
 import { splitNameIntoLines } from "../src/lib/post-studio/name-lines.ts";
-import { POST_OUTPUT_SIZE } from "../src/lib/post-studio/types.ts";
+import { buildOverlaySvgBody } from "../src/lib/post-studio/svg.ts";
+import { POST_OUTPUT_SIZE, POST_TEMPLATE_IDS } from "../src/lib/post-studio/types.ts";
+import {
+  CANONICAL_POST_QUOTE_HELP_TEXT,
+  CANONICAL_POST_QUOTE_KEY,
+  isCanonicalPostQuoteQuestion,
+  preserveCanonicalPostQuote,
+} from "../src/lib/intake/canonical-quote.ts";
 
 /* ------------------------------------------------------------------ *
  * Telegram MarkdownV2
@@ -90,18 +102,20 @@ test("an over-long caption is detected before Telegram rejects it", () => {
  * Quote priority
  * ------------------------------------------------------------------ */
 
-test("quotes are ranked featured -> article -> motto -> manual", () => {
+test("only the canonical intake quote can seed an automatic post", () => {
   const ranked = rankQuoteCandidates([
     { text: "Qo‘lda", source: "manual" },
     { text: "Shior", source: "life_motto" },
     { text: "Tanlangan", source: "featured_quote" },
     { text: "Maqoladan", source: "article_quote" },
+    { text: "Nomzodning 15-savol javobi", source: "intake_quote" },
   ]);
-  assert.deepEqual(
-    ranked.map((q) => q.source),
-    ["featured_quote", "article_quote", "life_motto", "manual"],
+  assert.equal(ranked[0].source, "intake_quote");
+  assert.equal(pickQuote(ranked)?.text, "Nomzodning 15-savol javobi");
+  assert.equal(
+    pickQuote([{ text: "Maqoladan taxmin", source: "article_quote" }]),
+    null,
   );
-  assert.equal(pickQuote(ranked)?.text, "Tanlangan");
 });
 
 test("blank and duplicate quotes are dropped, and none are invented", () => {
@@ -112,6 +126,36 @@ test("blank and duplicate quotes are dropped, and none are invented", () => {
   ]);
   assert.equal(ranked.length, 1);
   assert.equal(pickQuote([]), null);
+});
+
+test("canonical quote identity survives question reordering and preserves the raw idea", () => {
+  assert.equal(
+    isCanonicalPostQuoteQuestion({
+      canonical_key: CANONICAL_POST_QUOTE_KEY,
+      question_no: 22,
+      prompt: "Tahrirlangan ko‘rinish",
+    }),
+    true,
+  );
+  assert.equal(
+    isCanonicalPostQuoteQuestion({
+      canonical_key: null,
+      question_no: 7,
+      prompt: "Boshqa yoshlar uchun qanday maslahat yoki motivatsion fikr bildirasiz?",
+    }),
+    true,
+  );
+  assert.equal(
+    preserveCanonicalPostQuote("  Xatolar yo‘lning bir qismidir,\n muvaffaqiyatsizlik emas.  "),
+    "Xatolar yo‘lning bir qismidir, muvaffaqiyatsizlik emas.",
+  );
+
+  const migration = fs.readFileSync(
+    "supabase/migrations/20260827220000_canonical_intake_quote.sql",
+    "utf8",
+  );
+  assert.ok(migration.includes(CANONICAL_POST_QUOTE_HELP_TEXT));
+  assert.match(migration, /canonical_key = 'post_quote'/);
 });
 
 /* ------------------------------------------------------------------ *
@@ -161,6 +205,50 @@ test("an empty or fully opaque matte is outside the accepted quality band", asyn
   assert.ok((await measureCoverage(solid)) > 0.88, "an untouched photo is rejected");
 });
 
+test("saturation changes RGB while preserving the alpha channel byte-for-byte", async () => {
+  const cutout = await sharp({
+    create: {
+      width: 120,
+      height: 180,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .composite([
+      {
+        input: await sharp({
+          create: {
+            width: 70,
+            height: 130,
+            channels: 4,
+            background: { r: 120, g: 80, b: 70, alpha: 0.72 },
+          },
+        })
+          .png()
+          .toBuffer(),
+        top: 40,
+        left: 25,
+      },
+    ])
+    .png()
+    .toBuffer();
+
+  const enhanced = await enhancePortraitColor(cutout);
+  assert.equal(enhanced.saturation, POST_PORTRAIT_SATURATION);
+  assert.deepEqual(
+    await sharp(enhanced.buffer).extractChannel("alpha").raw().toBuffer(),
+    await sharp(cutout).extractChannel("alpha").raw().toBuffer(),
+    "alpha bytes are unchanged",
+  );
+  assert.notDeepEqual(
+    await sharp(enhanced.buffer).removeAlpha().raw().toBuffer(),
+    await sharp(cutout).removeAlpha().raw().toBuffer(),
+    "RGB pixels receive the colour lift",
+  );
+  const validated = await validateTransparentPortrait(enhanced.buffer);
+  assert.ok(validated.coverage > 0 && validated.coverage < 0.88);
+});
+
 /* ------------------------------------------------------------------ *
  * End-to-end render
  * ------------------------------------------------------------------ */
@@ -205,6 +293,138 @@ test("a post renders as a 1080x1080 PNG with a 320px thumbnail", async () => {
   const thumb = await sharp(rendered.thumbnail).metadata();
   assert.equal(thumb.width, 320);
   assert.equal(thumb.format, "webp");
+});
+
+test("all six templates render a visible portrait layer inside the canvas", async () => {
+  const portrait = await sharp({
+    create: {
+      width: 300,
+      height: 600,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .composite([
+      {
+        input: await sharp({
+          create: {
+            width: 230,
+            height: 520,
+            channels: 4,
+            background: { r: 244, g: 90, b: 42, alpha: 1 },
+          },
+        })
+          .png()
+          .toBuffer(),
+        top: 80,
+        left: 35,
+      },
+    ])
+    .png()
+    .toBuffer();
+  const href = toDataUri(portrait, "image/png");
+
+  for (const templateId of POST_TEMPLATE_IDS) {
+    const input = {
+      templateId,
+      quote: "Xatolar yo‘lning bir qismidir, muvaffaqiyatsizlik emas.",
+      nameLines: ["TEST", "NOMZOD"],
+      shortBioItems: ["Mutaxassis", "Ijodkor", "Lider"],
+      portraitTransform: { offsetX: 0, offsetY: 0, scale: 1, flip: false },
+    };
+    const withPortrait = buildPostLayout({ ...input, portraitHref: href });
+    const withoutPortrait = buildPostLayout({ ...input, portraitHref: null });
+
+    assert.ok(withPortrait.portrait.width > 0, `${templateId}: width`);
+    assert.ok(withPortrait.portrait.height > 0, `${templateId}: height`);
+    assert.ok(withPortrait.portrait.x < 810, `${templateId}: x inside canvas`);
+    assert.ok(withPortrait.portrait.y < 810, `${templateId}: y inside canvas`);
+
+    const overlay = buildOverlaySvgBody(withPortrait);
+    assert.ok(overlay.includes("<image "), `${templateId}: image layer exists`);
+    assert.ok(
+      overlay.indexOf("<image ") < overlay.indexOf("<text "),
+      `${templateId}: portrait is below copy but above the baked background`,
+    );
+
+    const [renderedWith, renderedWithout] = await Promise.all([
+      renderPostImage(withPortrait),
+      renderPostImage(withoutPortrait),
+    ]);
+    const [pixelsWith, pixelsWithout] = await Promise.all([
+      sharp(renderedWith.png).raw().toBuffer(),
+      sharp(renderedWithout.png).raw().toBuffer(),
+    ]);
+    let changed = 0;
+    for (let i = 0; i < pixelsWith.length; i += 4) {
+      if (
+        pixelsWith[i] !== pixelsWithout[i] ||
+        pixelsWith[i + 1] !== pixelsWithout[i + 1] ||
+        pixelsWith[i + 2] !== pixelsWithout[i + 2]
+      ) {
+        changed += 1;
+      }
+    }
+    assert.ok(changed > 40_000, `${templateId}: portrait visibly changes ${changed} pixels`);
+  }
+});
+
+test("preview and final renderer consume the same stored portrait asset", () => {
+  const service = fs.readFileSync("src/lib/post-studio/service.ts", "utf8");
+  const preview = fs.readFileSync("src/components/post-studio/preview-canvas.tsx", "utf8");
+  assert.match(service, /portraitHref: previewPortraitHref/);
+  assert.match(service, /downloadPostAsset\(post\.candidateId, "portrait-transparent"\)/);
+  assert.match(preview, /buildOverlaySvgBody\(layout/);
+  assert.match(preview, /dangerouslySetInnerHTML=\{\{ __html: overlay \}\}/);
+});
+
+test("every studio render regenerates Telegram caption from the same post quote", () => {
+  const actions = fs.readFileSync("src/lib/actions/post-studio.ts", "utf8");
+  const saveBlock = actions.slice(
+    actions.indexOf("export async function savePostContentAction"),
+    actions.indexOf("export async function rerenderPostAction"),
+  );
+  const rerenderBlock = actions.slice(
+    actions.indexOf("export async function rerenderPostAction"),
+    actions.indexOf("export async function preparePortraitAction"),
+  );
+  assert.match(saveBlock, /renderAndStorePost[\s\S]*refreshPostCaption\(result\.post\)/);
+  assert.match(rerenderBlock, /renderAndStorePost[\s\S]*refreshPostCaption\(result\.post\)/);
+});
+
+test("portrait selection uses explicit intake metadata and authenticated storage download", () => {
+  const repository = fs.readFileSync("src/lib/post-studio/repository.ts", "utf8");
+  assert.match(repository, /\.eq\("is_primary_photo", true\)/);
+  assert.match(repository, /selectedOriginalAttachmentId/);
+  assert.match(repository, /selectedPhotoEditId/);
+  assert.match(repository, /\.from\(source\.bucket\)\.download\(source\.path\)/);
+  assert.ok(!repository.includes('.select("storage_path")'), "real schema column is path");
+  assert.match(repository, /supabase-storage:\/\//);
+
+  const service = fs.readFileSync("src/lib/post-studio/service.ts", "utf8");
+  assert.ok(!service.includes("source.url"), "service does not log or persist signed URLs");
+  assert.match(service, /\[post-studio\] \$\{message\}/);
+  for (const stage of [
+    "source portrait found",
+    "portrait downloaded",
+    "background removed",
+    "saturation applied",
+    "portrait stored",
+    "portrait attached to layout",
+    "render complete",
+  ]) {
+    assert.ok(service.includes(`postStudioLog("${stage}"`), `${stage} is observable`);
+  }
+  assert.ok(
+    service.includes('"Portret fonini olib tashlash amalga oshmadi"'),
+    "failed removal has the required admin-facing message",
+  );
+  assert.match(service, /status: "needs_review"/);
+  assert.match(
+    service,
+    /const portraitWarning = allWarnings\.find[\s\S]*error: portraitWarning\?\.message \?\? null/,
+    "rendering a review proof must not clear the portrait failure message",
+  );
 });
 
 /* ------------------------------------------------------------------ *
