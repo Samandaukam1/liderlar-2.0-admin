@@ -5,12 +5,15 @@ import type { PostFontRole } from "./types.ts";
  * and the browser preview can all reference the exact same list that resvg
  * rasterizes with.
  *
+ * The quote and the name share Anton: the reference posters set both in the
+ * same uppercase display face, and only the colour split tells them apart.
+ *
  * Anton ships no Cyrillic and Oswald Bold lacks Ҳ/ҳ, so both chains end in
  * Montserrat — verified against each file's cmap, not assumed.
  */
 export const POST_FONT_STACKS: Record<PostFontRole, string[]> = {
   name: ["Anton", "Oswald", "Montserrat SemiBold"],
-  quote: ["Oswald", "Montserrat SemiBold"],
+  quote: ["Anton", "Oswald", "Montserrat SemiBold"],
   shortBio: ["Montserrat", "Oswald"],
   /** The signature is drawn from extracted outlines, not from a font. */
   signature: [],

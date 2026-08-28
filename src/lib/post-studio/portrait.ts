@@ -1,29 +1,39 @@
 import "server-only";
+import crypto from "node:crypto";
 import sharp from "sharp";
+import { runSegmentation, segmentationModelAvailable } from "./segmentation.ts";
+import { attachAlpha, measureMatte, refineMask, type MatteStats } from "./matte.ts";
 
 /**
  * Portrait preparation for Post Studio.
  *
- * Background removal is deliberately provider-based alpha matting, never a
- * generative image edit: the brief requires that the candidate's face, hair,
- * clothing, skin tone and body shape are preserved exactly, and an
- * `images/edits` round-trip repaints all of them. Providers here return the
- * original pixels with an alpha channel attached.
+ * Background removal runs on our own server: a U²-Net ONNX graph predicts a
+ * per-pixel alpha matte (see segmentation.ts), the matte is refined (matte.ts),
+ * and it is attached to the candidate's *original* pixels. No third-party image
+ * API is involved and nothing is regenerated — the brief requires that the
+ * candidate's face, hair, clothing, skin tone and body shape survive untouched,
+ * which an `images/edits` round-trip would repaint.
  *
- * If no provider is configured, or the cut-out fails the quality gate, the
- * caller is told to route the post to `needs_review` — auto-publishing a broken
- * cut-out is worse than not publishing.
+ * Everything happens in memory. No temporary file is written, so there is
+ * nothing to leak or to clean up after the request, and the private source
+ * photo is never copied into a public bucket — only the derived cut-out is
+ * stored, and that is the asset the poster publishes anyway.
+ *
+ * When the matte cannot be trusted the caller is told to route the post to
+ * `needs_review`; an original, still-backgrounded photo is never allowed onto
+ * a poster as a fallback.
  */
-
-export type BackgroundRemovalProvider = "removebg" | "photoroom" | "none";
 
 export interface PortraitCutout {
   buffer: Buffer;
-  provider: BackgroundRemovalProvider;
   width: number;
   height: number;
   /** Share of pixels that survived as (partly) opaque subject. */
   coverage: number;
+  /** Highest foreground probability the model produced, 0..1. */
+  confidence: number;
+  /** Share of pixels the matte committed on, either way. */
+  decisiveShare: number;
 }
 
 export interface EnhancedPortrait {
@@ -36,8 +46,8 @@ export interface EnhancedPortrait {
 }
 
 export type PortraitFailureCode =
-  | "no_provider"
-  | "provider_failed"
+  | "model_unavailable"
+  | "segmentation_failed"
   | "low_quality"
   | "source_unreadable";
 
@@ -54,7 +64,7 @@ export class PortraitProcessingError extends Error {
   }
 }
 
-/** Longest edge of the stored cut-out; the frame is 398x624 units at 1080px. */
+/** Longest edge of the working image; the frame is 398x624 units at 1080px. */
 const MAX_CUTOUT_EDGE = 1400;
 
 /**
@@ -65,58 +75,63 @@ const MAX_CUTOUT_EDGE = 1400;
 const MIN_COVERAGE = 0.08;
 const MAX_COVERAGE = 0.88;
 
-/** Deliberately modest: colour lift only, with no skin/shape/image generation. */
-export const POST_PORTRAIT_SATURATION = 1.12;
+/**
+ * Confidence floors. `peak` below this means the model never found anything it
+ * considered foreground; a low decisive share means it hedged across the whole
+ * frame, which upscales into a translucent smear rather than a cut-out.
+ */
+const MIN_PEAK_CONFIDENCE = 0.5;
+const MIN_DECISIVE_SHARE = 0.9;
 
-export function activeProvider(): BackgroundRemovalProvider {
-  if (process.env.REMOVEBG_API_KEY) return "removebg";
-  if (process.env.PHOTOROOM_API_KEY) return "photoroom";
-  return "none";
+/**
+ * The poster art direction desaturates the cut-out completely: the candidate is
+ * printed in greyscale against the coloured card and cyan band. This is a pure
+ * RGB channel operation — no skin, shape or image generation is involved, and
+ * the alpha channel is asserted unchanged by `enhancePortraitColor`.
+ */
+export const POST_PORTRAIT_SATURATION = 0;
+
+/**
+ * Identity of a source photo, used as the cache key for the stored cut-out.
+ * Content-addressed rather than URL-addressed: the intake storage path stays
+ * the same when a candidate replaces their photo, so a URL would never
+ * invalidate.
+ */
+export function portraitSourceFingerprint(source: Buffer): string {
+  return crypto.createHash("sha256").update(source).digest("hex").slice(0, 32);
 }
 
-async function callRemoveBg(source: Buffer): Promise<Buffer> {
-  const form = new FormData();
-  form.append("image_file", new Blob([new Uint8Array(source)]), "portrait.png");
-  form.append("size", "auto");
-  form.append("format", "png");
-  // "person" tells the matter what it is looking at; it does not repaint.
-  form.append("type", "person");
-
-  const response = await fetch("https://api.remove.bg/v1.0/removebg", {
-    method: "POST",
-    headers: { "X-Api-Key": process.env.REMOVEBG_API_KEY! },
-    body: form,
-  });
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new PortraitProcessingError(
-      `remove.bg ${response.status}: ${detail.slice(0, 300)}`,
-      "provider_failed",
-    );
-  }
-  return Buffer.from(await response.arrayBuffer());
+interface WorkingImage {
+  rgb: Buffer;
+  width: number;
+  height: number;
 }
 
-async function callPhotoRoom(source: Buffer): Promise<Buffer> {
-  const form = new FormData();
-  form.append("image_file", new Blob([new Uint8Array(source)]), "portrait.png");
-  form.append("format", "png");
+/**
+ * Normalises whatever the candidate uploaded into the pixels both the network
+ * and the final cut-out see: EXIF rotation applied, colour profile converted to
+ * sRGB, and the long edge capped so a 12-megapixel phone photo cannot blow the
+ * lambda's memory budget.
+ */
+async function prepareWorkingImage(source: Buffer): Promise<WorkingImage> {
+  try {
+    const { data, info } = await sharp(source)
+      .rotate()
+      .resize({
+        width: MAX_CUTOUT_EDGE,
+        height: MAX_CUTOUT_EDGE,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .toColourspace("srgb")
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
 
-  const response = await fetch("https://sdk.photoroom.com/v1/segment", {
-    method: "POST",
-    headers: { "x-api-key": process.env.PHOTOROOM_API_KEY! },
-    body: form,
-  });
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new PortraitProcessingError(
-      `PhotoRoom ${response.status}: ${detail.slice(0, 300)}`,
-      "provider_failed",
-    );
+    return { rgb: data, width: info.width, height: info.height };
+  } catch {
+    throw new PortraitProcessingError("Manba rasmni o‘qib bo‘lmadi.", "source_unreadable");
   }
-  return Buffer.from(await response.arrayBuffer());
 }
 
 /**
@@ -131,7 +146,7 @@ export async function measureCoverage(cutout: Buffer): Promise<number> {
   return alpha ? alpha.mean / 255 : 0;
 }
 
-/** Rejects an opaque provider response even if it happens to be encoded as PNG. */
+/** Rejects an opaque result even if it happens to be encoded as PNG. */
 export async function validateTransparentPortrait(cutout: Buffer): Promise<{
   width: number;
   height: number;
@@ -159,7 +174,7 @@ export async function validateTransparentPortrait(cutout: Buffer): Promise<{
 }
 
 /**
- * Applies a small saturation lift to RGB only. Sharp carries the existing
+ * Applies the poster's saturation pass to RGB only. Sharp carries the existing
  * alpha channel through `modulate`; the before/after gate makes that guarantee
  * executable rather than an assumption.
  */
@@ -198,57 +213,98 @@ export async function enhancePortraitColor(
 
 /**
  * Trims fully transparent margins so the stored asset is the subject's own
- * bounding box — the layout frame is bottom-anchored, and stray transparent
- * padding would float the candidate off the canvas floor.
+ * bounding box — the layout frame is corner-anchored, and stray transparent
+ * padding would float the candidate off the canvas floor and away from the
+ * right edge.
  */
-async function normalizeCutout(cutout: Buffer): Promise<{ buffer: Buffer; width: number; height: number }> {
-  const trimmed = await sharp(cutout)
-    .ensureAlpha()
+async function trimToSubject(rgba: Buffer, width: number, height: number): Promise<{
+  buffer: Buffer;
+  width: number;
+  height: number;
+}> {
+  const trimmed = await sharp(rgba, { raw: { width, height, channels: 4 } })
     .trim({ threshold: 1 })
-    .resize({
-      width: MAX_CUTOUT_EDGE,
-      height: MAX_CUTOUT_EDGE,
-      fit: "inside",
-      withoutEnlargement: true,
-    })
     .png({ compressionLevel: 9 })
     .toBuffer({ resolveWithObject: true });
 
   return { buffer: trimmed.data, width: trimmed.info.width, height: trimmed.info.height };
 }
 
-/**
- * Runs the configured provider and validates the result. Never mutates or
- * overwrites the source photo — the cut-out is stored as a separate asset.
- */
-export async function removePortraitBackground(source: Buffer): Promise<PortraitCutout> {
-  const provider = activeProvider();
-  if (provider === "none") {
+/** Turns a matte the model hedged on into a review, not a broken poster. */
+function assertUsableMatte(stats: MatteStats, confidence: number): void {
+  if (confidence < MIN_PEAK_CONFIDENCE) {
     throw new PortraitProcessingError(
-      "Fon olib tashlash provayderi sozlanmagan (REMOVEBG_API_KEY yoki PHOTOROOM_API_KEY).",
-      "no_provider",
-    );
-  }
-
-  try {
-    await sharp(source).metadata();
-  } catch {
-    throw new PortraitProcessingError("Manba rasmni o‘qib bo‘lmadi.", "source_unreadable");
-  }
-
-  const raw = provider === "removebg" ? await callRemoveBg(source) : await callPhotoRoom(source);
-  const { buffer, width, height } = await normalizeCutout(raw);
-  const validated = await validateTransparentPortrait(buffer);
-  const coverage = validated.coverage;
-
-  if (coverage < MIN_COVERAGE || coverage > MAX_COVERAGE) {
-    throw new PortraitProcessingError(
-      `Cutout sifati past (qamrov ${(coverage * 100).toFixed(1)}%). Qo‘lda tekshirish kerak.`,
+      `Model rasmda odamni ishonchli aniqlay olmadi (ishonch ${(confidence * 100).toFixed(0)}%).`,
       "low_quality",
     );
   }
+  if (stats.decisiveShare < MIN_DECISIVE_SHARE) {
+    throw new PortraitProcessingError(
+      `Maska juda noaniq (aniq piksellar ${(stats.decisiveShare * 100).toFixed(1)}%).`,
+      "low_quality",
+    );
+  }
+  if (stats.coverage < MIN_COVERAGE || stats.coverage > MAX_COVERAGE) {
+    throw new PortraitProcessingError(
+      `Cutout sifati past (qamrov ${(stats.coverage * 100).toFixed(1)}%). Qo‘lda tekshirish kerak.`,
+      "low_quality",
+    );
+  }
+}
 
-  return { buffer, provider, width, height, coverage };
+/**
+ * Runs the local segmentation model and returns a transparent cut-out. Never
+ * mutates or overwrites the source photo — the cut-out is a separate asset.
+ */
+export async function removePortraitBackground(source: Buffer): Promise<PortraitCutout> {
+  if (!segmentationModelAvailable()) {
+    throw new PortraitProcessingError(
+      "Segmentatsiya modeli topilmadi (models/silueta.onnx).",
+      "model_unavailable",
+    );
+  }
+
+  const working = await prepareWorkingImage(source);
+
+  // The network wants a fixed 320x320 frame; "fill" rather than "contain" so
+  // no letterbox bars enter the prediction. The mask is stretched back to the
+  // working aspect ratio in refineMask.
+  const modelFrame = await sharp(working.rgb, {
+    raw: { width: working.width, height: working.height, channels: 3 },
+  })
+    .resize(320, 320, { fit: "fill", kernel: "lanczos3" })
+    .raw()
+    .toBuffer();
+
+  let mask;
+  try {
+    mask = await runSegmentation(modelFrame);
+  } catch (err) {
+    throw new PortraitProcessingError(
+      `Segmentatsiya bajarilmadi: ${err instanceof Error ? err.message : String(err)}`,
+      "segmentation_failed",
+    );
+  }
+
+  const alpha = await refineMask(mask.data, mask.size, working.width, working.height);
+  const stats = measureMatte(alpha);
+  assertUsableMatte(stats, mask.peak);
+
+  const trimmed = await trimToSubject(
+    attachAlpha(working.rgb, alpha),
+    working.width,
+    working.height,
+  );
+  const validated = await validateTransparentPortrait(trimmed.buffer);
+
+  return {
+    buffer: trimmed.buffer,
+    width: trimmed.width,
+    height: trimmed.height,
+    coverage: validated.coverage,
+    confidence: mask.peak,
+    decisiveShare: stats.decisiveShare,
+  };
 }
 
 /** Downloads a stored/remote source photo for processing. */

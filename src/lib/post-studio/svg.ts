@@ -79,7 +79,10 @@ export function buildOverlaySvgBody(layout: PostLayout, options: OverlayOptions 
     parts.push(
       `<image href="${escapeXml(portrait.href)}" x="${portrait.x.toFixed(3)}" ` +
         `y="${portrait.y.toFixed(3)}" width="${portrait.width.toFixed(3)}" ` +
-        `height="${portrait.height.toFixed(3)}" preserveAspectRatio="xMidYMax meet"/>`,
+        // xMaxYMax: the cut-out is trimmed to the subject's own bounding box, so
+        // pinning it to the frame's bottom-right keeps it in the canvas corner
+        // whatever aspect ratio the source photo had.
+        `height="${portrait.height.toFixed(3)}" preserveAspectRatio="xMaxYMax meet"/>`,
     );
   }
 

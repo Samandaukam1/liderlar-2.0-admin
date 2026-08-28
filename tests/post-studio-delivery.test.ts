@@ -205,7 +205,7 @@ test("an empty or fully opaque matte is outside the accepted quality band", asyn
   assert.ok((await measureCoverage(solid)) > 0.88, "an untouched photo is rejected");
 });
 
-test("saturation changes RGB while preserving the alpha channel byte-for-byte", async () => {
+test("the portrait is desaturated to greyscale while the alpha channel survives byte-for-byte", async () => {
   const cutout = await sharp({
     create: {
       width: 120,
@@ -243,8 +243,23 @@ test("saturation changes RGB while preserving the alpha channel byte-for-byte", 
   assert.notDeepEqual(
     await sharp(enhanced.buffer).removeAlpha().raw().toBuffer(),
     await sharp(cutout).removeAlpha().raw().toBuffer(),
-    "RGB pixels receive the colour lift",
+    "RGB pixels receive the saturation pass",
   );
+
+  // Saturation 0 is the art direction, not a colour lift: every opaque pixel
+  // has to come out neutral, or the poster gets a colour portrait back.
+  assert.equal(POST_PORTRAIT_SATURATION, 0);
+  const { data, info } = await sharp(enhanced.buffer)
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  for (let i = 0; i < data.length; i += info.channels) {
+    assert.ok(
+      Math.abs(data[i] - data[i + 1]) <= 1 && Math.abs(data[i + 1] - data[i + 2]) <= 1,
+      `pixel ${i / info.channels} is neutral: ${data[i]},${data[i + 1]},${data[i + 2]}`,
+    );
+  }
+
   const validated = await validateTransparentPortrait(enhanced.buffer);
   assert.ok(validated.coverage > 0 && validated.coverage < 0.88);
 });

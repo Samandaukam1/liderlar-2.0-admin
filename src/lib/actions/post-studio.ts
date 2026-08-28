@@ -164,7 +164,9 @@ export async function preparePortraitAction(postId: string): Promise<PostActionR
   const post = await getPost(postId);
   if (!post) return { ok: false, error: "Post topilmadi" };
 
-  const result = await preparePortrait(post);
+  // The admin pressed the button, so the source-hash cache is bypassed: the
+  // point of "Portretni qayta ishlash" is to redo a matte they were unhappy with.
+  const result = await preparePortrait(post, { force: true });
   revalidatePost(postId);
   if (result.warning) return { ok: false, error: result.warning.message };
   return { ok: true, postId, message: "Portret foni olib tashlandi." };

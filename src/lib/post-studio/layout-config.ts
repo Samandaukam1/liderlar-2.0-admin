@@ -34,6 +34,8 @@ const TEXT_LEFT = 44;
 
 const BRAND_CYAN = "#1ec8fb";
 const WHITE = "#ffffff";
+/** Ink black of the patronymic name line; reads on the cyan band on all six. */
+const INK_BLACK = "#000000";
 
 /**
  * Geometry is identical across the six masters (they are colour variants of one
@@ -89,11 +91,13 @@ const SHARED = {
     enabled: true,
   },
   portrait: {
-    x: 396,
+    // Flush with the canvas' right edge (412 + 398 = 810) and its floor, so the
+    // cut-out sits in the bottom-right corner the reference posters use.
+    x: 412,
     y: 186,
     width: 398,
     height: 624,
-    anchor: "bottom" as const,
+    anchor: "bottom-right" as const,
   },
 } satisfies Pick<PostTemplateConfig, "quote" | "quoteScrim" | "name" | "shortBio" | "portrait">;
 
@@ -167,6 +171,7 @@ export const POST_TEMPLATES: Record<PostTemplateId, PostTemplateConfig> = Object
         accentColor: variant.accentColor,
         bandColor: BRAND_CYAN,
         quoteAccentFill: variant.quoteAccentFill,
+        nameDarkFill: INK_BLACK,
         signature: variant.signature,
         ...SHARED,
       } satisfies PostTemplateConfig,

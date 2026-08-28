@@ -22,6 +22,15 @@ export const NAME_LINE_HEIGHT = 1.09;
 export const QUOTE_LINE_HEIGHT = 1.03;
 export const SHORT_BIO_LINE_HEIGHT = 0.98;
 
+/**
+ * Zero-based index of the first name line drawn in ink black instead of white.
+ * `splitNameIntoLines` puts the patronymic ("... qizi" / "... o‘g‘li") last, so
+ * on a three-line name this is exactly that line — the two-tone treatment the
+ * reference posters use to separate the given name from the patronymic. A
+ * two-line name simply never reaches the index and stays fully white.
+ */
+export const NAME_DARK_LINE_INDEX = 2;
+
 export const POST_TEMPLATE_IDS = [
   "template-01",
   "template-02",
@@ -63,11 +72,11 @@ export interface TextBlockConfig extends Box {
 
 export interface PortraitFrameConfig extends Box {
   /**
-   * The portrait is a standing cut-out, so it is anchored to the bottom of its
-   * frame and scaled to fit the width; "cover"-style cropping would decapitate
-   * tall sources.
+   * The portrait is a standing cut-out pinned into the canvas' bottom-right
+   * corner, so it grows up and to the left out of that corner and is scaled to
+   * fit inside the frame; "cover"-style cropping would decapitate tall sources.
    */
-  anchor: "bottom";
+  anchor: "bottom-right";
 }
 
 export interface ScrimConfig {
@@ -116,6 +125,8 @@ export interface PostTemplateConfig {
   /** Colour applied to the leading half of the quote (see quote-split.ts). */
   quoteAccentFill: string;
   name: TextBlockConfig;
+  /** Colour of the name's patronymic line (see NAME_DARK_LINE_INDEX). */
+  nameDarkFill: string;
   shortBio: TextBlockConfig;
   portrait: PortraitFrameConfig;
   signature: SignatureConfig;

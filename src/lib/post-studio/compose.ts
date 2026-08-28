@@ -2,12 +2,15 @@ import "server-only";
 import { getFontMetrics } from "./fonts.ts";
 import { fitFixedLines, fitWrappedText, positionLines } from "./text-engine.ts";
 import { applyQuoteColorSplit } from "./quote-split.ts";
+import { applyNameDarkTail } from "./name-color.ts";
+import { placePortrait } from "./portrait-frame.ts";
 import { getPostTemplate } from "./layout-config.ts";
 import {
   DEFAULT_PORTRAIT_TRANSFORM,
   NAME_LINE_HEIGHT,
   QUOTE_LINE_HEIGHT,
   SHORT_BIO_LINE_HEIGHT,
+  type Box,
   type LaidOutPortrait,
   type PostComposition,
   type PostLayout,
@@ -28,24 +31,13 @@ export const SHORT_BIO_MAX_ITEMS = 5;
 /** Below this the bio stops being trimmed and the post is flagged instead. */
 export const SHORT_BIO_MIN_ITEMS = 3;
 
-function portraitPlacement(
-  composition: PostComposition,
-  frame: { x: number; y: number; width: number; height: number },
-): LaidOutPortrait {
-  const transform = composition.portraitTransform ?? DEFAULT_PORTRAIT_TRANSFORM;
-  const scale = Number.isFinite(transform.scale) && transform.scale > 0 ? transform.scale : 1;
-
-  const width = frame.width * scale;
-  const height = frame.height * scale;
-
+function portraitPlacement(composition: PostComposition, frame: Box): LaidOutPortrait {
+  // Corner-anchored: a standing cut-out grows up and to the left out of the
+  // canvas' bottom-right corner, so scaling it up never crops the head off nor
+  // pushes the shoulder past the right edge.
   return {
     href: composition.portraitHref,
-    // Bottom-anchored: a standing cut-out grows upward from the canvas floor,
-    // so scaling it up never crops the head off.
-    x: frame.x + (frame.width - width) / 2 + transform.offsetX,
-    y: frame.y + frame.height - height + transform.offsetY,
-    width,
-    height,
+    ...placePortrait(frame, composition.portraitTransform ?? DEFAULT_PORTRAIT_TRANSFORM),
   };
 }
 
@@ -116,15 +108,18 @@ export function buildPostLayout(composition: PostComposition): PostLayout {
     tracking: template.name.tracking,
   });
 
-  const nameBlock = positionLines(nameFit, {
-    metrics: nameMetrics,
-    box: template.name,
-    lineHeight: NAME_LINE_HEIGHT,
-    align: template.name.align,
-    tracking: template.name.tracking,
-    fill: template.name.fill,
-    fontRole: "name",
-  });
+  const nameBlock = applyNameDarkTail(
+    positionLines(nameFit, {
+      metrics: nameMetrics,
+      box: template.name,
+      lineHeight: NAME_LINE_HEIGHT,
+      align: template.name.align,
+      tracking: template.name.tracking,
+      fill: template.name.fill,
+      fontRole: "name",
+    }),
+    template.nameDarkFill,
+  );
 
   if (nameLines.length === 0) {
     warnings.push({ code: "name_missing", message: "Nomzod ismi bo‘sh." });

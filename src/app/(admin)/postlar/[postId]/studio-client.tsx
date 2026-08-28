@@ -21,6 +21,7 @@ import {
   type PostLayout,
   type PostTemplateId,
 } from "@/lib/post-studio/types";
+import { derivePortraitFrame, placePortrait } from "@/lib/post-studio/portrait-frame";
 import {
   approvePostAction,
   preparePortraitAction,
@@ -85,6 +86,45 @@ const QUOTE_SOURCE_LABELS: Record<string, string> = {
   none: "Yo‘q",
 };
 
+type PortraitStage = "done" | "running" | "error" | "idle";
+
+const PORTRAIT_STAGE_LABELS: Record<PortraitStage, string> = {
+  done: "Olib tashlandi",
+  running: "Jarayonda",
+  error: "Xato",
+  idle: "Boshlanmagan",
+};
+
+const PORTRAIT_STAGE_ACCENTS: Record<PortraitStage, "success" | "info" | "danger" | "neutral"> = {
+  done: "success",
+  running: "info",
+  error: "danger",
+  idle: "neutral",
+};
+
+/**
+ * What the background-removal run last did. `preparePortrait` writes a fresh
+ * metadata object on success and only ever stamps `failedAt` when an attempt
+ * throws, so the presence of that stamp is what distinguishes "the stored
+ * cut-out is current" from "the stored cut-out is stale and the last try
+ * failed".
+ */
+function readPortraitStatus(post: PostRecord, busy: boolean): {
+  stage: PortraitStage;
+  detail: string | null;
+} {
+  const portrait = (post.metadata?.portrait ?? {}) as Record<string, unknown>;
+  if (busy) return { stage: "running", detail: null };
+  if (typeof portrait.failedAt === "string") {
+    return {
+      stage: "error",
+      detail: typeof portrait.error === "string" ? portrait.error : null,
+    };
+  }
+  if (post.portraitProcessedUrl) return { stage: "done", detail: null };
+  return { stage: "idle", detail: null };
+}
+
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="rounded-card border border-line bg-card p-4">
@@ -109,6 +149,8 @@ export function PostStudio(props: StudioProps) {
   const [pending, startTransition] = useTransition();
   const [renderVersion, setRenderVersion] = useState(0);
 
+  const portraitStatus = readPortraitStatus(post, pending);
+
   const activeTemplate = useMemo(
     () => templates.find((t) => t.id === templateId) ?? templates[0],
     [templates, templateId],
@@ -116,27 +158,17 @@ export function PostStudio(props: StudioProps) {
 
   /**
    * The preview reuses the server-computed layout but re-points the parts the
-   * admin is dragging right now, so sliders feel instant. Text geometry is not
-   * recomputed here — a save round-trip re-runs the real engine.
+   * admin is dragging right now, so sliders feel instant. The template frame is
+   * recovered from the laid-out portrait and re-placed by the very same
+   * function the renderer uses, so dragging cannot drift from the final PNG.
+   * Text geometry is not recomputed here — a save round-trip re-runs the real
+   * engine.
    */
   const previewLayout: PostLayout = useMemo(() => {
-    const frameWidth = layout.portrait.width / (post.portraitTransform.scale || 1);
-    const frameHeight = layout.portrait.height / (post.portraitTransform.scale || 1);
-    const baseX = layout.portrait.x - post.portraitTransform.offsetX;
-    const baseY = layout.portrait.y - post.portraitTransform.offsetY;
-
-    const width = frameWidth * transform.scale;
-    const height = frameHeight * transform.scale;
-
+    const frame = derivePortraitFrame(layout.portrait, post.portraitTransform);
     return {
       ...layout,
-      portrait: {
-        ...layout.portrait,
-        x: baseX + (frameWidth - width) / 2 + transform.offsetX,
-        y: baseY + (frameHeight - height) + transform.offsetY,
-        width,
-        height,
-      },
+      portrait: { ...layout.portrait, ...placePortrait(frame, transform) },
     };
   }, [layout, transform, post.portraitTransform]);
 
@@ -231,7 +263,7 @@ export function PostStudio(props: StudioProps) {
           )}
         </Panel>
 
-        <Panel title="Portret manbasi">
+        <Panel title="Portret">
           {post.portraitProcessedUrl ? (
             <Image
               src={post.portraitProcessedUrl}
@@ -244,10 +276,37 @@ export function PostStudio(props: StudioProps) {
           ) : (
             <p className="text-xs text-ink-soft">
               {candidate.portraitSourceUrl
-                ? "Foni olib tashlanmagan."
-                : "Manba rasm topilmadi."}
+                ? "Foni hali olib tashlanmagan."
+                : "Anketaga rasm biriktirilmagan."}
             </p>
           )}
+
+          <dl className="mt-3 space-y-1.5 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <dt className="text-ink-soft">Manba</dt>
+              <dd>{candidate.portraitSourceUrl ? "Anketa rasmi" : "Topilmadi"}</dd>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <dt className="text-ink-soft">Fon</dt>
+              <dd>
+                <Badge accent={TONE_ACCENT[PORTRAIT_STAGE_ACCENTS[portraitStatus.stage]]}>
+                  {PORTRAIT_STAGE_LABELS[portraitStatus.stage]}
+                </Badge>
+              </dd>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <dt className="text-ink-soft">Saturation</dt>
+              <dd>0%</dd>
+            </div>
+          </dl>
+
+          {portraitStatus.stage === "error" ? (
+            <p className="mt-2 rounded-[8px] border border-coral/50 bg-coral/10 px-2 py-1.5 text-[11px] leading-snug text-coral">
+              Portret fonini avtomatik olib tashlashda xatolik yuz berdi
+              {portraitStatus.detail ? `: ${portraitStatus.detail}` : "."}
+            </p>
+          ) : null}
+
           {canManage ? (
             <Button
               type="button"
@@ -258,7 +317,7 @@ export function PostStudio(props: StudioProps) {
               onClick={() => run(() => preparePortraitAction(post.id))}
             >
               <Scissors className="h-3.5 w-3.5" />
-              {post.portraitProcessedUrl ? "Qayta ishlash" : "Fonni olib tashlash"}
+              Portretni qayta ishlash
             </Button>
           ) : null}
         </Panel>

@@ -27,7 +27,9 @@ import {
 import { splitNameIntoLines, tokenizeFullName } from "../src/lib/post-studio/name-lines.ts";
 import { findQuoteSplitWordIndex } from "../src/lib/post-studio/quote-split.ts";
 import { buildPostLayout } from "../src/lib/post-studio/compose.ts";
-import { escapeXml } from "../src/lib/post-studio/svg.ts";
+import { escapeXml, buildOverlaySvgBody } from "../src/lib/post-studio/svg.ts";
+import { POST_FONT_STACKS, fontFamilyAttr } from "../src/lib/post-studio/font-stacks.ts";
+import { derivePortraitFrame, placePortrait } from "../src/lib/post-studio/portrait-frame.ts";
 
 /* ------------------------------------------------------------------ *
  * Templates
@@ -111,6 +113,24 @@ test("Anton is present as a real TTF and covers Uzbek Latin", () => {
   assert.equal(font.unitsPerEm, 2048);
   for (const char of "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'‘’") {
     assert.ok(font.hasGlyphForCodePoint(char.codePointAt(0)!), `Anton has ${char}`);
+  }
+});
+
+test("the quote is set in Anton, the same display face as the name", () => {
+  assert.equal(POST_FONT_STACKS.quote[0], "Anton");
+  assert.equal(POST_FONT_STACKS.name[0], "Anton");
+  // Anton has no Cyrillic, so both chains must still carry a fallback.
+  assert.ok(POST_FONT_STACKS.quote.length > 1, "quote chain has a Cyrillic fallback");
+
+  const layout = quoteLayout("Bilim olishdan hech qachon qo‘rqmaslik kerak");
+  const svg = buildOverlaySvgBody(layout);
+  assert.equal(layout.quote.fontRole, "quote");
+  assert.match(svg, new RegExp(`font-family="${fontFamilyAttr("quote")}"`));
+
+  // Uppercase is part of the same treatment — the poster never shows lowercase.
+  assert.equal(POST_TEMPLATES["template-01"].quote.uppercase, true);
+  for (const line of layout.quote.lines) {
+    assert.equal(line.text, line.text.toLocaleUpperCase("uz"));
   }
 });
 
@@ -355,6 +375,99 @@ test("the colour split lands on a word boundary near the midpoint", () => {
   const index = findQuoteSplitWordIndex(words);
   assert.ok(index >= 1 && index <= words.length - 1);
   assert.equal(findQuoteSplitWordIndex(["yolgiz"]), 1);
+});
+
+/* ------------------------------------------------------------------ *
+ * Two-tone name colouring
+ * ------------------------------------------------------------------ */
+
+test("the patronymic line is ink black while the name above it stays white", () => {
+  const layout = buildPostLayout({
+    templateId: "template-01",
+    quote: "Qisqa iqtibos",
+    nameLines: splitNameIntoLines("Xolmo‘minova Mavluda Rustam qizi"),
+    shortBioItems: ["Talaba"],
+    portraitHref: null,
+    portraitTransform: { offsetX: 0, offsetY: 0, scale: 1, flip: false },
+  });
+  const template = POST_TEMPLATES["template-01"];
+
+  assert.deepEqual(
+    layout.name.lines.map((l) => [l.text, l.runs[0].fill]),
+    [
+      ["XOLMO‘MINOVA", template.name.fill],
+      ["MAVLUDA", template.name.fill],
+      ["RUSTAM QIZI", template.nameDarkFill],
+    ],
+  );
+  assert.equal(template.nameDarkFill, "#000000");
+});
+
+test("a two-line name never reaches the dark line and stays fully white", () => {
+  const layout = buildPostLayout({
+    templateId: "template-04",
+    quote: "Qisqa iqtibos",
+    nameLines: splitNameIntoLines("Oybekova Farangiz"),
+    shortBioItems: ["Talaba"],
+    portraitHref: null,
+    portraitTransform: { offsetX: 0, offsetY: 0, scale: 1, flip: false },
+  });
+
+  const fills = new Set(layout.name.lines.flatMap((l) => l.runs.map((r) => r.fill)));
+  assert.deepEqual([...fills], [POST_TEMPLATES["template-04"].name.fill]);
+});
+
+/* ------------------------------------------------------------------ *
+ * Portrait corner placement
+ * ------------------------------------------------------------------ */
+
+test("the portrait frame is flush with the canvas' bottom-right corner", () => {
+  for (const id of POST_TEMPLATE_IDS) {
+    const frame = POST_TEMPLATES[id].portrait;
+    assert.equal(frame.x + frame.width, POST_CANVAS_UNITS, `${id} right edge`);
+    assert.equal(frame.y + frame.height, POST_CANVAS_UNITS, `${id} floor`);
+    assert.equal(frame.anchor, "bottom-right");
+  }
+});
+
+test("scaling the portrait grows it out of the corner instead of off the canvas", () => {
+  const frame = POST_TEMPLATES["template-01"].portrait;
+
+  for (const scale of [0.6, 1, 1.8]) {
+    const placed = placePortrait(frame, { offsetX: 0, offsetY: 0, scale, flip: false });
+    assert.ok(Math.abs(placed.x + placed.width - POST_CANVAS_UNITS) < 1e-9, `scale ${scale} right`);
+    assert.ok(Math.abs(placed.y + placed.height - POST_CANVAS_UNITS) < 1e-9, `scale ${scale} floor`);
+  }
+
+  // The admin's offsets still move it freely off that resting position.
+  const nudged = placePortrait(frame, { offsetX: -30, offsetY: 12, scale: 1, flip: false });
+  assert.equal(nudged.x, frame.x - 30);
+  assert.equal(nudged.y, frame.y + 12);
+});
+
+test("the studio's drag preview recovers exactly the frame the renderer used", () => {
+  const frame = POST_TEMPLATES["template-01"].portrait;
+  const saved = { offsetX: -18, offsetY: 25, scale: 1.35, flip: false };
+
+  const placed = placePortrait(frame, saved);
+  const recovered = derivePortraitFrame(placed, saved);
+
+  for (const key of ["x", "y", "width", "height"] as const) {
+    assert.ok(Math.abs(recovered[key] - frame[key]) < 1e-9, `${key} round-trips`);
+  }
+});
+
+test("the rendered portrait hugs the bottom-right of its box", () => {
+  const layout = buildPostLayout({
+    templateId: "template-01",
+    quote: "Qisqa iqtibos",
+    nameLines: ["ISM", "FAMILIYA"],
+    shortBioItems: ["Talaba"],
+    portraitHref: "data:image/png;base64,AA==",
+    portraitTransform: { offsetX: 0, offsetY: 0, scale: 1, flip: false },
+  });
+
+  assert.match(buildOverlaySvgBody(layout), /preserveAspectRatio="xMaxYMax meet"/);
 });
 
 /* ------------------------------------------------------------------ *

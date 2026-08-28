@@ -3,11 +3,12 @@ import { logAudit } from "@/lib/audit";
 import { buildPostLayout } from "./compose.ts";
 import { renderPostImage, toDataUri } from "./render.ts";
 import {
-  activeProvider,
   enhancePortraitColor,
+  portraitSourceFingerprint,
   PortraitProcessingError,
   removePortraitBackground,
 } from "./portrait.ts";
+import { SEGMENTATION_MODEL_LABEL } from "./segmentation.ts";
 import { downloadPostAsset, uploadPostAsset } from "./storage.ts";
 import {
   downloadCandidatePortraitSource,
@@ -35,22 +36,40 @@ import type { PostLayout, PostWarning } from "./types.ts";
 export interface PreparePortraitResult {
   processedUrl: string | null;
   warning: PostWarning | null;
+  /** True when the stored cut-out was still valid and nothing was re-segmented. */
+  reused?: boolean;
 }
 
 export const PORTRAIT_REMOVAL_FAILED_MESSAGE =
   "Portret fonini olib tashlash amalga oshmadi";
 
 function postStudioLog(message: string, details: Record<string, unknown>): void {
-  // Details contain only internal ids, dimensions and provider labels. Storage
+  // Details contain only internal ids, dimensions and model labels. Storage
   // paths, signed URLs, tokens and API keys are intentionally excluded.
   console.info(`[post-studio] ${message}`, details);
+}
+
+/** Whatever we recorded about the last successful cut-out for this post. */
+function storedPortraitMetadata(post: PostRecord): Record<string, unknown> {
+  const portrait = post.metadata?.portrait;
+  return portrait && typeof portrait === "object" ? (portrait as Record<string, unknown>) : {};
 }
 
 /**
  * Produces the transparent cut-out and stores it beside the candidate. The
  * source photo is only read, never replaced.
+ *
+ * Segmentation is by far the most expensive step in the studio, so it is
+ * content-addressed: the source photo is hashed, and a stored cut-out whose
+ * recorded fingerprint still matches is reused as-is. Opening a preview
+ * therefore never re-runs the model, while a candidate replacing their photo
+ * changes the hash and forces a fresh matte. `force` is the admin's "Portretni
+ * qayta ishlash" button, which bypasses the cache deliberately.
  */
-export async function preparePortrait(post: PostRecord): Promise<PreparePortraitResult> {
+export async function preparePortrait(
+  post: PostRecord,
+  options: { force?: boolean } = {},
+): Promise<PreparePortraitResult> {
   const source = await resolveCandidatePortraitSource(post.candidateId);
   if (!source) {
     await updatePost(post.id, {
@@ -71,75 +90,44 @@ export async function preparePortrait(post: PostRecord): Promise<PreparePortrait
   });
 
   try {
-    // A previously stored transparent cut-out remains usable even when a
-    // provider key is temporarily absent. It can still receive the local RGB
-    // saturation pass without touching the original photo.
-    if (activeProvider() === "none" && post.portraitProcessedUrl) {
-      const existing = await downloadPostAsset(post.candidateId, "portrait-transparent");
-      if (existing) {
-        postStudioLog("portrait downloaded", {
-          postId: post.id,
-          candidateId: post.candidateId,
-          sourceKind: "existing_cutout",
-        });
-        postStudioLog("background removed", {
-          postId: post.id,
-          candidateId: post.candidateId,
-          reused: true,
-        });
-        const enhanced = await enhancePortraitColor(existing);
-        postStudioLog("saturation applied", {
-          postId: post.id,
-          candidateId: post.candidateId,
-          saturation: enhanced.saturation,
-          alphaPreserved:
-            enhanced.alphaCoverageBefore === enhanced.alphaCoverageAfter,
-        });
-        const processedUrl = await uploadPostAsset(
-          post.candidateId,
-          "portrait-transparent",
-          enhanced.buffer,
-        );
-        postStudioLog("portrait stored", {
-          postId: post.id,
-          candidateId: post.candidateId,
-          width: enhanced.width,
-          height: enhanced.height,
-          reused: true,
-        });
-        await updatePost(post.id, {
-          portrait_source_url: portraitSourceReference(source),
-          portrait_processed_url: processedUrl,
-          error: null,
-          metadata: {
-            ...post.metadata,
-            portrait: {
-              provider: "existing_cutout",
-              saturation: enhanced.saturation,
-              alphaPreserved: true,
-              width: enhanced.width,
-              height: enhanced.height,
-              processedAt: new Date().toISOString(),
-            },
-          },
-        });
-        return { processedUrl, warning: null };
-      }
-    }
-
     const sourceBuffer = await downloadCandidatePortraitSource(source);
+    const fingerprint = portraitSourceFingerprint(sourceBuffer);
     postStudioLog("portrait downloaded", {
       postId: post.id,
       candidateId: post.candidateId,
       sourceKind: source.kind,
+      bytes: sourceBuffer.byteLength,
     });
+
+    const previous = storedPortraitMetadata(post);
+    if (
+      !options.force &&
+      post.portraitProcessedUrl &&
+      previous.sourceFingerprint === fingerprint &&
+      (await downloadPostAsset(post.candidateId, "portrait-transparent"))
+    ) {
+      postStudioLog("background removed", {
+        postId: post.id,
+        candidateId: post.candidateId,
+        model: SEGMENTATION_MODEL_LABEL,
+        cached: true,
+      });
+      return { processedUrl: post.portraitProcessedUrl, warning: null, reused: true };
+    }
+
+    const startedAt = Date.now();
     const cutout = await removePortraitBackground(sourceBuffer);
+    const segmentationMs = Date.now() - startedAt;
     postStudioLog("background removed", {
       postId: post.id,
       candidateId: post.candidateId,
-      provider: cutout.provider,
+      model: SEGMENTATION_MODEL_LABEL,
+      cached: false,
       coverage: Number(cutout.coverage.toFixed(4)),
+      confidence: Number(cutout.confidence.toFixed(4)),
+      ms: segmentationMs,
     });
+
     const enhanced = await enhancePortraitColor(cutout.buffer);
     postStudioLog("saturation applied", {
       postId: post.id,
@@ -147,6 +135,7 @@ export async function preparePortrait(post: PostRecord): Promise<PreparePortrait
       saturation: enhanced.saturation,
       alphaPreserved: enhanced.alphaCoverageBefore === enhanced.alphaCoverageAfter,
     });
+
     const processedUrl = await uploadPostAsset(
       post.candidateId,
       "portrait-transparent",
@@ -166,18 +155,22 @@ export async function preparePortrait(post: PostRecord): Promise<PreparePortrait
       metadata: {
         ...post.metadata,
         portrait: {
-          provider: cutout.provider,
+          model: SEGMENTATION_MODEL_LABEL,
+          sourceFingerprint: fingerprint,
           coverage: Number(cutout.coverage.toFixed(4)),
-          width: cutout.width,
-          height: cutout.height,
+          confidence: Number(cutout.confidence.toFixed(4)),
+          decisiveShare: Number(cutout.decisiveShare.toFixed(4)),
+          width: enhanced.width,
+          height: enhanced.height,
           saturation: enhanced.saturation,
           alphaPreserved: enhanced.alphaCoverageBefore === enhanced.alphaCoverageAfter,
+          segmentationMs,
           processedAt: new Date().toISOString(),
         },
       },
     });
 
-    return { processedUrl, warning: null };
+    return { processedUrl, warning: null, reused: false };
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     const code =
@@ -190,7 +183,11 @@ export async function preparePortrait(post: PostRecord): Promise<PreparePortrait
       error: PORTRAIT_REMOVAL_FAILED_MESSAGE,
       metadata: {
         ...post.metadata,
-        portrait: { error: detail, failedAt: new Date().toISOString() },
+        portrait: {
+          ...storedPortraitMetadata(post),
+          error: detail,
+          failedAt: new Date().toISOString(),
+        },
       },
     });
 
