@@ -2,15 +2,19 @@ import "server-only";
 import { getFontMetrics } from "./fonts.ts";
 import { fitFixedLines, fitWrappedText, positionLines } from "./text-engine.ts";
 import { applyQuoteColorSplit } from "./quote-split.ts";
-import { applyNameDarkTail } from "./name-color.ts";
-import { placePortrait } from "./portrait-frame.ts";
-import { getPostTemplate } from "./layout-config.ts";
+import { selectDisplayQuote, type DisplayQuoteChoice } from "./quote-sentences.ts";
+import {
+  applyPortraitOverride,
+  fallbackPersonBounds,
+  fitPortrait,
+  type PersonBounds,
+} from "./portrait-fit.ts";
+import { getPostTemplate, paletteForTemplate } from "./layout-config.ts";
 import {
   DEFAULT_PORTRAIT_TRANSFORM,
   NAME_LINE_HEIGHT,
   QUOTE_LINE_HEIGHT,
   SHORT_BIO_LINE_HEIGHT,
-  type Box,
   type LaidOutPortrait,
   type PostComposition,
   type PostLayout,
@@ -26,18 +30,28 @@ import {
  */
 
 /** Badge marker in front of every short-bio item, matching the reference posts. */
-export const SHORT_BIO_BULLET = "• ";
+export const SHORT_BIO_BULLET = "\u2022 ";
 export const SHORT_BIO_MAX_ITEMS = 5;
 /** Below this the bio stops being trimmed and the post is flagged instead. */
 export const SHORT_BIO_MIN_ITEMS = 3;
 
-function portraitPlacement(composition: PostComposition, frame: Box): LaidOutPortrait {
-  // Corner-anchored: a standing cut-out grows up and to the left out of the
-  // canvas' bottom-right corner, so scaling it up never crops the head off nor
-  // pushes the shoulder past the right edge.
+/**
+ * Places the cut-out from the person's own alpha bounds.
+ *
+ * The stored PNG's dimensions are deliberately not the input: two candidates
+ * whose photos carry different amounts of transparent margin must still render
+ * at the same visual size. See portrait-fit.ts.
+ */
+function portraitPlacement(
+  composition: PostComposition,
+  personBounds: PersonBounds,
+): LaidOutPortrait & { canonical: ReturnType<typeof fitPortrait> } {
+  const canonical = fitPortrait(personBounds);
+  const transform = composition.portraitTransform ?? DEFAULT_PORTRAIT_TRANSFORM;
   return {
     href: composition.portraitHref,
-    ...placePortrait(frame, composition.portraitTransform ?? DEFAULT_PORTRAIT_TRANSFORM),
+    ...applyPortraitOverride(canonical, transform),
+    canonical,
   };
 }
 
@@ -49,21 +63,36 @@ export function buildPostLayout(composition: PostComposition): PostLayout {
   /* ---------------- quote (line-height 1.03, two-tone) ---------------- */
 
   const quoteMetrics = getFontMetrics("quote");
-  const quoteText = template.quote.uppercase
-    ? composition.quote.toLocaleUpperCase("uz")
-    : composition.quote;
-
   const quoteMax = overrides.quote ?? template.quote.maxFontSize;
   const quoteMin = overrides.quote ?? template.quote.minFontSize;
 
-  const quoteFit = fitWrappedText(quoteText, {
-    metrics: quoteMetrics,
-    box: template.quote,
-    maxFontSize: quoteMax,
-    minFontSize: quoteMin,
-    lineHeight: QUOTE_LINE_HEIGHT,
-    tracking: template.quote.tracking,
+  const cased = (text: string) =>
+    template.quote.uppercase ? text.toLocaleUpperCase("uz") : text;
+
+  const fitQuote = (text: string) =>
+    fitWrappedText(cased(text), {
+      metrics: quoteMetrics,
+      box: template.quote,
+      maxFontSize: quoteMax,
+      minFontSize: quoteMin,
+      lineHeight: QUOTE_LINE_HEIGHT,
+      tracking: template.quote.tracking,
+    });
+
+  // The poster prints whole sentences off the raw 15th answer, never a
+  // character-count truncation of it. Which sentences is decided by measuring
+  // them with the very engine that will lay them out — see quote-sentences.ts.
+  const selection: DisplayQuoteChoice = selectDisplayQuote(composition.quote, {
+    probe: (text) => {
+      const fit = fitQuote(text);
+      return { fontSize: fit.fontSize, height: fit.height, overflow: fit.overflow };
+    },
+    boxHeight: template.quote.height,
+    minFillRatio: template.quote.minFillRatio ?? 0.62,
+    comfortFontSize: template.quote.comfortFontSize ?? template.quote.minFontSize,
   });
+
+  const quoteFit = fitQuote(selection.text);
 
   let quoteBlock = positionLines(quoteFit, {
     metrics: quoteMetrics,
@@ -71,17 +100,11 @@ export function buildPostLayout(composition: PostComposition): PostLayout {
     lineHeight: QUOTE_LINE_HEIGHT,
     align: template.quote.align,
     tracking: template.quote.tracking,
-    fill: template.quote.fill,
     fontRole: "quote",
   });
-  quoteBlock = applyQuoteColorSplit(
-    quoteBlock,
-    quoteMetrics,
-    template.quoteAccentFill,
-    template.quote.fill,
-  );
+  quoteBlock = applyQuoteColorSplit(quoteBlock, quoteMetrics);
 
-  if (!composition.quote.trim()) {
+  if (!selection.text.trim()) {
     warnings.push({ code: "quote_missing", message: "Iqtibos tanlanmagan." });
   } else if (quoteBlock.overflow) {
     warnings.push({
@@ -108,18 +131,14 @@ export function buildPostLayout(composition: PostComposition): PostLayout {
     tracking: template.name.tracking,
   });
 
-  const nameBlock = applyNameDarkTail(
-    positionLines(nameFit, {
-      metrics: nameMetrics,
-      box: template.name,
-      lineHeight: NAME_LINE_HEIGHT,
-      align: template.name.align,
-      tracking: template.name.tracking,
-      fill: template.name.fill,
-      fontRole: "name",
-    }),
-    template.nameDarkFill,
-  );
+  const nameBlock = positionLines(nameFit, {
+    metrics: nameMetrics,
+    box: template.name,
+    lineHeight: NAME_LINE_HEIGHT,
+    align: template.name.align,
+    tracking: template.name.tracking,
+    fontRole: "name",
+  });
 
   if (nameLines.length === 0) {
     warnings.push({ code: "name_missing", message: "Nomzod ismi bo‘sh." });
@@ -176,7 +195,6 @@ export function buildPostLayout(composition: PostComposition): PostLayout {
     lineHeight: SHORT_BIO_LINE_HEIGHT,
     align: template.shortBio.align,
     tracking: template.shortBio.tracking,
-    fill: template.shortBio.fill,
     fontRole: "shortBio",
   });
 
@@ -189,7 +207,9 @@ export function buildPostLayout(composition: PostComposition): PostLayout {
 
   /* ---------------- portrait ---------------- */
 
-  const portrait = portraitPlacement(composition, template.portrait);
+  const personBounds =
+    composition.portraitPersonBounds ?? fallbackPersonBounds(1, 1);
+  const portrait = portraitPlacement(composition, personBounds);
   if (!portrait.href) {
     warnings.push({ code: "portrait_missing", message: "Portret rasmi tayyor emas." });
   }
@@ -209,10 +229,18 @@ export function buildPostLayout(composition: PostComposition): PostLayout {
 
   return {
     templateId: template.id,
+    palette: paletteForTemplate(template.id),
+    quoteSelection: {
+      text: selection.text,
+      sentenceCount: selection.sentenceCount,
+      availableSentences: selection.availableSentences,
+      reason: selection.reason,
+    },
     quote: quoteBlock,
     name: nameBlock,
     shortBio: bioBlock,
-    portrait,
+    portrait: { href: portrait.href, x: portrait.x, y: portrait.y, width: portrait.width, height: portrait.height },
+    portraitFit: portrait.canonical,
     scrim: template.quoteScrim,
     signature: template.signature,
     warnings,

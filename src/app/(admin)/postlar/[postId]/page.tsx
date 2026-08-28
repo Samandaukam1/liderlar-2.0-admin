@@ -5,7 +5,11 @@ import { PageHeader } from "@/components/admin/page-header";
 import { getPost, loadCandidateSourceData } from "@/lib/post-studio/repository";
 import { buildLayoutForPreview } from "@/lib/post-studio/service";
 import { getPostDeliveryStats, getSubscriberStats } from "@/lib/post-studio/telegram";
-import { POST_TEMPLATE_LIST, templateAssetUrl } from "@/lib/post-studio/layout-config";
+import {
+  paletteForTemplate,
+  POST_TEMPLATE_LIST,
+  templateAssetUrl,
+} from "@/lib/post-studio/layout-config";
 import { PostStudio } from "./studio-client";
 
 export const metadata = { title: "Post Studio" };
@@ -47,6 +51,9 @@ export default async function PostStudioPage({
           accentColor: t.accentColor,
           thumbnailUrl: templateAssetUrl(t.thumbnailPath),
           backgroundUrl: templateAssetUrl(t.backgroundPath),
+          // Shipped per template so switching one repaints the preview from the
+          // new template's own colours instead of keeping the saved post's.
+          palette: paletteForTemplate(t.id),
         }))}
         candidate={{
           fullName: source?.fullName ?? "",

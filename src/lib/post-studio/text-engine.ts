@@ -186,11 +186,10 @@ export function positionLines(
     lineHeight: number;
     align: TextAlign;
     tracking?: number;
-    fill: string;
     fontRole: PostFontRole;
   },
 ): LaidOutBlock {
-  const { metrics, box, lineHeight, align, tracking = 0, fill, fontRole } = options;
+  const { metrics, box, lineHeight, align, tracking = 0, fontRole } = options;
   const first = firstBaselineOffset(fit.fontSize, lineHeight, metrics);
 
   const lines: LaidOutLine[] = fit.lines.map((text, index) => {
@@ -207,7 +206,9 @@ export function positionLines(
       baseline: box.y + first + index * fit.fontSize * lineHeight,
       x,
       width,
-      runs: [{ text, x, fill }],
+      // Every line starts as one base-toned run; quote-split.ts is what carves
+      // an accent run out of the leading half.
+      runs: [{ text, x, tone: "base" as const }],
     };
   });
 

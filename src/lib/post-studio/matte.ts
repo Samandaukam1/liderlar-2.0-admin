@@ -76,6 +76,18 @@ export function measureMatte(alpha: Uint8Array): MatteStats {
   };
 }
 
+export interface RefinedMask {
+  /** The alpha channel to attach to the photograph. */
+  alpha: Uint8Array;
+  /**
+   * The network's own probabilities at working resolution. Kept because the
+   * ramps below destroy them — everything is 0 or 255 afterwards — and the
+   * artefact cleanup needs to know how sure the model actually was about each
+   * fragment before it decides to delete one.
+   */
+  confidence: Uint8Array;
+}
+
 /**
  * Upscales the network's probabilities to the working image and refines them
  * into a usable alpha channel.
@@ -85,7 +97,7 @@ export async function refineMask(
   maskSize: number,
   width: number,
   height: number,
-): Promise<Uint8Array> {
+): Promise<RefinedMask> {
   const coarse = Buffer.alloc(probabilities.length);
   for (let i = 0; i < probabilities.length; i += 1) {
     const v = probabilities[i];
@@ -108,7 +120,10 @@ export async function refineMask(
     .raw()
     .toBuffer();
 
-  return rampAlpha(feathered, EDGE_FLOOR, EDGE_CEILING);
+  return {
+    alpha: rampAlpha(feathered, EDGE_FLOOR, EDGE_CEILING),
+    confidence: new Uint8Array(upscaled),
+  };
 }
 
 /**

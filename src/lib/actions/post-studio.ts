@@ -52,6 +52,20 @@ function parseOverride(value: FormDataEntryValue | null): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+/**
+ * Creating a post produces a *finished* post.
+ *
+ * Previously this only inserted the row: the quote, name and descriptors were
+ * ready but the portrait was not, and an admin had to find "Portretni qayta
+ * ishlash" and press it before the poster showed a candidate at all. Background
+ * removal takes well under two seconds, so it belongs in the same action —
+ * Post Studio should open with the portrait already on the canvas.
+ *
+ * The render runs too, so the list thumbnail and the status are real rather
+ * than pending. A portrait that cannot be produced leaves the post in
+ * `needs_review` with the reason attached; the original, still-backgrounded
+ * photo is never substituted.
+ */
 export async function createPostForCandidateAction(candidateId: string): Promise<PostActionResult> {
   const ctx = await requirePermission("posts.manage");
   try {
@@ -63,8 +77,23 @@ export async function createPostForCandidateAction(candidateId: string): Promise
       entityId: post.id,
       metadata: { candidateId },
     });
+
+    const portrait = await preparePortrait(post);
+    const rendered = await renderAndStorePost(post.id, { actorId: ctx.userId });
+
     revalidatePost(post.id);
-    return { ok: true, postId: post.id };
+
+    const problems = [
+      ...(portrait.warning ? [portrait.warning.message] : []),
+      ...rendered.warnings.map((w) => w.message),
+    ];
+    const unique = [...new Set(problems)];
+
+    return {
+      ok: true,
+      postId: post.id,
+      message: unique.length > 0 ? unique.join(" · ") : "Post tayyor.",
+    };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Post yaratilmadi" };
   }

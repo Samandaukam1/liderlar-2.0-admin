@@ -12,6 +12,7 @@ import {
   SHORT_BIO_LINE_HEIGHT,
 } from "../src/lib/post-studio/types.ts";
 import {
+  paletteForTemplate,
   POST_TEMPLATES,
   POST_TEMPLATE_LIST,
   pickTemplateForCandidate,
@@ -29,7 +30,7 @@ import { findQuoteSplitWordIndex } from "../src/lib/post-studio/quote-split.ts";
 import { buildPostLayout } from "../src/lib/post-studio/compose.ts";
 import { escapeXml, buildOverlaySvgBody } from "../src/lib/post-studio/svg.ts";
 import { POST_FONT_STACKS, fontFamilyAttr } from "../src/lib/post-studio/font-stacks.ts";
-import { derivePortraitFrame, placePortrait } from "../src/lib/post-studio/portrait-frame.ts";
+import { resolveRunFill } from "../src/lib/post-studio/types.ts";
 
 /* ------------------------------------------------------------------ *
  * Templates
@@ -90,8 +91,10 @@ test("switching template keeps quote, name, bio and portrait transform intact", 
   );
   assert.equal(first.portrait.x, second.portrait.x);
   assert.equal(first.portrait.width, second.portrait.width);
-  // Only the accent colour of the quote's leading half changes.
-  assert.notEqual(first.quote.lines[0].runs[0].fill, second.quote.lines[0].runs[0].fill);
+  // Only the accent colour of the quote's leading half changes, and it lives in
+  // the palette rather than being baked into the runs.
+  assert.equal(first.quote.lines[0].runs[0].tone, second.quote.lines[0].runs[0].tone);
+  assert.notEqual(first.palette.quoteAccent, second.palette.quoteAccent);
 });
 
 test("template selection is deterministic per candidate", () => {
@@ -175,7 +178,6 @@ test("name line-height is exactly 1.09 baseline-to-baseline", () => {
     box: { x: 0, y: 0, width: 1000, height: 1000 },
     lineHeight: NAME_LINE_HEIGHT,
     align: "left",
-    fill: "#fff",
     fontRole: "name",
   });
 
@@ -195,7 +197,6 @@ test("quote line-height is exactly 1.03 at every font size", () => {
       box: { x: 0, y: 0, width: 1000, height: 1000 },
       lineHeight: QUOTE_LINE_HEIGHT,
       align: "left",
-      fill: "#fff",
       fontRole: "quote",
     });
     const gap = block.lines[1].baseline - block.lines[0].baseline;
@@ -212,7 +213,6 @@ test("short bio line-height is exactly 0.98", () => {
     box: { x: 0, y: 0, width: 1000, height: 1000 },
     lineHeight: SHORT_BIO_LINE_HEIGHT,
     align: "left",
-    fill: "#fff",
     fontRole: "shortBio",
   });
   assert.equal(block.lines[1].baseline - block.lines[0].baseline, 49);
@@ -300,27 +300,69 @@ function quoteLayout(quote: string) {
   });
 }
 
-test("a longer quote is rendered at a strictly smaller font size", () => {
-  const short = quoteLayout("Bilim olishdan hech qachon qo‘rqmaslik kerak"); // ~44 chars
+test("a longer sentence is rendered at a strictly smaller font size", () => {
+  const short = quoteLayout("Bilim olishdan hech qachon qo‘rqmaslik kerak."); // ~44 chars
   const medium = quoteLayout(
-    "O‘z qiziqishlari va imkoniyatlarini qidirlash, bilim olishdan hamda yangi narsalarni sinab ko‘rishdan qo‘rqmaslik kerak",
+    "O‘z qiziqishlari va imkoniyatlarini qidirlash, bilim olishdan hamda yangi narsalarni sinab ko‘rishdan qo‘rqmaslik kerak.",
   ); // ~118 chars
-  const long = quoteLayout(
-    "Nima bo‘lishidan qat’i nazar, orzular tomon yurish shart. Zero, vaqt o‘tib ketadi, orzu esa ro‘yobini topib, insonga baxt berishi lozim. Shunchaki yashashdan nima ma’no? Har kuni bir qadam oldinga tashlash kerak.",
-  ); // ~210 chars
 
   assert.ok(short.quote.fontSize > medium.quote.fontSize, "short > medium");
-  assert.ok(medium.quote.fontSize > long.quote.fontSize, "medium > long");
 
-  // Whatever the size, every line has to stay inside the quote box.
   const box = POST_TEMPLATES["template-01"].quote;
-  for (const layout of [short, medium, long]) {
+  for (const layout of [short, medium]) {
     assert.equal(layout.quote.overflow, false);
     assert.ok(layout.quote.lines.length * layout.quote.fontSize * QUOTE_LINE_HEIGHT <= box.height + 1e-6);
     for (const line of layout.quote.lines) {
       assert.ok(line.width <= box.width + 1e-6, `line fits: ${line.text}`);
     }
   }
+});
+
+test("a multi-sentence answer is shortened, not shrunk", () => {
+  const medium = quoteLayout(
+    "O‘z qiziqishlari va imkoniyatlarini qidirlash, bilim olishdan hamda yangi narsalarni sinab ko‘rishdan qo‘rqmaslik kerak.",
+  );
+  // Four sentences: the old engine set all of them at the minimum size.
+  const long = quoteLayout(
+    "Nima bo‘lishidan qat’i nazar, orzular tomon yurish shart. Zero, vaqt o‘tib ketadi, orzu esa ro‘yobini topib, insonga baxt berishi lozim. Shunchaki yashashdan nima ma’no? Har kuni bir qadam oldinga tashlash kerak.",
+  );
+
+  assert.equal(long.quoteSelection.availableSentences, 4);
+  assert.equal(long.quoteSelection.sentenceCount, 1);
+  assert.equal(long.quoteSelection.text, "Nima bo‘lishidan qat’i nazar, orzular tomon yurish shart.");
+  assert.ok(
+    long.quote.fontSize >= medium.quote.fontSize,
+    `a long answer no longer shrinks the type (${long.quote.fontSize} vs ${medium.quote.fontSize})`,
+  );
+  assert.equal(long.quote.overflow, false);
+});
+
+test("a short opening sentence pulls in the second one to fill the column", () => {
+  const layout = quoteLayout(
+    "O‘zingizga ishoning. Bilim olishdan to‘xtamang va har bir imkoniyatdan foydalaning.",
+  );
+
+  assert.equal(layout.quoteSelection.sentenceCount, 2);
+  assert.equal(layout.quoteSelection.reason, "extended");
+  assert.equal(
+    layout.quoteSelection.text,
+    "O‘zingizga ishoning. Bilim olishdan to‘xtamang va har bir imkoniyatdan foydalaning.",
+  );
+});
+
+test("the poster never truncates a sentence or prints an ellipsis", () => {
+  const raw =
+    "Yoshlarga aytadigan eng katta maslahatim — o‘zlariga ishonishdan to‘xtamasinlar. " +
+    "Har bir imkoniyatdan foydalanib, yangi bilim va tajriba orttirishga intilishsin. " +
+    "Ba’zan yo‘l qiyin bo‘ladi, lekin kichik qadamlar ham katta yutuqlarga olib keladi.";
+  const layout = quoteLayout(raw);
+
+  assert.ok(!layout.quoteSelection.text.includes("…"));
+  assert.ok(!layout.quoteSelection.text.includes("..."));
+  assert.ok(layout.quoteSelection.sentenceCount <= 2, "at most two sentences reach the poster");
+  // Whatever was chosen is a prefix of the raw answer and ends on real punctuation.
+  assert.ok(raw.startsWith(layout.quoteSelection.text));
+  assert.match(layout.quoteSelection.text, /[.!?…]$/);
 });
 
 test("a quote that cannot fit even at the minimum size flags needs_review and is not truncated", () => {
@@ -358,11 +400,13 @@ test("measureText accounts for tracking between glyphs", () => {
 
 test("the quote's leading half takes the accent colour and the rest goes white", () => {
   const layout = quoteLayout(
-    "Xatolar yo‘lning bir qismidir, muvaffaqiyatsizlik emas. Har bir muvaffaqiyatsizlik darslikdan tezroq o‘rgatadi",
+    "Xatolar yo‘lning bir qismidir, muvaffaqiyatsizlik emas. Har bir muvaffaqiyatsizlik darslikdan tezroq o‘rgatadi.",
   );
   const template = POST_TEMPLATES["template-01"];
 
-  const fills = layout.quote.lines.flatMap((l) => l.runs.map((r) => r.fill));
+  const fills = layout.quote.lines.flatMap((l) =>
+    l.runs.map((r) => resolveRunFill(layout.palette, "quote", r.tone)),
+  );
   assert.ok(fills.includes(template.quoteAccentFill), "accent half present");
   assert.ok(fills.includes(template.quote.fill), "white half present");
   // Accent first, white after — never interleaved.
@@ -378,96 +422,32 @@ test("the colour split lands on a word boundary near the midpoint", () => {
 });
 
 /* ------------------------------------------------------------------ *
- * Two-tone name colouring
+ * Name colouring
  * ------------------------------------------------------------------ */
 
-test("the patronymic line is ink black while the name above it stays white", () => {
-  const layout = buildPostLayout({
-    templateId: "template-01",
-    quote: "Qisqa iqtibos",
-    nameLines: splitNameIntoLines("Xolmo‘minova Mavluda Rustam qizi"),
-    shortBioItems: ["Talaba"],
-    portraitHref: null,
-    portraitTransform: { offsetX: 0, offsetY: 0, scale: 1, flip: false },
-  });
-  const template = POST_TEMPLATES["template-01"];
+test("every name line is set in ink black", () => {
+  for (const name of ["Xolmo‘minova Mavluda Rustam qizi", "Oybekova Farangiz"]) {
+    const layout = buildPostLayout({
+      templateId: "template-01",
+      quote: "Qisqa iqtibos.",
+      nameLines: splitNameIntoLines(name),
+      shortBioItems: ["Talaba"],
+      portraitHref: null,
+      portraitTransform: { offsetX: 0, offsetY: 0, scale: 1, flip: false },
+    });
 
-  assert.deepEqual(
-    layout.name.lines.map((l) => [l.text, l.runs[0].fill]),
-    [
-      ["XOLMO‘MINOVA", template.name.fill],
-      ["MAVLUDA", template.name.fill],
-      ["RUSTAM QIZI", template.nameDarkFill],
-    ],
-  );
-  assert.equal(template.nameDarkFill, "#000000");
-});
-
-test("a two-line name never reaches the dark line and stays fully white", () => {
-  const layout = buildPostLayout({
-    templateId: "template-04",
-    quote: "Qisqa iqtibos",
-    nameLines: splitNameIntoLines("Oybekova Farangiz"),
-    shortBioItems: ["Talaba"],
-    portraitHref: null,
-    portraitTransform: { offsetX: 0, offsetY: 0, scale: 1, flip: false },
-  });
-
-  const fills = new Set(layout.name.lines.flatMap((l) => l.runs.map((r) => r.fill)));
-  assert.deepEqual([...fills], [POST_TEMPLATES["template-04"].name.fill]);
-});
-
-/* ------------------------------------------------------------------ *
- * Portrait corner placement
- * ------------------------------------------------------------------ */
-
-test("the portrait frame is flush with the canvas' bottom-right corner", () => {
-  for (const id of POST_TEMPLATE_IDS) {
-    const frame = POST_TEMPLATES[id].portrait;
-    assert.equal(frame.x + frame.width, POST_CANVAS_UNITS, `${id} right edge`);
-    assert.equal(frame.y + frame.height, POST_CANVAS_UNITS, `${id} floor`);
-    assert.equal(frame.anchor, "bottom-right");
+    const fills = new Set(
+      layout.name.lines.flatMap((l) =>
+        l.runs.map((r) => resolveRunFill(layout.palette, "name", r.tone)),
+      ),
+    );
+    assert.deepEqual([...fills], ["#000000"], `${name} is entirely black`);
   }
 });
 
-test("scaling the portrait grows it out of the corner instead of off the canvas", () => {
-  const frame = POST_TEMPLATES["template-01"].portrait;
-
-  for (const scale of [0.6, 1, 1.8]) {
-    const placed = placePortrait(frame, { offsetX: 0, offsetY: 0, scale, flip: false });
-    assert.ok(Math.abs(placed.x + placed.width - POST_CANVAS_UNITS) < 1e-9, `scale ${scale} right`);
-    assert.ok(Math.abs(placed.y + placed.height - POST_CANVAS_UNITS) < 1e-9, `scale ${scale} floor`);
-  }
-
-  // The admin's offsets still move it freely off that resting position.
-  const nudged = placePortrait(frame, { offsetX: -30, offsetY: 12, scale: 1, flip: false });
-  assert.equal(nudged.x, frame.x - 30);
-  assert.equal(nudged.y, frame.y + 12);
-});
-
-test("the studio's drag preview recovers exactly the frame the renderer used", () => {
-  const frame = POST_TEMPLATES["template-01"].portrait;
-  const saved = { offsetX: -18, offsetY: 25, scale: 1.35, flip: false };
-
-  const placed = placePortrait(frame, saved);
-  const recovered = derivePortraitFrame(placed, saved);
-
-  for (const key of ["x", "y", "width", "height"] as const) {
-    assert.ok(Math.abs(recovered[key] - frame[key]) < 1e-9, `${key} round-trips`);
-  }
-});
-
-test("the rendered portrait hugs the bottom-right of its box", () => {
-  const layout = buildPostLayout({
-    templateId: "template-01",
-    quote: "Qisqa iqtibos",
-    nameLines: ["ISM", "FAMILIYA"],
-    shortBioItems: ["Talaba"],
-    portraitHref: "data:image/png;base64,AA==",
-    portraitTransform: { offsetX: 0, offsetY: 0, scale: 1, flip: false },
-  });
-
-  assert.match(buildOverlaySvgBody(layout), /preserveAspectRatio="xMaxYMax meet"/);
+test("the name colour does not depend on which template is selected", () => {
+  const fills = POST_TEMPLATE_IDS.map((id) => paletteForTemplate(id).name);
+  assert.deepEqual([...new Set(fills)], ["#000000"]);
 });
 
 /* ------------------------------------------------------------------ *

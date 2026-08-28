@@ -19,9 +19,10 @@ import {
   POST_STATUS_LABELS,
   POST_STATUS_TONES,
   type PostLayout,
+  type PostPalette,
   type PostTemplateId,
 } from "@/lib/post-studio/types";
-import { derivePortraitFrame, placePortrait } from "@/lib/post-studio/portrait-frame";
+import { applyPortraitOverride } from "@/lib/post-studio/portrait-fit";
 import {
   approvePostAction,
   preparePortraitAction,
@@ -58,6 +59,7 @@ interface TemplateOption {
   accentColor: string;
   thumbnailUrl: string;
   backgroundUrl: string;
+  palette: PostPalette;
 }
 
 interface StudioProps {
@@ -149,12 +151,12 @@ export function PostStudio(props: StudioProps) {
   const [pending, startTransition] = useTransition();
   const [renderVersion, setRenderVersion] = useState(0);
 
-  const portraitStatus = readPortraitStatus(post, pending);
-
   const activeTemplate = useMemo(
     () => templates.find((t) => t.id === templateId) ?? templates[0],
     [templates, templateId],
   );
+
+  const portraitStatus = readPortraitStatus(post, pending);
 
   /**
    * The preview reuses the server-computed layout but re-points the parts the
@@ -165,12 +167,18 @@ export function PostStudio(props: StudioProps) {
    * engine.
    */
   const previewLayout: PostLayout = useMemo(() => {
-    const frame = derivePortraitFrame(layout.portrait, post.portraitTransform);
     return {
       ...layout,
-      portrait: { ...layout.portrait, ...placePortrait(frame, transform) },
+      // Template is a paint-time property, never post content: swapping it
+      // recolours the quote's accent immediately instead of leaving the
+      // previously saved template's colour on screen until the next save.
+      palette: activeTemplate?.palette ?? layout.palette,
+      portrait: {
+        ...layout.portrait,
+        ...applyPortraitOverride(layout.portraitFit, transform),
+      },
     };
-  }, [layout, transform, post.portraitTransform]);
+  }, [layout, transform, activeTemplate]);
 
   function run(action: () => Promise<{ ok: boolean; error?: string; message?: string }>) {
     startTransition(async () => {

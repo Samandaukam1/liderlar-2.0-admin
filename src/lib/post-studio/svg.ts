@@ -1,5 +1,11 @@
 import { fontFamilyAttr } from "./font-stacks.ts";
-import { POST_CANVAS_UNITS, type LaidOutBlock, type PostLayout } from "./types.ts";
+import {
+  POST_CANVAS_UNITS,
+  resolveRunFill,
+  type LaidOutBlock,
+  type PostLayout,
+  type PostPalette,
+} from "./types.ts";
 
 /**
  * SVG serialisation for a laid-out post.
@@ -23,7 +29,7 @@ export function escapeXml(value: string): string {
   return value.replace(/[&<>"']/g, (c) => XML_ESCAPES[c]);
 }
 
-function renderBlock(block: LaidOutBlock): string {
+function renderBlock(block: LaidOutBlock, palette: PostPalette): string {
   if (block.lines.length === 0) return "";
 
   const family = escapeXml(fontFamilyAttr(block.fontRole));
@@ -39,7 +45,8 @@ function renderBlock(block: LaidOutBlock): string {
           (run) =>
             `<text x="${run.x.toFixed(3)}" y="${line.baseline.toFixed(3)}" ` +
             `font-family="${family}" font-size="${block.fontSize.toFixed(3)}" ` +
-            `fill="${run.fill}"${tracking} xml:space="preserve">${escapeXml(run.text)}</text>`,
+            `fill="${resolveRunFill(palette, block.fontRole, run.tone)}"${tracking} ` +
+            `xml:space="preserve">${escapeXml(run.text)}</text>`,
         ),
     )
     .join("");
@@ -93,9 +100,9 @@ export function buildOverlaySvgBody(layout: PostLayout, options: OverlayOptions 
     );
   }
 
-  parts.push(renderBlock(layout.quote));
-  parts.push(renderBlock(layout.name));
-  parts.push(renderBlock(layout.shortBio));
+  parts.push(renderBlock(layout.quote, layout.palette));
+  parts.push(renderBlock(layout.name, layout.palette));
+  parts.push(renderBlock(layout.shortBio, layout.palette));
 
   const body = parts.filter(Boolean).join("");
   return defs.length > 0 ? `<defs>${defs.join("")}</defs>${body}` : body;

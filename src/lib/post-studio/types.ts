@@ -22,14 +22,6 @@ export const NAME_LINE_HEIGHT = 1.09;
 export const QUOTE_LINE_HEIGHT = 1.03;
 export const SHORT_BIO_LINE_HEIGHT = 0.98;
 
-/**
- * Zero-based index of the first name line drawn in ink black instead of white.
- * `splitNameIntoLines` puts the patronymic ("... qizi" / "... o‘g‘li") last, so
- * on a three-line name this is exactly that line — the two-tone treatment the
- * reference posters use to separate the given name from the patronymic. A
- * two-line name simply never reaches the index and stays fully white.
- */
-export const NAME_DARK_LINE_INDEX = 2;
 
 export const POST_TEMPLATE_IDS = [
   "template-01",
@@ -62,6 +54,13 @@ export interface TextBlockConfig extends Box {
   maxFontSize: number;
   /** Below this the block is considered un-fittable -> post needs review. */
   minFontSize: number;
+  /**
+   * Quote only: the smallest size at which taking a second sentence is still
+   * worth it, and how full one sentence must leave the box before a second is
+   * even considered.
+   */
+  comfortFontSize?: number;
+  minFillRatio?: number;
   fontSize?: never;
   align: TextAlign;
   fill: string;
@@ -125,8 +124,6 @@ export interface PostTemplateConfig {
   /** Colour applied to the leading half of the quote (see quote-split.ts). */
   quoteAccentFill: string;
   name: TextBlockConfig;
-  /** Colour of the name's patronymic line (see NAME_DARK_LINE_INDEX). */
-  nameDarkFill: string;
   shortBio: TextBlockConfig;
   portrait: PortraitFrameConfig;
   signature: SignatureConfig;
@@ -137,11 +134,42 @@ export interface PostTemplateConfig {
  * both the browser preview and the final raster, so the two cannot drift.
  * ------------------------------------------------------------------ */
 
+/**
+ * Which of the palette's colours a run takes. Runs name a *role* rather than a
+ * hex value so that switching template repaints the layout without re-running
+ * the text engine — and so a stale accent from a previous template can never
+ * be persisted as if it were the post's own content.
+ */
+export type PaintTone = "base" | "accent";
+
 export interface LaidOutRun {
   text: string;
   /** Absolute x of this run's start, in 810-space. */
   x: number;
-  fill: string;
+  tone: PaintTone;
+}
+
+/**
+ * Every colour the overlay paints with, resolved from the *current* template.
+ * The renderer and the browser preview both read fills from here, so a template
+ * switch is a palette swap and nothing else.
+ */
+export interface PostPalette {
+  quoteBase: string;
+  quoteAccent: string;
+  name: string;
+  shortBio: string;
+}
+
+/** The single place a run's tone becomes a concrete colour. */
+export function resolveRunFill(
+  palette: PostPalette,
+  fontRole: PostFontRole,
+  tone: PaintTone,
+): string {
+  if (fontRole === "quote") return tone === "accent" ? palette.quoteAccent : palette.quoteBase;
+  if (fontRole === "shortBio") return palette.shortBio;
+  return palette.name;
 }
 
 export interface LaidOutLine {
@@ -193,10 +221,25 @@ export interface PostWarning {
 
 export interface PostLayout {
   templateId: PostTemplateId;
+  /** Current template's colours; swap this to repaint without re-laying out. */
+  palette: PostPalette;
+  /** The whole sentences taken from the raw answer, and why. */
+  quoteSelection: {
+    text: string;
+    sentenceCount: number;
+    availableSentences: number;
+    reason: string;
+  };
   quote: LaidOutBlock;
   name: LaidOutBlock;
   shortBio: LaidOutBlock;
   portrait: LaidOutPortrait;
+  /**
+   * The canonical, override-free placement solved from the person's alpha
+   * bounds. The studio re-applies the admin's sliders to this while dragging,
+   * so the live preview and the final render share one fit calculation.
+   */
+  portraitFit: import("./portrait-fit.ts").PortraitPlacement;
   scrim: ScrimConfig;
   signature: SignatureConfig;
   warnings: PostWarning[];
@@ -270,10 +313,17 @@ export interface FontSizeOverrides {
 
 export interface PostComposition {
   templateId: PostTemplateId;
+  /** The RAW 15th answer. Whole sentences are selected from it at layout time. */
   quote: string;
   nameLines: string[];
   shortBioItems: string[];
   portraitHref: string | null;
+  /**
+   * Tight box of the person inside the stored cut-out. Absent only for legacy
+   * assets processed before bounds were recorded, which fall back to the whole
+   * frame.
+   */
+  portraitPersonBounds?: import("./portrait-fit.ts").PersonBounds | null;
   portraitTransform: PortraitTransform;
   fontSizeOverrides?: FontSizeOverrides;
 }

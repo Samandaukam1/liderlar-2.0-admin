@@ -1,4 +1,4 @@
-import type { PostTemplateConfig, PostTemplateId } from "./types.ts";
+import type { PostPalette, PostTemplateConfig, PostTemplateId } from "./types.ts";
 import { POST_TEMPLATE_IDS } from "./types.ts";
 
 /**
@@ -34,8 +34,21 @@ const TEXT_LEFT = 44;
 
 const BRAND_CYAN = "#1ec8fb";
 const WHITE = "#ffffff";
-/** Ink black of the patronymic name line; reads on the cyan band on all six. */
+/** The name block is set entirely in ink black against the cyan band. */
 const INK_BLACK = "#000000";
+
+/**
+ * Right-hand limit of the quote column, in 810-space.
+ *
+ * Measured, not chosen: for real head-and-shoulders cut-outs placed by the
+ * canonical fit, the leftmost opaque pixel anywhere inside the quote's vertical
+ * band (y 150..456) sits at x=445 and x=449 on the two reference photographs.
+ * 430 keeps a 15-unit gutter under that, which is what stops a line of the
+ * quote from running under the candidate's jaw.
+ */
+const QUOTE_RIGHT_LIMIT = 430;
+/** Bottom of the quote column: the card's own floor (476) less a margin. */
+const QUOTE_BOTTOM_LIMIT = 456;
 
 /**
  * Geometry is identical across the six masters (they are colour variants of one
@@ -44,12 +57,19 @@ const INK_BLACK = "#000000";
  */
 const SHARED = {
   quote: {
+    // Widened and deepened from 430x252: the poster now prints one or two whole
+    // sentences instead of a whole answer, and the old column left the card's
+    // right third and bottom quarter empty while setting the type small.
     x: TEXT_LEFT,
     y: 150,
-    width: 430,
-    height: 252,
-    maxFontSize: 46,
-    minFontSize: 20,
+    width: QUOTE_RIGHT_LIMIT - TEXT_LEFT,
+    height: QUOTE_BOTTOM_LIMIT - 150,
+    maxFontSize: 64,
+    minFontSize: 22,
+    // A second sentence is only taken if the quote still sets at 30 or larger,
+    // and only when one sentence fills less than 62% of the column.
+    comfortFontSize: 30,
+    minFillRatio: 0.62,
     align: "left" as const,
     fill: WHITE,
     tracking: 0,
@@ -63,7 +83,7 @@ const SHARED = {
     maxFontSize: 72,
     minFontSize: 34,
     align: "left" as const,
-    fill: WHITE,
+    fill: INK_BLACK,
     tracking: 0,
     uppercase: true,
   },
@@ -83,16 +103,18 @@ const SHARED = {
   },
   quoteScrim: {
     x: POST_CARD_BOX.x,
+    // Widened with the quote column so the last words on a full line keep the
+    // same contrast against the card's bright right-hand gradient.
     y: POST_CARD_BOX.y,
-    width: 530,
+    width: QUOTE_RIGHT_LIMIT - POST_CARD_BOX.x + 20,
     height: POST_CARD_BOX.height,
     cornerRadius: 18,
     opacity: 0.42,
     enabled: true,
   },
   portrait: {
-    // Flush with the canvas' right edge (412 + 398 = 810) and its floor, so the
-    // cut-out sits in the bottom-right corner the reference posters use.
+    // Kept for the frame's documented extent; the placement itself is solved
+    // from the person's own alpha bounds in portrait-fit.ts, not from this box.
     x: 412,
     y: 186,
     width: 398,
@@ -171,7 +193,6 @@ export const POST_TEMPLATES: Record<PostTemplateId, PostTemplateConfig> = Object
         accentColor: variant.accentColor,
         bandColor: BRAND_CYAN,
         quoteAccentFill: variant.quoteAccentFill,
-        nameDarkFill: INK_BLACK,
         signature: variant.signature,
         ...SHARED,
       } satisfies PostTemplateConfig,
@@ -187,6 +208,23 @@ export const DEFAULT_POST_TEMPLATE_ID: PostTemplateId = "template-01";
 
 export function getPostTemplate(id: PostTemplateId): PostTemplateConfig {
   return POST_TEMPLATES[id];
+}
+
+/**
+ * The only place a template's colours become concrete fills.
+ *
+ * Laid-out runs name a tone ("accent"/"base"), never a hex, so switching
+ * template is a call to this function and a re-paint — never a re-layout, and
+ * never a stale colour carried over from the template the post was created on.
+ */
+export function paletteForTemplate(id: PostTemplateId): PostPalette {
+  const template = POST_TEMPLATES[id];
+  return {
+    quoteBase: template.quote.fill,
+    quoteAccent: template.quoteAccentFill,
+    name: template.name.fill,
+    shortBio: template.shortBio.fill,
+  };
 }
 
 /** Public (browser-reachable) URL of a baked background or its thumbnail. */

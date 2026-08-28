@@ -9,6 +9,7 @@ import {
   removePortraitBackground,
 } from "./portrait.ts";
 import { SEGMENTATION_MODEL_LABEL } from "./segmentation.ts";
+import type { PersonBounds } from "./portrait-fit.ts";
 import { downloadPostAsset, uploadPostAsset } from "./storage.ts";
 import {
   downloadCandidatePortraitSource,
@@ -53,6 +54,20 @@ function postStudioLog(message: string, details: Record<string, unknown>): void 
 function storedPortraitMetadata(post: PostRecord): Record<string, unknown> {
   const portrait = post.metadata?.portrait;
   return portrait && typeof portrait === "object" ? (portrait as Record<string, unknown>) : {};
+}
+
+/**
+ * The person's box inside the stored cut-out, recorded when it was processed.
+ * Null for assets made before bounds were kept; the layout then falls back to
+ * the whole frame, which is exactly the old behaviour for those legacy posts.
+ */
+function storedPersonBounds(post: PostRecord): PersonBounds | null {
+  const raw = storedPortraitMetadata(post).personBounds as Partial<PersonBounds> | undefined;
+  if (!raw) return null;
+  const numbers = [raw.left, raw.top, raw.width, raw.height, raw.imageWidth, raw.imageHeight];
+  if (numbers.some((n) => typeof n !== "number" || !Number.isFinite(n))) return null;
+  if (!raw.width || !raw.height) return null;
+  return raw as PersonBounds;
 }
 
 /**
@@ -128,6 +143,34 @@ export async function preparePortrait(
       ms: segmentationMs,
     });
 
+    postStudioLog("segmentation complete", {
+      postId: post.id,
+      candidateId: post.candidateId,
+      confidence: Number(cutout.confidence.toFixed(4)),
+    });
+    postStudioLog("matte refined", {
+      postId: post.id,
+      candidateId: post.candidateId,
+      decisiveShare: Number(cutout.decisiveShare.toFixed(4)),
+    });
+    postStudioLog("detached artifacts removed", {
+      postId: post.id,
+      candidateId: post.candidateId,
+      count: cutout.cleanup.removed.length,
+      largestArea: cutout.cleanup.removed[0]?.area ?? 0,
+      removedShare: Number(cutout.cleanup.removedShare.toFixed(4)),
+    });
+    postStudioLog("alpha validated", {
+      postId: post.id,
+      candidateId: post.candidateId,
+      coverage: Number(cutout.coverage.toFixed(4)),
+    });
+    postStudioLog("alpha bounds calculated", {
+      postId: post.id,
+      candidateId: post.candidateId,
+      person: cutout.personBounds,
+    });
+
     const enhanced = await enhancePortraitColor(cutout.buffer);
     postStudioLog("saturation applied", {
       postId: post.id,
@@ -160,6 +203,13 @@ export async function preparePortrait(
           coverage: Number(cutout.coverage.toFixed(4)),
           confidence: Number(cutout.confidence.toFixed(4)),
           decisiveShare: Number(cutout.decisiveShare.toFixed(4)),
+          personBounds: cutout.personBounds,
+          cleanup: {
+            removed: cutout.cleanup.removed.length,
+            removedShare: Number(cutout.cleanup.removedShare.toFixed(4)),
+            largestRemovedArea: cutout.cleanup.removed[0]?.area ?? 0,
+            bridgeRadius: cutout.cleanup.bridgeRadius,
+          },
           width: enhanced.width,
           height: enhanced.height,
           saturation: enhanced.saturation,
@@ -212,15 +262,29 @@ async function portraitHrefFor(post: PostRecord): Promise<string | null> {
 }
 
 export async function buildLayoutForPost(post: PostRecord): Promise<PostLayout> {
-  return buildPostLayout({
+  const layout = buildPostLayout({
     templateId: post.templateId,
     quote: post.quote,
     nameLines: post.nameLines,
     shortBioItems: post.shortBioItems,
     portraitHref: await portraitHrefFor(post),
+    portraitPersonBounds: storedPersonBounds(post),
     portraitTransform: post.portraitTransform,
     fontSizeOverrides: post.fontSizeOverrides,
   });
+  postStudioLog("quote derived from intake q15", {
+    postId: post.id,
+    sentences: layout.quoteSelection.sentenceCount,
+    available: layout.quoteSelection.availableSentences,
+    reason: layout.quoteSelection.reason,
+  });
+  postStudioLog("portrait auto-fit calculated", {
+    postId: post.id,
+    person: layout.portrait,
+    fontSize: layout.quote.fontSize,
+  });
+  postStudioLog("layout built", { postId: post.id, templateId: layout.templateId });
+  return layout;
 }
 
 /**
@@ -249,6 +313,7 @@ export async function buildLayoutForPreview(post: PostRecord): Promise<PostLayou
     nameLines: post.nameLines,
     shortBioItems: post.shortBioItems,
     portraitHref: previewPortraitHref,
+    portraitPersonBounds: storedPersonBounds(post),
     portraitTransform: post.portraitTransform,
     fontSizeOverrides: post.fontSizeOverrides,
   });

@@ -3,6 +3,9 @@ import crypto from "node:crypto";
 import sharp from "sharp";
 import { runSegmentation, segmentationModelAvailable } from "./segmentation.ts";
 import { attachAlpha, measureMatte, refineMask, type MatteStats } from "./matte.ts";
+import { cleanupMatte, type CleanupReport } from "./matte-cleanup.ts";
+import { alphaBounds } from "./morphology.ts";
+import { toPersonBounds, type PersonBounds } from "./portrait-fit.ts";
 
 /**
  * Portrait preparation for Post Studio.
@@ -34,6 +37,14 @@ export interface PortraitCutout {
   confidence: number;
   /** Share of pixels the matte committed on, either way. */
   decisiveShare: number;
+  /**
+   * Tight box of the person inside the stored PNG. The layout scales by this
+   * and never by the image's own dimensions, so transparent margin in the
+   * source cannot change how large the candidate renders.
+   */
+  personBounds: PersonBounds;
+  /** What the artefact pass deleted, for logging and review. */
+  cleanup: CleanupReport;
 }
 
 export interface EnhancedPortrait {
@@ -81,6 +92,16 @@ const MAX_COVERAGE = 0.88;
  * frame, which upscales into a translucent smear rather than a cut-out.
  */
 const MIN_PEAK_CONFIDENCE = 0.5;
+
+/** Alpha at or above this counts as "the person is here" when measuring bounds. */
+export const ALPHA_BOUNDS_THRESHOLD = 128;
+
+/**
+ * If the artefact pass had to delete more than this share of the matte's core,
+ * the mask was not a portrait with a blob beside it — it was mostly wrong, and
+ * a human should look before anything is published.
+ */
+const MAX_CLEANUP_SHARE = 0.35;
 const MIN_DECISIVE_SHARE = 0.9;
 
 /**
@@ -286,7 +307,24 @@ export async function removePortraitBackground(source: Buffer): Promise<Portrait
     );
   }
 
-  const alpha = await refineMask(mask.data, mask.size, working.width, working.height);
+  const refined = await refineMask(mask.data, mask.size, working.width, working.height);
+
+  // Artefact pass: delete the slab of wall or the fragment beside an ear that
+  // the model kept, without touching the ear itself. See matte-cleanup.ts.
+  const { alpha, report: cleanup } = cleanupMatte(
+    refined.alpha,
+    refined.confidence,
+    working.width,
+    working.height,
+  );
+
+  if (cleanup.removedShare > MAX_CLEANUP_SHARE) {
+    throw new PortraitProcessingError(
+      `Maskadan juda ko‘p qism olib tashlandi (${(cleanup.removedShare * 100).toFixed(1)}%).`,
+      "low_quality",
+    );
+  }
+
   const stats = measureMatte(alpha);
   assertUsableMatte(stats, mask.peak);
 
@@ -297,6 +335,22 @@ export async function removePortraitBackground(source: Buffer): Promise<Portrait
   );
   const validated = await validateTransparentPortrait(trimmed.buffer);
 
+  // Measured on the asset that actually ships, so the layout and the stored
+  // PNG can never disagree about where the person is.
+  const storedAlpha = await sharp(trimmed.buffer)
+    .ensureAlpha()
+    .extractChannel("alpha")
+    .toColourspace("b-w")
+    .raw()
+    .toBuffer();
+  const box = alphaBounds(storedAlpha, trimmed.width, trimmed.height, ALPHA_BOUNDS_THRESHOLD);
+  if (!box) {
+    throw new PortraitProcessingError(
+      "Cutout ichida odam chegaralari topilmadi.",
+      "low_quality",
+    );
+  }
+
   return {
     buffer: trimmed.buffer,
     width: trimmed.width,
@@ -304,6 +358,8 @@ export async function removePortraitBackground(source: Buffer): Promise<Portrait
     coverage: validated.coverage,
     confidence: mask.peak,
     decisiveShare: stats.decisiveShare,
+    personBounds: toPersonBounds(box, trimmed.width, trimmed.height),
+    cleanup,
   };
 }
 
