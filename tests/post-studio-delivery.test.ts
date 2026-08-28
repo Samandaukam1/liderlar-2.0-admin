@@ -803,18 +803,31 @@ test("a working caption lifts the review flag it previously raised", () => {
   }
 });
 
-test("the studio says which of the two causes left the article link empty", () => {
-  const client = fs.readFileSync("src/app/(admin)/postlar/[postId]/studio-client.tsx", "utf8");
-  const fn = client.slice(client.indexOf("function describeArticleState"));
+test("the caption link follows the candidate's own publication, not an article row", () => {
+  // The public site serves /liderlar/{slug} whenever candidates.status is
+  // 'published' — the articles table is one optional section inside that page.
+  // Gating on the article row held live profiles out of Telegram.
+  const repository = fs.readFileSync("src/lib/post-studio/repository.ts", "utf8");
+  assert.match(repository, /const candidateStatus = \(candidate\.status as string \| null\) \?\? null/);
+  assert.match(repository, /candidateStatus === "published"\s*\?\s*await buildCandidateArticleUrl/);
+  assert.ok(
+    !/article\?\.status === "published"\s*\n?\s*\? await buildCandidateArticleUrl/.test(repository),
+    "the article row no longer gates the link",
+  );
+  assert.match(repository, /"id, full_name, slug, status, avatar_url/, "status is actually selected");
+});
 
-  assert.match(fn, /Nomzodga maqola biriktirilmagan/);
-  assert.match(fn, /Maqola hali nashr qilinmagan \(holati: \$\{label\}\)/);
+test("the studio names which of the two causes left the profile link empty", () => {
+  const client = fs.readFileSync("src/app/(admin)/postlar/[postId]/studio-client.tsx", "utf8");
+  const fn = client.slice(client.indexOf("function describeProfileState"));
+
+  assert.match(fn, /Nomzod sahifasi hali nashr qilinmagan \(holati: \$\{label\}\)/);
   assert.match(fn, /public sayt manzili sozlanmagan/);
   // The old blanket message is gone.
   assert.ok(!client.includes('"Maqola hali nashr qilinmagan"'));
 
   const page = fs.readFileSync("src/app/(admin)/postlar/[postId]/page.tsx", "utf8");
-  assert.match(page, /articleStatus: source\?\.article\?\.status \?\? null/);
+  assert.match(page, /candidateStatus: source\?\.candidateStatus \?\? null/);
   assert.match(page, /publicWebConfigured: source\?\.publicWebConfigured \?\? false/);
 });
 

@@ -73,6 +73,8 @@ interface StudioProps {
     quotes: QuoteCandidate[];
     shortBioItems: string[];
     portraitSourceUrl: string | null;
+    /** candidates.status — what decides whether the public profile is live. */
+    candidateStatus: string | null;
     /** The candidate's article row status, or null when there is no article. */
     articleStatus: string | null;
     /** Whether site_settings → public_web.base_url resolves to an origin. */
@@ -84,7 +86,7 @@ interface StudioProps {
   canPublish: boolean;
 }
 
-const ARTICLE_STATUS_LABELS: Record<string, string> = {
+const STATUS_LABELS: Record<string, string> = {
   draft: "qoralama",
   review: "tekshiruvda",
   scheduled: "rejalashtirilgan",
@@ -93,27 +95,27 @@ const ARTICLE_STATUS_LABELS: Record<string, string> = {
 };
 
 /**
- * Why the caption has no article link.
+ * Why the caption has no profile link.
  *
- * The two causes look identical from the outside and used to print the same
- * "maqola hali nashr qilinmagan", which sent admins hunting for a publication
- * problem when the real one was an unset public-site address.
+ * The link is the candidate's own `/liderlar/{slug}` page, which the public
+ * site serves whenever `candidates.status = 'published'`. Two different things
+ * can leave it empty and they used to print the same message, which sent
+ * admins hunting for a publication problem that did not exist.
  */
-function describeArticleState(candidate: {
+function describeProfileState(candidate: {
   articleUrl: string | null;
-  articleStatus: string | null;
+  candidateStatus: string | null;
   publicWebConfigured: boolean;
 }): string {
-  if (candidate.articleUrl) return "Nashr qilingan maqola";
-  if (!candidate.articleStatus) return "Nomzodga maqola biriktirilmagan";
-  if (candidate.articleStatus !== "published") {
-    const label = ARTICLE_STATUS_LABELS[candidate.articleStatus] ?? candidate.articleStatus;
-    return `Maqola hali nashr qilinmagan (holati: ${label})`;
+  if (candidate.articleUrl) return "Nashr qilingan sahifa";
+  if (candidate.candidateStatus !== "published") {
+    const label = STATUS_LABELS[candidate.candidateStatus ?? ""] ?? candidate.candidateStatus ?? "noma’lum";
+    return `Nomzod sahifasi hali nashr qilinmagan (holati: ${label})`;
   }
   if (!candidate.publicWebConfigured) {
-    return "Maqola nashr qilingan, lekin public sayt manzili sozlanmagan — havolani qo‘lda tasdiqlang";
+    return "Sahifa nashr qilingan, lekin public sayt manzili sozlanmagan — havolani qo‘lda tasdiqlang";
   }
-  return "Maqola havolasi aniqlanmadi";
+  return "Sahifa havolasi aniqlanmadi";
 }
 
 const QUOTE_SOURCE_LABELS: Record<string, string> = {
@@ -275,10 +277,10 @@ export function PostStudio(props: StudioProps) {
           <p className="mt-1 text-xs text-ink-soft">
             {candidate.articleUrl ? (
               <a href={candidate.articleUrl} className="text-brand hover:underline" target="_blank" rel="noreferrer">
-                Nashr qilingan maqola
+                Nomzod sahifasi
               </a>
             ) : (
-              describeArticleState(candidate)
+              describeProfileState(candidate)
             )}
           </p>
         </Panel>
@@ -611,7 +613,7 @@ export function PostStudio(props: StudioProps) {
             <p className="text-[11px] text-ink-soft">
               {candidate.articleUrl
                 ? "Avtomatik aniqlandi — kerak bo‘lsa qo‘lda o‘zgartiring."
-                : `${describeArticleState(candidate)}. Bu yerga to‘liq havolani qo‘yib saqlasangiz, ` +
+                : `${describeProfileState(candidate)}. Bu yerga to‘liq havolani qo‘yib saqlasangiz, ` +
                   "caption'dagi sayt va ariza havolalari ham o‘sha manzildan olinadi."}
             </p>
             {canManage ? (

@@ -43,7 +43,10 @@ export interface CandidateSourceData {
    * Canonical published article URL, or null when the article is unpublished
    * OR the public site's origin has not been configured yet.
    */
+  /** Public profile URL, present only once the candidate itself is published. */
   articleUrl: string | null;
+  /** candidates.status — what actually decides whether the profile is live. */
+  candidateStatus: string | null;
   /** False when public_web.base_url is unset — the admin must confirm a URL. */
   publicWebConfigured: boolean;
   portraitSourceUrl: string | null;
@@ -328,7 +331,7 @@ export async function loadCandidateSourceData(
     db
       .from("candidates")
       .select(
-        "id, full_name, slug, avatar_url, description_items, short_bio, source_intake_id, deleted_at",
+        "id, full_name, slug, status, avatar_url, description_items, short_bio, source_intake_id, deleted_at",
       )
       .eq("id", candidateId)
       .maybeSingle(),
@@ -344,8 +347,19 @@ export async function loadCandidateSourceData(
   if (!candidate || candidate.deleted_at) return null;
 
   const article = articleRows?.[0] ?? null;
+
+  /**
+   * The link the caption carries is `/liderlar/{slug}` — the candidate's own
+   * profile page. On the public site that page is gated on
+   * `candidates.status = 'published'`; the `articles` row is only one optional
+   * section inside it. Gating this on the article's status instead was wrong in
+   * both directions: a candidate whose profile was live on the site was
+   * reported as "maqola hali nashr qilinmagan" and held out of Telegram,
+   * because their article row happened to still be a draft.
+   */
+  const candidateStatus = (candidate.status as string | null) ?? null;
   const articleUrl =
-    article?.status === "published"
+    candidateStatus === "published"
       ? await buildCandidateArticleUrl(candidate.slug as string)
       : null;
 
@@ -389,6 +403,7 @@ export async function loadCandidateSourceData(
         }
       : null,
     articleUrl,
+    candidateStatus,
     publicWebConfigured,
     portraitSourceUrl: portraitSourceReference(portraitSource),
     canonicalQuote,

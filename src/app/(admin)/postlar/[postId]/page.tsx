@@ -64,6 +64,7 @@ export default async function PostStudioPage({
           portraitSourceUrl: source?.portraitSourceUrl ?? null,
           // Both halves of "why is there no link", so the studio can say which
           // one it is instead of always blaming the article.
+          candidateStatus: source?.candidateStatus ?? null,
           articleStatus: source?.article?.status ?? null,
           publicWebConfigured: source?.publicWebConfigured ?? false,
         }}
