@@ -416,17 +416,33 @@ test("the studio ships each template's palette so the preview can repaint", () =
  * Creating a post produces a finished post
  * ------------------------------------------------------------------ */
 
-test("creating a post runs the portrait and the render, with no manual step", () => {
-  const actions = fs.readFileSync("src/lib/actions/post-studio.ts", "utf8");
-  const create = actions.slice(
-    actions.indexOf("export async function createPostForCandidateAction"),
-    actions.indexOf("export async function savePostContentAction"),
+test("creating a post drives portrait and render itself, with no manual step", () => {
+  // The three steps are separate actions so the button can report real
+  // progress, but the form runs all three before it navigates.
+  const form = fs.readFileSync("src/app/(admin)/postlar/create-post-form.tsx", "utf8");
+  const order = ["createPostForCandidateAction(", "preparePortraitAction(", "rerenderPostAction("]
+    .map((needle) => form.indexOf(needle, form.indexOf("function onCreate")));
+  assert.ok(order.every((i) => i > 0), "all three steps are called");
+  assert.deepEqual(order, [...order].sort((a, b) => a - b), "in order");
+  assert.ok(
+    form.indexOf("router.push") > order[2],
+    "the studio is only opened after the render returns",
   );
-  assert.match(create, /createPostDraft[\s\S]*preparePortrait\(post\)[\s\S]*renderAndStorePost/);
+  assert.match(form, /preparePortraitAction\(postId, \{ force: false \}\)/, "reuses a current cut-out");
 
-  // The manual button still exists, but only as an explicit re-run.
+  // The manual button is an explicit re-run, so it defaults to forcing.
+  const actions = fs.readFileSync("src/lib/actions/post-studio.ts", "utf8");
   const prepare = actions.slice(actions.indexOf("export async function preparePortraitAction"));
-  assert.match(prepare, /preparePortrait\(post, \{ force: true \}\)/);
+  assert.match(prepare, /force: options\.force \?\? true/);
+});
+
+test("the create button reports honest progress", () => {
+  const form = fs.readFileSync("src/app/(admin)/postlar/create-post-form.tsx", "utf8");
+  assert.match(form, /role="progressbar"/);
+  assert.match(form, /aria-valuenow=\{current\.at\}/);
+  // Each percentage is tied to a step that has actually returned, not a timer.
+  assert.ok(!/setTimeout|setInterval/.test(form), "no simulated progress");
+  assert.match(form, /Post tayyor/);
 });
 
 test("the studio's portrait button is a retry, not the normal path", () => {

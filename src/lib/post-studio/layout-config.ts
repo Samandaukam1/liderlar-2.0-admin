@@ -34,7 +34,7 @@ const TEXT_LEFT = 44;
 
 const BRAND_CYAN = "#1ec8fb";
 const WHITE = "#ffffff";
-/** The name block is set entirely in ink black against the cyan band. */
+/** The patronymic name line only; the lines above it stay white. */
 const INK_BLACK = "#000000";
 
 /**
@@ -83,7 +83,7 @@ const SHARED = {
     maxFontSize: 72,
     minFontSize: 34,
     align: "left" as const,
-    fill: INK_BLACK,
+    fill: WHITE,
     tracking: 0,
     uppercase: true,
   },
@@ -103,11 +103,13 @@ const SHARED = {
   },
   quoteScrim: {
     x: POST_CARD_BOX.x,
-    // Widened with the quote column so the last words on a full line keep the
-    // same contrast against the card's bright right-hand gradient.
-    y: POST_CARD_BOX.y,
+    // Starts below the logo lock-up rather than at the card's top edge: running
+    // it the full height washed a grey veil over the Humo bird and the
+    // wordmark, which is what made the logo look like it had dropped behind
+    // the artwork.
+    y: POST_LOGO_BASELINE,
     width: QUOTE_RIGHT_LIMIT - POST_CARD_BOX.x + 20,
-    height: POST_CARD_BOX.height,
+    height: POST_CARD_BOX.y + POST_CARD_BOX.height - POST_LOGO_BASELINE,
     cornerRadius: 18,
     opacity: 0.42,
     enabled: true,
@@ -189,6 +191,7 @@ export const POST_TEMPLATES: Record<PostTemplateId, PostTemplateConfig> = Object
         id,
         label: variant.label,
         backgroundPath: `public/assets/post-studio/backgrounds/${id}.png`,
+        foregroundPath: `public/assets/post-studio/backgrounds/${id}-front.png`,
         thumbnailPath: `public/assets/post-studio/backgrounds/${id}-thumb.jpg`,
         accentColor: variant.accentColor,
         bandColor: BRAND_CYAN,
@@ -223,6 +226,7 @@ export function paletteForTemplate(id: PostTemplateId): PostPalette {
     quoteBase: template.quote.fill,
     quoteAccent: template.quoteAccentFill,
     name: template.name.fill,
+    nameDark: INK_BLACK,
     shortBio: template.shortBio.fill,
   };
 }

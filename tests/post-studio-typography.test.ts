@@ -425,29 +425,48 @@ test("the colour split lands on a word boundary near the midpoint", () => {
  * Name colouring
  * ------------------------------------------------------------------ */
 
-test("every name line is set in ink black", () => {
-  for (const name of ["Xolmo‘minova Mavluda Rustam qizi", "Oybekova Farangiz"]) {
-    const layout = buildPostLayout({
-      templateId: "template-01",
-      quote: "Qisqa iqtibos.",
-      nameLines: splitNameIntoLines(name),
-      shortBioItems: ["Talaba"],
-      portraitHref: null,
-      portraitTransform: { offsetX: 0, offsetY: 0, scale: 1, flip: false },
-    });
+function nameLayout(name: string) {
+  return buildPostLayout({
+    templateId: "template-01",
+    quote: "Qisqa iqtibos.",
+    nameLines: splitNameIntoLines(name),
+    shortBioItems: ["Talaba"],
+    portraitHref: null,
+    portraitTransform: { offsetX: 0, offsetY: 0, scale: 1, flip: false },
+  });
+}
 
-    const fills = new Set(
-      layout.name.lines.flatMap((l) =>
-        l.runs.map((r) => resolveRunFill(layout.palette, "name", r.tone)),
-      ),
-    );
-    assert.deepEqual([...fills], ["#000000"], `${name} is entirely black`);
-  }
+test("the patronymic line is dark and the name above it stays white", () => {
+  const layout = nameLayout("Abduroxatova Marjona A’zamjon qizi");
+  assert.deepEqual(
+    layout.name.lines.map((l) => [
+      l.text,
+      resolveRunFill(layout.palette, "name", l.runs[0].tone),
+    ]),
+    [
+      ["ABDUROXATOVA", "#ffffff"],
+      ["MARJONA", "#ffffff"],
+      ["A’ZAMJON QIZI", "#000000"],
+    ],
+  );
 });
 
-test("the name colour does not depend on which template is selected", () => {
-  const fills = POST_TEMPLATE_IDS.map((id) => paletteForTemplate(id).name);
-  assert.deepEqual([...new Set(fills)], ["#000000"]);
+test("a two-line name never reaches the dark line and stays white", () => {
+  const layout = nameLayout("Oybekova Farangiz");
+  const fills = new Set(
+    layout.name.lines.flatMap((l) =>
+      l.runs.map((r) => resolveRunFill(layout.palette, "name", r.tone)),
+    ),
+  );
+  assert.deepEqual([...fills], ["#ffffff"]);
+});
+
+test("the name colours do not depend on which template is selected", () => {
+  const pairs = POST_TEMPLATE_IDS.map((id) => {
+    const p = paletteForTemplate(id);
+    return `${p.name}/${p.nameDark}`;
+  });
+  assert.deepEqual([...new Set(pairs)], ["#ffffff/#000000"]);
 });
 
 /* ------------------------------------------------------------------ *

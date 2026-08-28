@@ -28,7 +28,7 @@ import {
 import { buildPostLayout } from "../src/lib/post-studio/compose.ts";
 import { renderPostImage, toDataUri } from "../src/lib/post-studio/render.ts";
 import { splitNameIntoLines } from "../src/lib/post-studio/name-lines.ts";
-import { POST_OUTPUT_SIZE } from "../src/lib/post-studio/types.ts";
+import { POST_CANVAS_UNITS, POST_OUTPUT_SIZE } from "../src/lib/post-studio/types.ts";
 
 const PLAIN = "tests/fixtures/portrait-plain-background.jpg";
 const BUSY = "tests/fixtures/portrait-busy-background.jpg";
@@ -319,9 +319,17 @@ test("the processed portrait lands in the poster's bottom-right corner", async (
     return { r: r / n, g: g / n, b: b / n };
   };
 
-  const corner = await sample(POST_OUTPUT_SIZE - 120, POST_OUTPUT_SIZE - 120);
-  const isNeutral = Math.abs(corner.r - corner.b) <= 2 && Math.abs(corner.g - corner.b) <= 2;
-  assert.ok(isNeutral, `bottom-right corner is the greyscale portrait, got ${JSON.stringify(corner)}`);
+  // Sampled on the candidate's own face, located from the layout rather than
+  // guessed: the band's light plate deliberately tints the foot of the poster
+  // in front of the portrait, so a fixed corner sample would read as cyan.
+  const person = layout.portraitFit.person;
+  const toPx = (unit: number) => Math.round((unit * POST_OUTPUT_SIZE) / POST_CANVAS_UNITS);
+  const face = await sample(
+    toPx(person.left + person.width * 0.5),
+    toPx(person.top + person.height * 0.15),
+  );
+  const isNeutral = Math.abs(face.r - face.b) <= 2 && Math.abs(face.g - face.b) <= 2;
+  assert.ok(isNeutral, `the portrait renders greyscale, got ${JSON.stringify(face)}`);
 
   const leftBand = await sample(20, POST_OUTPUT_SIZE - 30);
   assert.ok(leftBand.b > leftBand.r + 100, "the far left of the band is still brand cyan");
@@ -332,10 +340,17 @@ test("preview and final render are built from one layout engine and one asset", 
   // Both paths read the same stable storage object and hand it to the same
   // builder; only how the image is referenced differs (data URI vs URL).
   assert.equal((service.match(/buildPostLayout\(\{/g) ?? []).length, 2);
-  for (const fn of ["buildLayoutForPost", "buildLayoutForPreview"]) {
-    const block = service.slice(service.indexOf(`export async function ${fn}`));
-    assert.match(block, /downloadPostAsset\(post\.candidateId, "portrait-transparent"\)/);
-  }
+  // The renderer inlines the stored cut-out; the preview only checks that the
+  // very same object exists and then points the browser at its URL.
+  const hrefBlock = service.slice(
+    service.indexOf("async function portraitHrefFor"),
+    service.indexOf("export async function buildLayoutForPost"),
+  );
+  assert.match(hrefBlock, /downloadPostAsset\(post\.candidateId, "portrait-transparent"\)/);
+  const finalBlock = service.slice(service.indexOf("export async function buildLayoutForPost"));
+  assert.match(finalBlock, /portraitHrefFor\(post\)/);
+  const previewBlock = service.slice(service.indexOf("export async function buildLayoutForPreview"));
+  assert.match(previewBlock, /postAssetExists\(post\.candidateId, "portrait-transparent"\)/);
 
   const withHref = (portraitHref: string | null) =>
     buildPostLayout({

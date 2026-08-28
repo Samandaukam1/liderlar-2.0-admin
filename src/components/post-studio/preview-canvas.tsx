@@ -23,10 +23,13 @@ const FONT_FACE_CSS = POST_FONT_WEB_FACES.map(
 export function PostPreviewCanvas({
   layout,
   backgroundUrl,
+  foregroundUrl,
   className,
 }: {
   layout: PostLayout;
   backgroundUrl: string;
+  /** Logo lock-up and band light, drawn over the portrait exactly as in render.ts. */
+  foregroundUrl: string;
   className?: string;
 }) {
   const [signature, setSignature] = useState<string | null>(null);
@@ -46,7 +49,10 @@ export function PostPreviewCanvas({
     };
   }, []);
 
-  const overlay = buildOverlaySvgBody(layout, { signatureMarkup: signature });
+  const overlay = buildOverlaySvgBody(layout, {
+    signatureMarkup: signature,
+    foregroundHref: foregroundUrl,
+  });
 
   return (
     <div className={className}>

@@ -58,6 +58,13 @@ export interface OverlayOptions {
    * script sits on top of the candidate, matching the reference posts.
    */
   signatureMarkup?: string | null;
+  /**
+   * The template's foreground plate — logo lock-up and the band's light. Drawn
+   * after the portrait and before the signature, which is the master's own
+   * layer order: the branding is frontmost, the light passes in front of the
+   * candidate but behind the script.
+   */
+  foregroundHref?: string | null;
 }
 
 /** The dynamic half of a post: portrait, signature and all text, in 810-space. */
@@ -90,6 +97,13 @@ export function buildOverlaySvgBody(layout: PostLayout, options: OverlayOptions 
         // pinning it to the frame's bottom-right keeps it in the canvas corner
         // whatever aspect ratio the source photo had.
         `height="${portrait.height.toFixed(3)}" preserveAspectRatio="xMaxYMax meet"/>`,
+    );
+  }
+
+  if (options.foregroundHref) {
+    parts.push(
+      `<image href="${escapeXml(options.foregroundHref)}" x="0" y="0" ` +
+        `width="${POST_CANVAS_UNITS}" height="${POST_CANVAS_UNITS}"/>`,
     );
   }
 

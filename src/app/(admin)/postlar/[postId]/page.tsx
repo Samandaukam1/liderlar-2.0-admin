@@ -51,6 +51,7 @@ export default async function PostStudioPage({
           accentColor: t.accentColor,
           thumbnailUrl: templateAssetUrl(t.thumbnailPath),
           backgroundUrl: templateAssetUrl(t.backgroundPath),
+          foregroundUrl: templateAssetUrl(t.foregroundPath),
           // Shipped per template so switching one repaints the preview from the
           // new template's own colours instead of keeping the saved post's.
           palette: paletteForTemplate(t.id),

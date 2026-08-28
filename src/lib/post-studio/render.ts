@@ -25,6 +25,7 @@ import { POST_OUTPUT_SIZE, type PostLayout, type PostTemplateId } from "./types.
 const THUMBNAIL_SIZE = 320;
 
 const backgroundCache = new Map<PostTemplateId, Buffer>();
+const foregroundCache = new Map<PostTemplateId, string>();
 let signatureCache: string | null = null;
 
 async function loadBackground(templateId: PostTemplateId): Promise<Buffer> {
@@ -37,6 +38,23 @@ async function loadBackground(templateId: PostTemplateId): Promise<Buffer> {
   );
   backgroundCache.set(templateId, buffer);
   return buffer;
+}
+
+/**
+ * The foreground plate, as a data URI so it rides inside the same overlay
+ * document as the portrait and the text. Inlining keeps the render to one resvg
+ * pass; the plate is ~38KB, which is cheaper than a second rasterisation.
+ */
+async function loadForeground(templateId: PostTemplateId): Promise<string> {
+  const cached = foregroundCache.get(templateId);
+  if (cached) return cached;
+
+  const buffer = await fs.readFile(
+    path.join(process.cwd(), "public/assets/post-studio/backgrounds", `${templateId}-front.png`),
+  );
+  const uri = toDataUri(buffer, "image/png");
+  foregroundCache.set(templateId, uri);
+  return uri;
 }
 
 /** Extracted "Liderlar iqtibosi!!!" outlines, shared by all six templates. */
@@ -62,12 +80,16 @@ export interface RenderedPost {
 }
 
 export async function renderPostImage(layout: PostLayout): Promise<RenderedPost> {
-  const [background, signatureMarkup] = await Promise.all([
+  const [background, foregroundHref, signatureMarkup] = await Promise.all([
     loadBackground(layout.templateId),
+    loadForeground(layout.templateId),
     loadSignatureMarkup(),
   ]);
 
-  const overlaySvg = buildOverlaySvg(layout, POST_OUTPUT_SIZE, { signatureMarkup });
+  const overlaySvg = buildOverlaySvg(layout, POST_OUTPUT_SIZE, {
+    signatureMarkup,
+    foregroundHref,
+  });
 
   const overlayPng = new Resvg(overlaySvg, {
     fitTo: { mode: "width", value: POST_OUTPUT_SIZE },

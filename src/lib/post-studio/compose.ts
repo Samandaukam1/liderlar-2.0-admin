@@ -2,6 +2,7 @@ import "server-only";
 import { getFontMetrics } from "./fonts.ts";
 import { fitFixedLines, fitWrappedText, positionLines } from "./text-engine.ts";
 import { applyQuoteColorSplit } from "./quote-split.ts";
+import { applyNameDarkTail } from "./name-tone.ts";
 import { selectDisplayQuote, type DisplayQuoteChoice } from "./quote-sentences.ts";
 import {
   applyPortraitOverride,
@@ -131,14 +132,16 @@ export function buildPostLayout(composition: PostComposition): PostLayout {
     tracking: template.name.tracking,
   });
 
-  const nameBlock = positionLines(nameFit, {
-    metrics: nameMetrics,
-    box: template.name,
-    lineHeight: NAME_LINE_HEIGHT,
-    align: template.name.align,
-    tracking: template.name.tracking,
-    fontRole: "name",
-  });
+  const nameBlock = applyNameDarkTail(
+    positionLines(nameFit, {
+      metrics: nameMetrics,
+      box: template.name,
+      lineHeight: NAME_LINE_HEIGHT,
+      align: template.name.align,
+      tracking: template.name.tracking,
+      fontRole: "name",
+    }),
+  );
 
   if (nameLines.length === 0) {
     warnings.push({ code: "name_missing", message: "Nomzod ismi bo‘sh." });

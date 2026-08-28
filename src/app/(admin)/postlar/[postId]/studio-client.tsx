@@ -59,6 +59,7 @@ interface TemplateOption {
   accentColor: string;
   thumbnailUrl: string;
   backgroundUrl: string;
+  foregroundUrl: string;
   palette: PostPalette;
 }
 
@@ -346,7 +347,11 @@ export function PostStudio(props: StudioProps) {
         </div>
 
         {activeTemplate ? (
-          <PostPreviewCanvas layout={previewLayout} backgroundUrl={activeTemplate.backgroundUrl} />
+          <PostPreviewCanvas
+            layout={previewLayout}
+            backgroundUrl={activeTemplate.backgroundUrl}
+            foregroundUrl={activeTemplate.foregroundUrl}
+          />
         ) : null}
 
         {warnings.length > 0 ? (

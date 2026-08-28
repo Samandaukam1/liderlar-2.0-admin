@@ -47,6 +47,29 @@ export async function uploadPostAsset(
   return `${data.publicUrl}?v=${Date.now()}`;
 }
 
+/**
+ * Cheap existence check.
+ *
+ * Opening the studio used to download the whole transparent portrait just to
+ * confirm the renderer would find it — megabytes per page view. Listing the
+ * candidate's prefix answers the same question in one small request.
+ */
+export async function postAssetExists(
+  candidateId: string,
+  kind: PostAssetKind,
+): Promise<boolean> {
+  const db = createSupabaseAdminClient();
+  const path = postAssetPath(candidateId, kind);
+  const slash = path.lastIndexOf("/");
+
+  const { data, error } = await db.storage
+    .from(POST_ASSET_BUCKET)
+    .list(path.slice(0, slash), { search: path.slice(slash + 1), limit: 1 });
+
+  if (error) return false;
+  return (data ?? []).some((entry) => entry.name === path.slice(slash + 1));
+}
+
 /** Fetches an asset back as a buffer (used when re-sending an existing post). */
 export async function downloadPostAsset(
   candidateId: string,

@@ -114,6 +114,12 @@ export interface PostTemplateConfig {
   label: string;
   /** Flat 1080x1080 background baked by scripts/build-post-studio-backgrounds.mjs. */
   backgroundPath: string;
+  /**
+   * The parts of the master that belong ON TOP of the candidate: the Humo bird,
+   * the wordmark and the soft light at the foot of the band. Transparent
+   * everywhere else.
+   */
+  foregroundPath: string;
   thumbnailPath: string;
   /** Dominant accent read off the master's card gradient end stop. */
   accentColor: string;
@@ -140,7 +146,15 @@ export interface PostTemplateConfig {
  * the text engine — and so a stale accent from a previous template can never
  * be persisted as if it were the post's own content.
  */
-export type PaintTone = "base" | "accent";
+export type PaintTone = "base" | "accent" | "dark";
+
+/**
+ * Zero-based index of the first name line drawn dark instead of white.
+ * `splitNameIntoLines` puts the patronymic ("... qizi" / "... o‘g‘li") last, so
+ * on a three-line name this is exactly that line — the two-tone treatment the
+ * reference posters use. A two-line name never reaches it and stays white.
+ */
+export const NAME_DARK_LINE_INDEX = 2;
 
 export interface LaidOutRun {
   text: string;
@@ -158,6 +172,8 @@ export interface PostPalette {
   quoteBase: string;
   quoteAccent: string;
   name: string;
+  /** The patronymic line; see NAME_DARK_LINE_INDEX. */
+  nameDark: string;
   shortBio: string;
 }
 
@@ -169,7 +185,7 @@ export function resolveRunFill(
 ): string {
   if (fontRole === "quote") return tone === "accent" ? palette.quoteAccent : palette.quoteBase;
   if (fontRole === "shortBio") return palette.shortBio;
-  return palette.name;
+  return tone === "dark" ? palette.nameDark : palette.name;
 }
 
 export interface LaidOutLine {

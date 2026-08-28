@@ -10,7 +10,7 @@ import {
 } from "./portrait.ts";
 import { SEGMENTATION_MODEL_LABEL } from "./segmentation.ts";
 import type { PersonBounds } from "./portrait-fit.ts";
-import { downloadPostAsset, uploadPostAsset } from "./storage.ts";
+import { downloadPostAsset, postAssetExists, uploadPostAsset } from "./storage.ts";
 import {
   downloadCandidatePortraitSource,
   getPost,
@@ -119,7 +119,7 @@ export async function preparePortrait(
       !options.force &&
       post.portraitProcessedUrl &&
       previous.sourceFingerprint === fingerprint &&
-      (await downloadPostAsset(post.candidateId, "portrait-transparent"))
+      (await postAssetExists(post.candidateId, "portrait-transparent"))
     ) {
       postStudioLog("background removed", {
         postId: post.id,
@@ -297,8 +297,8 @@ export async function buildLayoutForPreview(post: PostRecord): Promise<PostLayou
   // Verify the same stable storage object the final renderer downloads. A
   // stale database URL must not make preview show an asset final cannot read.
   const stored = post.portraitProcessedUrl
-    ? await downloadPostAsset(post.candidateId, "portrait-transparent")
-    : null;
+    ? await postAssetExists(post.candidateId, "portrait-transparent")
+    : false;
   const previewPortraitHref = stored ? post.portraitProcessedUrl : null;
   if (previewPortraitHref) {
     postStudioLog("portrait attached to layout", {

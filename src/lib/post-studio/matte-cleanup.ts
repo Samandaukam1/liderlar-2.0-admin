@@ -35,6 +35,16 @@ import {
 
 /** Alpha at or above this is the matte's solid core, i.e. not a soft edge. */
 const CORE_ALPHA = 200;
+/**
+ * Below this raw probability a region is "uncertain".
+ *
+ * The ramps that build the alpha channel push a 0.68 and a 0.99 to the same
+ * 255, so a slab of wall the model half-believed becomes indistinguishable from
+ * a cheek. The uncertain pass below puts that difference back for background
+ * that is joined to the subject along a front too wide for the bridge analysis
+ * to sever.
+ */
+const UNCERTAIN_CONFIDENCE = 0.75;
 /** Erosion radius as a share of the shorter edge; 2px floor for small images. */
 const BRIDGE_DIVISOR = 170;
 const MIN_BRIDGE_RADIUS = 2;
@@ -99,7 +109,12 @@ export function cleanupMatte(
   const nearGap = shortEdge * NEAR_GAP_RATIO + 2 * bridgeRadius;
 
   const core = new Uint8Array(alpha.length);
-  for (let i = 0; i < alpha.length; i += 1) core[i] = alpha[i] >= CORE_ALPHA ? 1 : 0;
+  const uncertain = new Uint8Array(alpha.length);
+  const uncertainFloor = UNCERTAIN_CONFIDENCE * 255;
+  for (let i = 0; i < alpha.length; i += 1) {
+    core[i] = alpha[i] >= CORE_ALPHA ? 1 : 0;
+    uncertain[i] = core[i] && confidence[i] < uncertainFloor ? 1 : 0;
+  }
 
   // Analysis copy only — the shipped matte is never eroded.
   const seeds = erode(core, width, height, bridgeRadius);
@@ -138,7 +153,31 @@ export function cleanupMatte(
     }
   }
 
-  // Dilating the dropped seeds back past the erosion radius recovers the
+  /**
+   * Second signal: a *solid* patch the model was unsure about.
+   *
+   * Every cut-out has an uncertain fringe — that is what a soft edge is — but a
+   * fringe is thin and disappears under the same erosion that severs bridges. A
+   * slab of background attached to the subject along a wide front does not, and
+   * that is the one the bridge analysis above cannot reach. Anything surviving
+   * the erosion is at least a (2r+1)² block of "the model did not really think
+   * this was a person", so it goes.
+   */
+  const uncertainBlobs = erode(uncertain, width, height, bridgeRadius);
+  const uncertainMap = connectedComponents(uncertainBlobs, width, height);
+  for (const blob of uncertainMap.components) {
+    removed.push({
+      area: blob.area,
+      meanConfidence: meanOver(confidence, uncertainMap.labels, blob.label, blob.area),
+      gap: boundsGap(blob.bounds, person.bounds),
+      bounds: blob.bounds,
+    });
+    for (let i = 0; i < uncertainMap.labels.length; i += 1) {
+      if (uncertainMap.labels[i] === blob.label) droppedSeeds[i] = 1;
+    }
+  }
+
+  // Dilating the dropped regions back past the erosion radius recovers each
   // fragment's true extent *and* the thin bridge stub that joined it, so no
   // sliver of wall is left pointing at the candidate's ear.
   const removal =

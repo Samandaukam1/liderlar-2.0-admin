@@ -53,18 +53,14 @@ function parseOverride(value: FormDataEntryValue | null): number | null {
 }
 
 /**
- * Creating a post produces a *finished* post.
+ * Step one of three: insert the row.
  *
- * Previously this only inserted the row: the quote, name and descriptors were
- * ready but the portrait was not, and an admin had to find "Portretni qayta
- * ishlash" and press it before the poster showed a candidate at all. Background
- * removal takes well under two seconds, so it belongs in the same action —
- * Post Studio should open with the portrait already on the canvas.
- *
- * The render runs too, so the list thumbnail and the status are real rather
- * than pending. A portrait that cannot be produced leaves the post in
- * `needs_review` with the reason attached; the original, still-backgrounded
- * photo is never substituted.
+ * Creation is staged rather than atomic so the button can report honest
+ * progress — background removal alone is a second of work, and a spinner that
+ * says nothing for two seconds reads as a hang. The client calls this, then
+ * `preparePortraitAction`, then `rerenderPostAction`, and only navigates when
+ * all three have returned. Nothing is shown as a finished post before the
+ * portrait exists.
  */
 export async function createPostForCandidateAction(candidateId: string): Promise<PostActionResult> {
   const ctx = await requirePermission("posts.manage");
@@ -77,23 +73,8 @@ export async function createPostForCandidateAction(candidateId: string): Promise
       entityId: post.id,
       metadata: { candidateId },
     });
-
-    const portrait = await preparePortrait(post);
-    const rendered = await renderAndStorePost(post.id, { actorId: ctx.userId });
-
     revalidatePost(post.id);
-
-    const problems = [
-      ...(portrait.warning ? [portrait.warning.message] : []),
-      ...rendered.warnings.map((w) => w.message),
-    ];
-    const unique = [...new Set(problems)];
-
-    return {
-      ok: true,
-      postId: post.id,
-      message: unique.length > 0 ? unique.join(" · ") : "Post tayyor.",
-    };
+    return { ok: true, postId: post.id };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Post yaratilmadi" };
   }
@@ -188,14 +169,22 @@ export async function rerenderPostAction(postId: string): Promise<PostActionResu
   }
 }
 
-export async function preparePortraitAction(postId: string): Promise<PostActionResult> {
+/**
+ * Step two: the cut-out.
+ *
+ * `force` defaults to true because the studio button's whole purpose is redoing
+ * a matte the admin was unhappy with. The create flow passes false so a
+ * candidate who already has a current cut-out is not re-segmented.
+ */
+export async function preparePortraitAction(
+  postId: string,
+  options: { force?: boolean } = {},
+): Promise<PostActionResult> {
   await requirePermission("posts.manage");
   const post = await getPost(postId);
   if (!post) return { ok: false, error: "Post topilmadi" };
 
-  // The admin pressed the button, so the source-hash cache is bypassed: the
-  // point of "Portretni qayta ishlash" is to redo a matte they were unhappy with.
-  const result = await preparePortrait(post, { force: true });
+  const result = await preparePortrait(post, { force: options.force ?? true });
   revalidatePost(postId);
   if (result.warning) return { ok: false, error: result.warning.message };
   return { ok: true, postId, message: "Portret foni olib tashlandi." };
