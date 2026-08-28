@@ -74,7 +74,8 @@ export function buildOverlaySvgBody(layout: PostLayout, options: OverlayOptions 
 
   const { scrim } = layout;
   if (scrim.enabled) {
-    // Drawn first so the portrait and every text run sit on top of it.
+    // Drawn first so the portrait, the branding plate and every text run sit on
+    // top of it — the wash is only ever behind the quote, never over the logo.
     defs.push(
       `<linearGradient id="post-scrim" x1="0" y1="0" x2="1" y2="0">` +
         `<stop offset="0" stop-color="#000000" stop-opacity="${scrim.opacity}"/>` +

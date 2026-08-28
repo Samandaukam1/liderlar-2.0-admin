@@ -103,13 +103,13 @@ const SHARED = {
   },
   quoteScrim: {
     x: POST_CARD_BOX.x,
-    // Starts below the logo lock-up rather than at the card's top edge: running
-    // it the full height washed a grey veil over the Humo bird and the
-    // wordmark, which is what made the logo look like it had dropped behind
-    // the artwork.
-    y: POST_LOGO_BASELINE,
+    // Runs the card's full height. Starting it under the logo instead left a
+    // hard horizontal seam across the card where the wash began; the logo stays
+    // crisp regardless, because the foreground plate that carries the Humo bird
+    // and the wordmark is painted after the scrim and after the portrait.
+    y: POST_CARD_BOX.y,
     width: QUOTE_RIGHT_LIMIT - POST_CARD_BOX.x + 20,
-    height: POST_CARD_BOX.y + POST_CARD_BOX.height - POST_LOGO_BASELINE,
+    height: POST_CARD_BOX.height,
     cornerRadius: 18,
     opacity: 0.42,
     enabled: true,
