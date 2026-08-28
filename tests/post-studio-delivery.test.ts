@@ -764,6 +764,60 @@ test("an unconfigured public site holds the post at needs_review instead of link
   assert.ok(!telegram.includes("getSiteUrl"), "caption links no longer use the old fallback");
 });
 
+test("a hand-confirmed article URL also settles where the public site lives", async () => {
+  const { originOfConfirmedUrl } = await import("../src/lib/post-studio/public-web-url.ts");
+
+  assert.equal(
+    originOfConfirmedUrl("https://liderlar-2-0.vercel.app/liderlar/abduraxmanov"),
+    "https://liderlar-2-0.vercel.app",
+  );
+  assert.equal(originOfConfirmedUrl("http://example.test/liderlar/x?a=1#b"), "http://example.test");
+  // The same rules the configured setting is held to.
+  assert.equal(originOfConfirmedUrl("http://localhost:3000/liderlar/x"), null);
+  assert.equal(originOfConfirmedUrl("ftp://example.test/x"), null);
+  assert.equal(originOfConfirmedUrl("not a url"), null);
+  assert.equal(originOfConfirmedUrl(null), null);
+
+  // And the caption actually falls back to it, so confirming the link by hand
+  // is a real escape hatch rather than one that still fails the next gate.
+  const service = fs.readFileSync("src/lib/post-studio/service.ts", "utf8");
+  assert.match(service, /const confirmedOrigin = originOfConfirmedUrl\(post\.articleUrl\)/);
+  assert.match(service, /const siteUrl = settings\.siteUrl \?\? confirmedOrigin/);
+  assert.match(service, /settings\.applicationUrl \?\? \(siteUrl \? `\$\{siteUrl\}\/ariza` : null\)/);
+});
+
+test("a working caption lifts the review flag it previously raised", () => {
+  const service = fs.readFileSync("src/lib/post-studio/service.ts", "utf8");
+  const block = service.slice(service.indexOf("export async function refreshPostCaption"));
+
+  // Success clears the stale caption error and releases needs_review...
+  assert.match(block, /patch\.error = null/);
+  assert.match(block, /if \(synchronized\.status === "needs_review"\) patch\.status = "ready"/);
+  // ...but only when the last render left no blocking layout warning.
+  assert.match(block, /const stillBlocked = hasBlockingRenderWarning\(synchronized\)/);
+  assert.match(block, /if \(!stillBlocked\)/);
+
+  const guard = service.slice(service.indexOf("function hasBlockingRenderWarning"));
+  for (const code of ["portrait_missing", "quote_missing", "name_overflow"]) {
+    assert.ok(guard.includes(code), `${code} still holds the post`);
+  }
+});
+
+test("the studio says which of the two causes left the article link empty", () => {
+  const client = fs.readFileSync("src/app/(admin)/postlar/[postId]/studio-client.tsx", "utf8");
+  const fn = client.slice(client.indexOf("function describeArticleState"));
+
+  assert.match(fn, /Nomzodga maqola biriktirilmagan/);
+  assert.match(fn, /Maqola hali nashr qilinmagan \(holati: \$\{label\}\)/);
+  assert.match(fn, /public sayt manzili sozlanmagan/);
+  // The old blanket message is gone.
+  assert.ok(!client.includes('"Maqola hali nashr qilinmagan"'));
+
+  const page = fs.readFileSync("src/app/(admin)/postlar/[postId]/page.tsx", "utf8");
+  assert.match(page, /articleStatus: source\?\.article\?\.status \?\? null/);
+  assert.match(page, /publicWebConfigured: source\?\.publicWebConfigured \?\? false/);
+});
+
 test("a hand-confirmed article URL must be a real http(s) link", () => {
   const actions = fs.readFileSync("src/lib/actions/post-studio.ts", "utf8");
   assert.match(actions, /saveArticleUrlAction/);

@@ -62,6 +62,10 @@ export default async function PostStudioPage({
           quotes: source?.quotes ?? [],
           shortBioItems: source?.shortBioItems ?? [],
           portraitSourceUrl: source?.portraitSourceUrl ?? null,
+          // Both halves of "why is there no link", so the studio can say which
+          // one it is instead of always blaming the article.
+          articleStatus: source?.article?.status ?? null,
+          publicWebConfigured: source?.publicWebConfigured ?? false,
         }}
         delivery={delivery}
         subscribers={subscribers}

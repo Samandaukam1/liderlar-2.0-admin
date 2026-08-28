@@ -73,11 +73,47 @@ interface StudioProps {
     quotes: QuoteCandidate[];
     shortBioItems: string[];
     portraitSourceUrl: string | null;
+    /** The candidate's article row status, or null when there is no article. */
+    articleStatus: string | null;
+    /** Whether site_settings → public_web.base_url resolves to an origin. */
+    publicWebConfigured: boolean;
   };
   delivery: { sent: number; failed: number; lastSentAt: string | null };
   subscribers: { total: number; active: number; stopped: number; lastSentAt: string | null };
   canManage: boolean;
   canPublish: boolean;
+}
+
+const ARTICLE_STATUS_LABELS: Record<string, string> = {
+  draft: "qoralama",
+  review: "tekshiruvda",
+  scheduled: "rejalashtirilgan",
+  published: "nashr qilingan",
+  archived: "arxivlangan",
+};
+
+/**
+ * Why the caption has no article link.
+ *
+ * The two causes look identical from the outside and used to print the same
+ * "maqola hali nashr qilinmagan", which sent admins hunting for a publication
+ * problem when the real one was an unset public-site address.
+ */
+function describeArticleState(candidate: {
+  articleUrl: string | null;
+  articleStatus: string | null;
+  publicWebConfigured: boolean;
+}): string {
+  if (candidate.articleUrl) return "Nashr qilingan maqola";
+  if (!candidate.articleStatus) return "Nomzodga maqola biriktirilmagan";
+  if (candidate.articleStatus !== "published") {
+    const label = ARTICLE_STATUS_LABELS[candidate.articleStatus] ?? candidate.articleStatus;
+    return `Maqola hali nashr qilinmagan (holati: ${label})`;
+  }
+  if (!candidate.publicWebConfigured) {
+    return "Maqola nashr qilingan, lekin public sayt manzili sozlanmagan — havolani qo‘lda tasdiqlang";
+  }
+  return "Maqola havolasi aniqlanmadi";
 }
 
 const QUOTE_SOURCE_LABELS: Record<string, string> = {
@@ -242,7 +278,7 @@ export function PostStudio(props: StudioProps) {
                 Nashr qilingan maqola
               </a>
             ) : (
-              "Maqola hali nashr qilinmagan"
+              describeArticleState(candidate)
             )}
           </p>
         </Panel>
@@ -575,7 +611,8 @@ export function PostStudio(props: StudioProps) {
             <p className="text-[11px] text-ink-soft">
               {candidate.articleUrl
                 ? "Avtomatik aniqlandi — kerak bo‘lsa qo‘lda o‘zgartiring."
-                : "Public sayt manzili hali sozlanmagan. Havolani qo‘lda tasdiqlang."}
+                : `${describeArticleState(candidate)}. Bu yerga to‘liq havolani qo‘yib saqlasangiz, ` +
+                  "caption'dagi sayt va ariza havolalari ham o‘sha manzildan olinadi."}
             </p>
             {canManage ? (
               <Button type="submit" variant="ghost" size="sm" disabled={pending}>

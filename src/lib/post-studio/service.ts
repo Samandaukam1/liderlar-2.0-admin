@@ -22,6 +22,7 @@ import {
   type PostRecord,
 } from "./repository.ts";
 import { buildTelegramCaption, getTelegramSettings } from "./telegram.ts";
+import { originOfConfirmedUrl } from "./public-web-url.ts";
 import type { PostLayout, PostWarning } from "./types.ts";
 
 /**
@@ -459,13 +460,21 @@ export async function buildCaptionForPost(
   }
 
   const settings = await getTelegramSettings();
-  if (!settings.siteUrl || !settings.applicationUrl) {
+  // An admin-confirmed article URL also settles where the public site lives,
+  // so the caption's own site and application links can be derived from it
+  // when public_web.base_url has not been filled in yet.
+  const confirmedOrigin = originOfConfirmedUrl(post.articleUrl);
+  const siteUrl = settings.siteUrl ?? confirmedOrigin;
+  const applicationUrl = settings.applicationUrl ?? (siteUrl ? `${siteUrl}/ariza` : null);
+
+  if (!siteUrl || !applicationUrl) {
     return {
       caption: null,
       warning: {
         code: "article_url_unconfigured",
         message:
-          "Caption'dagi sayt va ariza havolalari uchun public_web.base_url sozlanmagan.",
+          "Caption'dagi sayt va ariza havolalari uchun public_web.base_url sozlanmagan. " +
+          "Maqola havolasini qo'lda tasdiqlasangiz, sayt manzili o'sha havoladan olinadi.",
       },
     };
   }
@@ -475,8 +484,8 @@ export async function buildCaptionForPost(
       quote: post.quote,
       fullName: source.fullName,
       articleUrl,
-      applicationUrl: settings.applicationUrl,
-      siteUrl: settings.siteUrl,
+      applicationUrl,
+      siteUrl,
       instagramUrl: settings.instagramUrl,
       telegramUsername: settings.username,
     }),
@@ -485,6 +494,34 @@ export async function buildCaptionForPost(
 }
 
 /** Refreshes and persists the caption, so the admin can edit it afterwards. */
+/** Blocking layout problems recorded by the last render. */
+function hasBlockingRenderWarning(post: PostRecord): boolean {
+  const warnings = post.metadata?.warnings;
+  if (!Array.isArray(warnings)) return false;
+  const blocking = new Set([
+    "quote_overflow",
+    "name_overflow",
+    "short_bio_overflow",
+    "quote_missing",
+    "name_missing",
+    "portrait_missing",
+    "portrait_low_quality",
+    "portrait_removal_failed",
+  ]);
+  return warnings.some(
+    (w) => typeof w === "object" && w !== null && blocking.has(String((w as { code?: unknown }).code)),
+  );
+}
+
+/**
+ * Refreshes and persists the caption, so the admin can edit it afterwards.
+ *
+ * A successful caption also *clears* the review flag it previously raised.
+ * Without that, confirming the article URL saved a perfectly good caption but
+ * left the post sitting at needs_review with the old "maqolasi hali nashr
+ * qilinmagan" error still attached — and needs_review cannot be sent, so the
+ * post was stuck with no way out but a full re-render.
+ */
 export async function refreshPostCaption(post: PostRecord): Promise<PostRecord> {
   const synchronized = await synchronizePostSourceData(post);
   const { caption, warning } = await buildCaptionForPost(synchronized);
@@ -494,5 +531,14 @@ export async function refreshPostCaption(post: PostRecord): Promise<PostRecord> 
       error: warning?.message ?? "Caption yaratilmadi.",
     });
   }
-  return updatePost(synchronized.id, { telegram_caption: caption });
+
+  // Only the caption's own blocker is lifted here; a portrait or layout problem
+  // recorded by the render keeps the post under review.
+  const stillBlocked = hasBlockingRenderWarning(synchronized);
+  const patch: Record<string, unknown> = { telegram_caption: caption };
+  if (!stillBlocked) {
+    patch.error = null;
+    if (synchronized.status === "needs_review") patch.status = "ready";
+  }
+  return updatePost(synchronized.id, patch);
 }
