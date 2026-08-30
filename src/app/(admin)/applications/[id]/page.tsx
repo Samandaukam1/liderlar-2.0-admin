@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/primitives";
 import { Avatar, StatusBadge, Badge } from "@/components/admin/badges";
 import { formatDate, timeAgo, formatBytes } from "@/lib/utils";
 import type { Application } from "@/lib/types";
+import { genderLabel, telegramHref } from "@/lib/application-fields";
 import { ApplicationActions } from "./application-actions";
 
 export const dynamic = "force-dynamic";
@@ -74,20 +75,67 @@ export default async function ApplicationDetailPage(props: {
               <div className="min-w-0 flex-1">
                 <p className="font-display text-xl font-semibold uppercase tracking-wide text-ink">{app.full_name}</p>
                 <p className="text-sm text-ink-soft">
-                  {[app.email, app.phone].filter(Boolean).join(" · ") || "Kontakt ko‘rsatilmagan"}
+                  {[app.phone, app.telegram, app.email].filter(Boolean).join(" · ") || "Kontakt ko‘rsatilmagan"}
                 </p>
               </div>
               <StatusBadge status={app.status} />
             </div>
             <dl className="mt-5 grid grid-cols-1 gap-3 border-t border-line/60 pt-4 sm:grid-cols-2">
               <div>
-                <dt className="text-[11px] font-bold uppercase tracking-wider text-ink-soft">Yo‘nalish</dt>
-                <dd className="text-sm font-semibold text-ink">{app.categories?.name ?? "—"}</dd>
+                <dt className="text-[11px] font-bold uppercase tracking-wider text-ink-soft">Telefon raqam</dt>
+                <dd className="text-sm font-semibold text-ink">
+                  {app.phone ? (
+                    <a href={`tel:${app.phone}`} className="text-brand hover:underline">
+                      {app.phone}
+                    </a>
+                  ) : (
+                    "—"
+                  )}
+                </dd>
               </div>
               <div>
-                <dt className="text-[11px] font-bold uppercase tracking-wider text-ink-soft">Hudud</dt>
-                <dd className="text-sm font-semibold text-ink">{app.regions?.name ?? "—"}</dd>
+                <dt className="text-[11px] font-bold uppercase tracking-wider text-ink-soft">Telegram</dt>
+                <dd className="text-sm font-semibold text-ink">
+                  {app.telegram ? (
+                    telegramHref(app.telegram) ? (
+                      <a
+                        href={telegramHref(app.telegram) as string}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-brand hover:underline"
+                      >
+                        {app.telegram}
+                      </a>
+                    ) : (
+                      app.telegram
+                    )
+                  ) : (
+                    "—"
+                  )}
+                </dd>
               </div>
+              <div>
+                <dt className="text-[11px] font-bold uppercase tracking-wider text-ink-soft">Jinsi</dt>
+                <dd className="text-sm font-semibold text-ink">{genderLabel(app.gender)}</dd>
+              </div>
+              <div>
+                <dt className="text-[11px] font-bold uppercase tracking-wider text-ink-soft">Yoshi</dt>
+                <dd className="text-sm font-semibold text-ink">{app.age_range ?? "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-[11px] font-bold uppercase tracking-wider text-ink-soft">Promo kod</dt>
+                <dd className="text-sm font-semibold text-ink">
+                  {app.promo_code ? <Badge accent="lime">{app.promo_code}</Badge> : "—"}
+                </dd>
+              </div>
+              {(app.categories?.name || app.regions?.name) && (
+                <div>
+                  <dt className="text-[11px] font-bold uppercase tracking-wider text-ink-soft">Yo‘nalish / hudud</dt>
+                  <dd className="text-sm font-semibold text-ink">
+                    {[app.categories?.name, app.regions?.name].filter(Boolean).join(" · ")}
+                  </dd>
+                </div>
+              )}
               <div>
                 <dt className="text-[11px] font-bold uppercase tracking-wider text-ink-soft">Kelgan sana</dt>
                 <dd className="text-sm font-semibold text-ink">{formatDate(app.created_at, true)}</dd>

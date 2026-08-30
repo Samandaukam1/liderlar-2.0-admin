@@ -195,6 +195,10 @@ export interface Application {
   full_name: string;
   email: string | null;
   phone: string | null;
+  telegram: string | null;
+  gender: "male" | "female" | null;
+  age_range: string | null;
+  promo_code: string | null;
   region_id: string | null;
   category_id: string | null;
   motivation: string | null;

@@ -58,15 +58,33 @@ const EXPORTERS: Record<
   applications: async (admin) => {
     const { data } = await admin
       .from("applications")
-      .select("full_name, email, phone, status, created_at, regions(name), categories(name)")
+      .select(
+        "full_name, phone, telegram, gender, age_range, promo_code, email, status, created_at, regions(name), categories(name)",
+      )
       .order("created_at", { ascending: false })
       .limit(5000);
     return {
-      header: ["full_name", "email", "phone", "status", "region", "category", "created_at"],
+      header: [
+        "full_name",
+        "phone",
+        "telegram",
+        "gender",
+        "age_range",
+        "promo_code",
+        "email",
+        "status",
+        "region",
+        "category",
+        "created_at",
+      ],
       rows: ((data ?? []) as unknown as Row[]).map((a) => [
         String(a.full_name ?? ""),
-        String(a.email ?? ""),
         String(a.phone ?? ""),
+        String(a.telegram ?? ""),
+        String(a.gender ?? ""),
+        String(a.age_range ?? ""),
+        String(a.promo_code ?? ""),
+        String(a.email ?? ""),
         String(a.status ?? ""),
         String((a.regions as Row | null)?.name ?? ""),
         String((a.categories as Row | null)?.name ?? ""),

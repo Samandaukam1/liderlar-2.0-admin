@@ -3,10 +3,11 @@ import { requirePermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { parseListParams, listRange, PAGE_SIZE } from "@/lib/list";
 import type { Application } from "@/lib/types";
+import { APPLICATION_AGE_RANGES, APPLICATION_GENDER_LABELS, genderLabel } from "@/lib/application-fields";
 import { PageHeader } from "@/components/admin/page-header";
 import { DataTable, Pagination, type Column } from "@/components/admin/data-table";
 import { DataTableToolbar } from "@/components/admin/toolbar";
-import { StatusBadge, Avatar } from "@/components/admin/badges";
+import { StatusBadge, Avatar, Badge } from "@/components/admin/badges";
 import { EmptyState } from "@/components/ui/feedback";
 import { formatDate } from "@/lib/utils";
 
@@ -18,7 +19,7 @@ export default async function ApplicationsPage(props: {
 }) {
   await requirePermission("applications.view");
   const sp = await props.searchParams;
-  const { page, q, filters } = parseListParams(sp, ["status"]);
+  const { page, q, filters } = parseListParams(sp, ["status", "gender", "age_range"]);
   const admin = createSupabaseAdminClient();
 
   let query = admin
@@ -26,7 +27,13 @@ export default async function ApplicationsPage(props: {
     .select("*, regions(name), categories(name)", { count: "exact" })
     .order("created_at", { ascending: false });
   if (filters.status) query = query.eq("status", filters.status);
-  if (q) query = query.or(`full_name.ilike.%${q}%,email.ilike.%${q}%`);
+  if (filters.gender) query = query.eq("gender", filters.gender);
+  if (filters.age_range) query = query.eq("age_range", filters.age_range);
+  if (q) {
+    query = query.or(
+      `full_name.ilike.%${q}%,phone.ilike.%${q}%,telegram.ilike.%${q}%,promo_code.ilike.%${q}%`,
+    );
+  }
   const [from, to] = listRange(page);
   const { data, count, error } = await query.range(from, to);
   const rows = (data ?? []) as unknown as Application[];
@@ -39,23 +46,35 @@ export default async function ApplicationsPage(props: {
         <span className="flex items-center gap-3">
           <Avatar name={a.full_name} size={34} />
           <span className="min-w-0">
-            <span className="block truncate text-sm font-bold text-ink">{a.full_name}</span>
-            <span className="block truncate text-xs text-ink-soft">{a.email ?? a.phone ?? "—"}</span>
+            <span className="block truncate text-sm font-bold uppercase text-ink">{a.full_name}</span>
+            <span className="block truncate text-xs text-ink-soft">{a.phone ?? a.email ?? "—"}</span>
           </span>
         </span>
       ),
     },
     {
-      key: "direction",
-      header: "Yo‘nalish / hudud",
+      key: "telegram",
+      header: "Telegram",
+      desktopOnly: true,
+      render: (a) => <span className="text-xs text-ink-soft">{a.telegram ?? "—"}</span>,
+    },
+    {
+      key: "profile",
+      header: "Jins / yosh",
       desktopOnly: true,
       render: (a) => (
         <span className="text-xs text-ink-soft">
-          {[a.categories?.name, a.regions?.name].filter(Boolean).join(" · ") || "—"}
+          {[a.gender ? genderLabel(a.gender) : null, a.age_range].filter(Boolean).join(" · ") || "—"}
         </span>
       ),
     },
-    { key: "status", header: "Status", render: (a) => <StatusBadge status={a.status} /> },
+    {
+      key: "promo",
+      header: "Promo kod",
+      desktopOnly: true,
+      render: (a) =>
+        a.promo_code ? <Badge accent="lime">{a.promo_code}</Badge> : <span className="text-xs text-ink-soft">—</span>,
+    },
     {
       key: "duplicate",
       header: "Dublikat",
@@ -67,6 +86,7 @@ export default async function ApplicationsPage(props: {
           <span className="text-xs text-ink-soft">—</span>
         ),
     },
+    { key: "status", header: "Status", render: (a) => <StatusBadge status={a.status} /> },
     {
       key: "created",
       header: "Kelgan sana",
@@ -82,7 +102,7 @@ export default async function ApplicationsPage(props: {
         breadcrumbs={[{ label: "Arizalar" }]}
       />
       <DataTableToolbar
-        searchPlaceholder="Ism yoki email bo‘yicha…"
+        searchPlaceholder="Ism, telefon, Telegram yoki promo kod…"
         filters={[
           {
             key: "status",
@@ -95,6 +115,16 @@ export default async function ApplicationsPage(props: {
               { value: "rejected", label: "Rad etilgan" },
               { value: "converted", label: "Nomzodga aylantirilgan" },
             ],
+          },
+          {
+            key: "gender",
+            label: "Jinsi",
+            options: Object.entries(APPLICATION_GENDER_LABELS).map(([value, label]) => ({ value, label })),
+          },
+          {
+            key: "age_range",
+            label: "Yoshi",
+            options: APPLICATION_AGE_RANGES.map((value) => ({ value, label: value })),
           },
         ]}
       />
