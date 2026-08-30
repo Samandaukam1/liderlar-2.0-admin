@@ -16,6 +16,13 @@ import { parseTelegramCommand } from "./telegram-command.ts";
 
 const TELEGRAM_API = "https://api.telegram.org";
 
+/**
+ * Where "ariza qoldiring" in every caption points when nothing overrides it.
+ * The application form lives on the public site at this fixed path; it is not
+ * derived from the poster's own origin, which may be a preview deployment.
+ */
+export const DEFAULT_APPLICATION_URL = "https://liderlar.uz/ariza_qoldirish";
+
 export const TELEGRAM_SETTINGS_KEYS = {
   applicationUrl: "telegram_bot.application_url",
   instagramUrl: "telegram_bot.instagram_url",
@@ -64,7 +71,7 @@ export async function getTelegramSettings(): Promise<TelegramSettings> {
   const applicationUrl = pick(
     TELEGRAM_SETTINGS_KEYS.applicationUrl,
     process.env.NEXT_PUBLIC_APPLICATION_URL,
-    siteUrl ? `${siteUrl}/ariza` : "",
+    DEFAULT_APPLICATION_URL,
   );
 
   return {
@@ -92,9 +99,12 @@ export interface TelegramApiError {
 export class TelegramSendError extends Error {
   /** Plain field, not a parameter property — see PortraitProcessingError. */
   readonly errorCode: number;
+  /** Seconds Telegram asked us to wait, from a 429's `parameters`. */
+  readonly retryAfter: number | null;
 
-  constructor(message: string, errorCode: number) {
+  constructor(message: string, errorCode: number, retryAfter: number | null = null) {
     super(message);
+    this.retryAfter = retryAfter;
     this.name = "TelegramSendError";
     this.errorCode = errorCode;
   }
@@ -108,6 +118,15 @@ export class TelegramSendError extends Error {
     if (this.errorCode === 403) return true;
     return this.errorCode === 400 && /chat not found|user is deactivated/i.test(this.message);
   }
+
+  /**
+   * Worth trying again: Telegram's flood limit (429) and its own server
+   * errors. Recording these as a permanent failure is what made a large batch
+   * reach only the first few dozen subscribers.
+   */
+  get isTransient(): boolean {
+    return this.errorCode === 429 || this.errorCode >= 500;
+  }
 }
 
 async function callTelegram<T>(method: string, body: FormData | Record<string, unknown>): Promise<T> {
@@ -119,7 +138,13 @@ async function callTelegram<T>(method: string, body: FormData | Record<string, u
   });
 
   const raw = await response.text();
-  let payload: { ok: boolean; result?: T; description?: string; error_code?: number } | null = null;
+  let payload: {
+    ok: boolean;
+    result?: T;
+    description?: string;
+    error_code?: number;
+    parameters?: { retry_after?: number };
+  } | null = null;
   try {
     payload = JSON.parse(raw);
   } catch {
@@ -136,6 +161,7 @@ async function callTelegram<T>(method: string, body: FormData | Record<string, u
     throw new TelegramSendError(
       payload?.description ?? `Telegram ${method} xatosi (${response.status})`,
       payload?.error_code ?? response.status,
+      payload?.parameters?.retry_after ?? null,
     );
   }
   return payload.result as T;
@@ -145,19 +171,43 @@ export async function sendTelegramMessage(chatId: number, text: string): Promise
   await callTelegram("sendMessage", { chat_id: chatId, text });
 }
 
+export interface SentPhoto {
+  messageId: number;
+  /**
+   * Telegram's own handle for the uploaded image. Every send after the first
+   * passes this instead of the bytes: a poster is ~800KB, so re-uploading it
+   * per subscriber was the bulk of the delivery time and the main reason a
+   * batch ran into the function's timeout.
+   */
+  fileId: string | null;
+}
+
+/** Largest rendition Telegram kept, which is the one worth reusing. */
+function largestFileId(photos: { file_id: string; width: number }[] | undefined): string | null {
+  if (!photos?.length) return null;
+  return photos.reduce((a, b) => (b.width > a.width ? b : a)).file_id;
+}
+
 export async function sendTelegramPhoto(
   chatId: number,
-  photo: Buffer,
+  photo: Buffer | string,
   caption: string,
-): Promise<number> {
-  const form = new FormData();
-  form.append("chat_id", String(chatId));
-  form.append("caption", caption);
-  form.append("parse_mode", "MarkdownV2");
-  form.append("photo", new Blob([new Uint8Array(photo)], { type: "image/png" }), "post.png");
+): Promise<SentPhoto> {
+  const common = { caption, parse_mode: "MarkdownV2" };
+  let result: { message_id: number; photo?: { file_id: string; width: number }[] };
 
-  const result = await callTelegram<{ message_id: number }>("sendPhoto", form);
-  return result.message_id;
+  if (typeof photo === "string") {
+    result = await callTelegram("sendPhoto", { chat_id: chatId, photo, ...common });
+  } else {
+    const form = new FormData();
+    form.append("chat_id", String(chatId));
+    form.append("caption", caption);
+    form.append("parse_mode", "MarkdownV2");
+    form.append("photo", new Blob([new Uint8Array(photo)], { type: "image/png" }), "post.png");
+    result = await callTelegram("sendPhoto", form);
+  }
+
+  return { messageId: result.message_id, fileId: largestFileId(result.photo) };
 }
 
 /* ------------------------------------------------------------------ *
@@ -363,6 +413,43 @@ export interface DeliverOptions {
  * chat gone) deactivate that subscriber. Anyone who already has a `sent` row
  * for this post is skipped, so a re-run cannot double-post.
  */
+/**
+ * Telegram allows a bot roughly 30 messages a second overall. Pacing just under
+ * that keeps a large batch out of the flood limiter entirely, which is far
+ * cheaper than being throttled and retrying.
+ */
+const SEND_INTERVAL_MS = 40;
+/** Attempts per subscriber for errors Telegram says are temporary. */
+const MAX_SEND_ATTEMPTS = 3;
+/** Never sleep longer than this on a `retry_after`, to stay inside the run. */
+const MAX_RETRY_WAIT_MS = 10_000;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * One subscriber, with the flood limit honoured.
+ *
+ * A 429 carries Telegram's own `retry_after`; waiting exactly that long and
+ * trying again is the documented way through it. Anything permanent, or a
+ * transient error that survives every attempt, is thrown to the caller.
+ */
+async function sendWithRetry(
+  chatId: number,
+  photo: Buffer | string,
+  caption: string,
+): Promise<SentPhoto> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await sendTelegramPhoto(chatId, photo, caption);
+    } catch (err) {
+      const error = err instanceof TelegramSendError ? err : null;
+      if (!error?.isTransient || attempt >= MAX_SEND_ATTEMPTS) throw err;
+      const wait = Math.min((error.retryAfter ?? attempt) * 1000, MAX_RETRY_WAIT_MS);
+      await sleep(wait);
+    }
+  }
+}
+
 export async function deliverPostToSubscribers(
   postId: string,
   photo: Buffer,
@@ -396,6 +483,11 @@ export async function deliverPostToSubscribers(
   const rows: Record<string, unknown>[] = [];
   const sentSubscriberIds: string[] = [];
 
+  // Set by the first successful send; every later one references the image
+  // Telegram already holds instead of re-uploading it.
+  let uploaded: string | null = null;
+  let previousSendAt = 0;
+
   for (const subscriber of subscribers ?? []) {
     const id = subscriber.id as string;
 
@@ -408,18 +500,28 @@ export async function deliverPostToSubscribers(
       continue;
     }
 
+    // Pace against the bot-wide rate limit, measured from the last send rather
+    // than slept unconditionally, so a slow upload does not add to the gap.
+    const sinceLast = Date.now() - previousSendAt;
+    if (previousSendAt > 0 && sinceLast < SEND_INTERVAL_MS) {
+      await sleep(SEND_INTERVAL_MS - sinceLast);
+    }
+
     result.attempted += 1;
     try {
-      const messageId = await sendTelegramPhoto(subscriber.chat_id as number, photo, caption);
+      const sent = await sendWithRetry(subscriber.chat_id as number, uploaded ?? photo, caption);
+      previousSendAt = Date.now();
+      uploaded = uploaded ?? sent.fileId;
       result.sent += 1;
       sentSubscriberIds.push(id);
       rows.push({
         post_id: postId,
         subscriber_id: id,
-        telegram_message_id: messageId,
+        telegram_message_id: sent.messageId,
         status: "sent",
       });
     } catch (err) {
+      previousSendAt = Date.now();
       const error = err instanceof TelegramSendError ? err : null;
       const message = err instanceof Error ? err.message : String(err);
       result.failed += 1;

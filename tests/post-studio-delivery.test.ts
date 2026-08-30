@@ -708,6 +708,70 @@ test("applying the migration does not retroactively queue historical intakes", (
   assert.match(pipeline, /\.gte\("post_pipeline_process_after", oldestAllowed\)/);
 });
 
+test("the application link points at the real form on the public site", () => {
+  // telegram.ts resolves through the "@/lib" alias, so it is read as source
+  // here rather than imported — the same way every other check in this file
+  // inspects it.
+  const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
+  const DEFAULT_APPLICATION_URL = "https://liderlar.uz/ariza_qoldirish";
+  assert.match(
+    telegram,
+    /export const DEFAULT_APPLICATION_URL = "https:\/\/liderlar\.uz\/ariza_qoldirish"/,
+  );
+  // The form lives at a fixed address; it is no longer derived from whichever
+  // origin the poster happens to be served from.
+  assert.ok(!telegram.includes("${siteUrl}/ariza`"), "not derived from the site origin");
+  assert.match(
+    telegram,
+    /process\.env\.NEXT_PUBLIC_APPLICATION_URL,\s*DEFAULT_APPLICATION_URL/,
+    "settings and env still override the default",
+  );
+
+  const caption = buildTelegramCaption({
+    quote: "Test",
+    fullName: "Ism Familiya",
+    articleUrl: "https://liderlar.uz/liderlar/test",
+    applicationUrl: DEFAULT_APPLICATION_URL,
+    siteUrl: "https://liderlar.uz",
+    instagramUrl: "https://instagram.com/liderlar.uz",
+    telegramUsername: "uzlye_rasmiy",
+  });
+  assert.ok(caption.includes("https://liderlar.uz/ariza_qoldirish"));
+  assert.equal(captionExceedsLimit(caption), false);
+});
+
+test("a flood limit pauses the batch instead of failing the rest of it", () => {
+  const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
+
+  // Telegram's own retry_after is parsed and honoured.
+  assert.match(telegram, /parameters\?\.retry_after \?\? null/);
+  assert.match(telegram, /get isTransient\(\)[\s\S]*errorCode === 429[\s\S]*errorCode >= 500/);
+
+  const retry = telegram.slice(telegram.indexOf("async function sendWithRetry"));
+  assert.match(retry, /if \(!error\?\.isTransient \|\| attempt >= MAX_SEND_ATTEMPTS\) throw err/);
+  assert.match(retry, /Math\.min\(\(error\.retryAfter \?\? attempt\) \* 1000, MAX_RETRY_WAIT_MS\)/);
+
+  // A permanent error is still permanent — a blocked user is not retried.
+  assert.match(telegram, /get isPermanent\(\)[\s\S]*errorCode === 403/);
+});
+
+test("the poster is uploaded once and then referenced by file_id", () => {
+  const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
+
+  const deliver = telegram.slice(telegram.indexOf("export async function deliverPostToSubscribers"));
+  assert.match(deliver, /let uploaded: string \| null = null/);
+  assert.match(deliver, /sendWithRetry\(subscriber\.chat_id as number, uploaded \?\? photo, caption\)/);
+  assert.match(deliver, /uploaded = uploaded \?\? sent\.fileId/);
+
+  // And the sends are paced under the bot-wide limit.
+  assert.match(deliver, /SEND_INTERVAL_MS - sinceLast/);
+  assert.match(telegram, /const SEND_INTERVAL_MS = 40/);
+
+  // sendPhoto accepts either the bytes or the handle.
+  assert.match(telegram, /photo: Buffer \| string/);
+  assert.match(telegram, /if \(typeof photo === "string"\)/);
+});
+
 test("the caption handle comes from settings, not a hardcoded string", () => {
   const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
   // site_settings wins, then env, and only then the documented default.
