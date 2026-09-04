@@ -558,3 +558,38 @@ test("only the canonical intake answer is promoted into the poster as a quote", 
     null,
   );
 });
+
+test("the overlay's opening tag survives the production minifier", async () => {
+  const { buildOverlaySvg } = await import("../src/lib/post-studio/svg.ts");
+  const { POST_CANVAS_UNITS, POST_OUTPUT_SIZE } = await import(
+    "../src/lib/post-studio/types.ts"
+  );
+
+  // The source must produce a well-formed tag...
+  const svg = buildOverlaySvg(quoteLayout("Sinov iqtibosi"), POST_OUTPUT_SIZE);
+  assert.match(
+    svg,
+    new RegExp(
+      `^<svg xmlns="http://www\\.w3\\.org/2000/svg" width="${POST_OUTPUT_SIZE}" ` +
+        `height="${POST_OUTPUT_SIZE}" viewBox="0 0 ${POST_CANVAS_UNITS} ${POST_CANVAS_UNITS}">`,
+    ),
+  );
+
+  // ...and so must the BUILT one. Written as two literals joined with `+`, the
+  // minifier constant-folded both halves and dropped the `" ` where they met,
+  // shipping `height="1080viewBox="0 0 810 810"`. Source, tests and the
+  // unminified SSR chunk were all correct, so only the artifact shows it.
+  const chunkDir = ".next/server/chunks";
+  if (!fs.existsSync(chunkDir)) return; // nothing built yet — nothing to check
+
+  const corrupted: string[] = [];
+  for (const entry of fs.readdirSync(chunkDir)) {
+    if (!entry.endsWith(".js")) continue;
+    const source = fs.readFileSync(`${chunkDir}/${entry}`, "utf8");
+    // An attribute value running straight into the next attribute name.
+    for (const hit of source.match(/height="[^"]{0,12}viewBox/g) ?? []) {
+      corrupted.push(`${entry}: ${hit}`);
+    }
+  }
+  assert.deepEqual(corrupted, [], "a built chunk has a mangled <svg> open tag");
+});

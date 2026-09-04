@@ -123,18 +123,30 @@ export function buildOverlaySvgBody(layout: PostLayout, options: OverlayOptions 
   return defs.length > 0 ? `<defs>${defs.join("")}</defs>${body}` : body;
 }
 
+/**
+ * The document's opening tag.
+ *
+ * Written as ONE template literal, and it must stay that way.
+ *
+ * As two literals joined with `+` — the shape this used to have — both halves
+ * are fully static, so the production minifier constant-folds them and drops
+ * the two characters where they meet. It shipped
+ * `height="1080viewBox="0 0 810 810"` to resvg, and every post failed to parse
+ * while the source, the tests and the unminified SSR chunk were all correct.
+ * tests/post-studio-typography.test.ts checks the built chunk for the mangled
+ * shape, because nothing about the source can reveal it.
+ */
+function svgOpenTag(outputSize: number): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${outputSize}" height="${outputSize}" viewBox="0 0 ${POST_CANVAS_UNITS} ${POST_CANVAS_UNITS}">`;
+}
+
 /** Standalone transparent overlay document, sized to the final output. */
 export function buildOverlaySvg(
   layout: PostLayout,
   outputSize: number,
   options: OverlayOptions = {},
 ): string {
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${outputSize}" height="${outputSize}" ` +
-    `viewBox="0 0 ${POST_CANVAS_UNITS} ${POST_CANVAS_UNITS}">` +
-    buildOverlaySvgBody(layout, options) +
-    `</svg>`
-  );
+  return `${svgOpenTag(outputSize)}${buildOverlaySvgBody(layout, options)}</svg>`;
 }
 
 /** Full post document (background + overlay) — used for SVG export/debugging. */
@@ -144,12 +156,7 @@ export function buildPostSvg(
   backgroundHref: string,
   options: OverlayOptions = {},
 ): string {
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${outputSize}" height="${outputSize}" ` +
-    `viewBox="0 0 ${POST_CANVAS_UNITS} ${POST_CANVAS_UNITS}">` +
-    `<image href="${escapeXml(backgroundHref)}" x="0" y="0" ` +
-    `width="${POST_CANVAS_UNITS}" height="${POST_CANVAS_UNITS}"/>` +
-    buildOverlaySvgBody(layout, options) +
-    `</svg>`
-  );
+  const background =
+    `<image href="${escapeXml(backgroundHref)}" x="0" y="0" width="${POST_CANVAS_UNITS}" height="${POST_CANVAS_UNITS}"/>`;
+  return `${svgOpenTag(outputSize)}${background}${buildOverlaySvgBody(layout, options)}</svg>`;
 }
