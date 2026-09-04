@@ -79,6 +79,58 @@ export interface RenderedPost {
   height: number;
 }
 
+/**
+ * Turns resvg's "at 1:75" into the markup that actually broke.
+ *
+ * resvg reports a line and column against a document only it has seen, so the
+ * message alone ("invalid attribute at 1:75") is unactionable — every render
+ * shares the same first line, and the offending value could have come from any
+ * of the layout's numbers, colours or hrefs. Quoting our own string at that
+ * position names the attribute outright.
+ */
+function describeSvgFailure(svg: string, err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const at = /at (\d+):(\d+)/.exec(message);
+  if (!at) return `${message} (SVG ${svg.length} belgi)`;
+
+  const [line, column] = [Number(at[1]), Number(at[2])];
+  const lines = svg.split("\n");
+  const source = lines[line - 1] ?? "";
+  // A window either side of the reported column, so the whole attribute is
+  // visible rather than the single character it points at.
+  const from = Math.max(0, column - 60);
+  const excerpt = source.slice(from, column + 60);
+
+  return (
+    `${message} — SVG ${svg.length} belgi, ${lines.length} qator. ` +
+    `${line}:${column} atrofi: …${excerpt}…`
+  );
+}
+
+function rasterizeOverlay(overlaySvg: string): Buffer {
+  try {
+    return new Resvg(overlaySvg, {
+      fitTo: { mode: "width", value: POST_OUTPUT_SIZE },
+      font: {
+        fontFiles: postFontFilePaths(),
+        // Bundled fonts only — a Vercel lambda has no system font set, and
+        // relying on one would make output differ between local and production.
+        loadSystemFonts: false,
+        defaultFontFamily: "Montserrat",
+      },
+      shapeRendering: 2,
+      textRendering: 1,
+      imageRendering: 0,
+    })
+      .render()
+      .asPng();
+  } catch (err) {
+    const detail = describeSvgFailure(overlaySvg, err);
+    console.error("[post-studio] overlay render failed", detail);
+    throw new Error(detail);
+  }
+}
+
 export async function renderPostImage(layout: PostLayout): Promise<RenderedPost> {
   const [background, foregroundHref, signatureMarkup] = await Promise.all([
     loadBackground(layout.templateId),
@@ -91,21 +143,7 @@ export async function renderPostImage(layout: PostLayout): Promise<RenderedPost>
     foregroundHref,
   });
 
-  const overlayPng = new Resvg(overlaySvg, {
-    fitTo: { mode: "width", value: POST_OUTPUT_SIZE },
-    font: {
-      fontFiles: postFontFilePaths(),
-      // Bundled fonts only — a Vercel lambda has no system font set, and
-      // relying on one would make output differ between local and production.
-      loadSystemFonts: false,
-      defaultFontFamily: "Montserrat",
-    },
-    shapeRendering: 2,
-    textRendering: 1,
-    imageRendering: 0,
-  })
-    .render()
-    .asPng();
+  const overlayPng = rasterizeOverlay(overlaySvg);
 
   const png = await sharp(background)
     .composite([{ input: overlayPng, top: 0, left: 0 }])
