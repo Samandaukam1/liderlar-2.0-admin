@@ -17,6 +17,7 @@ import {
   buildIntakeLink,
 } from "@/lib/intake/tokens";
 import { getActiveTemplate, getIntakeSettings } from "@/lib/intake/data";
+import { askPaymentOnSubmit } from "@/lib/intake/payment";
 import { saveIntakeAnswer } from "@/lib/intake/answers";
 import type { AnswerState } from "@/lib/intake/constants";
 
@@ -307,6 +308,11 @@ export async function submitManualIntakeAction(
     entityType: "candidate_intake",
     entityId: intakeId,
   });
+
+  // Same trigger as the public form: the payment question goes out on
+  // submission, not at the next two-hourly sweep.
+  await askPaymentOnSubmit(intakeId);
+
   revalidatePath(`/nomzodlar/anketalar/${intakeId}`);
   return { ok: true };
 }

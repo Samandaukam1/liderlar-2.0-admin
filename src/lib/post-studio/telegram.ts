@@ -3,32 +3,24 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 import { resolvePublicWebUrl } from "./site-origin.ts";
 import { buildTelegramCaption, captionExceedsLimit } from "./telegram-markdown.ts";
-import { parseTelegramCommand } from "./telegram-command.ts";
 import {
-  answerCallbackQuery,
-  sendTelegramMessage,
   sendTelegramPhoto,
   TelegramSendError,
   type SentPhoto,
 } from "./telegram-api.ts";
-import {
-  buildBotStatusReport,
-  handlePaymentCallback,
-  parsePaymentCallback,
-  REPORT_BUTTON_LABEL,
-} from "@/lib/intake/payment.ts";
 import { POST_DELIVERY_CHAT_IDS_KEY } from "./delivery-recipients.ts";
 
 /**
- * Private Telegram delivery bot.
+ * Private Telegram delivery bot — CHIQUVCHI tomon.
  *
  * The bot is never added to a channel and holds no channel id: people subscribe
  * themselves with /start, and each finished post is sent to every active
  * subscriber's own chat with sendPhoto. The token stays server-side — nothing
  * in this module is importable from a client component.
  *
- * Transport (fetch, error shapes, keyboards) lives in telegram-api.ts; this
- * module owns subscribers, delivery and update handling.
+ * Transport (fetch, error shapes, keyboards) lives in telegram-api.ts; the
+ * inbound conversation — commands, keyboards, callbacks — lives in
+ * bot-router.ts. This module owns subscribers and delivery.
  */
 
 /**
@@ -135,26 +127,6 @@ export async function ensureDeliverySubscribers(chatIds: number[]): Promise<void
  * Subscribers
  * ------------------------------------------------------------------ */
 
-export const START_REPLY = [
-  "Assalomu alaykum! 👋",
-  "",
-  "Siz O‘zbekiston Lider Yoshlari post yetkazib beruvchi botiga muvaffaqiyatli ulandingiz.",
-  "",
-  "Endi LIDERLAR.UZ ensiklopediyasida yangi lider maqolasi va posti e’lon qilinganda, tayyor postlarni shu yerda qabul qilishingiz mumkin.",
-  "",
-  "Obunani to‘xtatish: /stop",
-].join("\n");
-
-export const STOP_REPLY =
-  "Post xabarnomalari to‘xtatildi. Qayta ulanish uchun /start yuboring.";
-
-/** Anything that is not a known command still gets an answer. */
-export const HELP_REPLY = [
-  "Botdan foydalanish uchun:",
-  "/start — postlarni olish",
-  "/stop — postlarni to‘xtatish",
-].join("\n");
-
 export interface TelegramFrom {
   id: number;
   username?: string;
@@ -209,125 +181,6 @@ async function deactivateSubscriberById(subscriberId: string): Promise<void> {
     .from("telegram_post_subscribers")
     .update({ is_active: false, stopped_at: new Date().toISOString() })
     .eq("id", subscriberId);
-}
-
-export interface TelegramUpdate {
-  message?: {
-    chat?: { id?: number };
-    from?: TelegramFrom;
-    text?: string;
-  };
-  callback_query?: {
-    id: string;
-    from?: TelegramFrom;
-    data?: string;
-    message?: { chat?: { id?: number }; message_id?: number };
-  };
-}
-
-/** The persistent keyboard every subscriber sees under the input box. */
-const BOT_KEYBOARD = [[REPORT_BUTTON_LABEL]];
-
-/**
- * Handles one webhook update.
- *
- * The subscriber write is deliberately non-fatal. It used to run as
- * `await upsertSubscriber(...)` directly in front of the reply, so any database
- * problem — a missing migration, an RLS change, a transient PostgREST error —
- * threw before sendMessage was ever reached and the user got total silence
- * while Telegram still saw a 200. The reply now goes out regardless, and the
- * database failure is logged loudly instead of swallowing the conversation.
- */
-export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void> {
-  // A tapped inline button arrives as a callback_query, not a message. This is
-  // how the payment question is answered, so it is checked first.
-  if (update.callback_query) {
-    await handleCallbackQuery(update.callback_query);
-    return;
-  }
-
-  const message = update.message;
-  const chatId = message?.chat?.id;
-  const from = message?.from;
-
-  if (!chatId || !from?.id) {
-    console.log("[telegram-webhook] update ignored: no chat or sender");
-    return;
-  }
-
-  const command = parseTelegramCommand(message?.text);
-  console.log(`[telegram-webhook] command=${command || "(none)"}`);
-
-  if (command === "/start") {
-    try {
-      await upsertSubscriber(from, chatId);
-      console.log("[telegram-webhook] subscriber upserted");
-    } catch (err) {
-      console.error(
-        "[telegram-webhook] subscriber upsert failed:",
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-    await sendTelegramMessage(chatId, START_REPLY, { replyKeyboard: BOT_KEYBOARD });
-    console.log("[telegram-webhook] sendMessage success command=/start");
-    return;
-  }
-
-  if (command === "/stop") {
-    try {
-      await deactivateSubscriber(from.id);
-      console.log("[telegram-webhook] subscriber deactivated");
-    } catch (err) {
-      console.error(
-        "[telegram-webhook] subscriber deactivate failed:",
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-    await sendTelegramMessage(chatId, STOP_REPLY);
-    console.log("[telegram-webhook] sendMessage success command=/stop");
-    return;
-  }
-
-  // The report is reachable both as a typed command and as the keyboard button,
-  // because a button press arrives as an ordinary message carrying its label.
-  if (command === "/hisobot" || (message?.text ?? "").trim() === REPORT_BUTTON_LABEL) {
-    const report = await buildBotStatusReport();
-    await sendTelegramMessage(chatId, report, { replyKeyboard: BOT_KEYBOARD });
-    console.log("[telegram-webhook] sendMessage success command=report");
-    return;
-  }
-
-  // Never leave a message unanswered.
-  await sendTelegramMessage(chatId, HELP_REPLY, { replyKeyboard: BOT_KEYBOARD });
-  console.log("[telegram-webhook] sendMessage success command=help");
-}
-
-/**
- * One tapped inline button.
- *
- * The spinner is cleared first and the slow work runs after: Telegram keeps the
- * button spinning for a few seconds and shows the tapper an error if nothing
- * answers, regardless of what the handler is still doing.
- */
-async function handleCallbackQuery(
-  query: NonNullable<TelegramUpdate["callback_query"]>,
-): Promise<void> {
-  const payment = parsePaymentCallback(query.data);
-  if (!payment) {
-    await answerCallbackQuery(query.id);
-    console.log("[telegram-webhook] callback ignored: unknown data");
-    return;
-  }
-
-  const outcome = await handlePaymentCallback({
-    intakeId: payment.intakeId,
-    paid: payment.paid,
-    chatId: query.message?.chat?.id ?? null,
-    messageId: query.message?.message_id ?? null,
-    fromUserId: query.from?.id ?? null,
-    callbackQueryId: query.id,
-  });
-  console.log(`[telegram-webhook] payment callback ${payment.paid ? "yes" : "no"} → ${outcome}`);
 }
 
 export interface SubscriberStats {
@@ -569,7 +422,7 @@ export async function getPostDeliveryStats(postId: string): Promise<{
 }
 
 export { buildTelegramCaption };
-export { parseTelegramCommand };
+export { parseTelegramCommand } from "./telegram-command.ts";
 
 // Transport moved to telegram-api.ts; re-exported so every existing importer
 // (routes, scheduler, server actions) keeps its single entry point.

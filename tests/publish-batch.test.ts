@@ -17,10 +17,22 @@ import {
   buildBotStatusReportText,
   buildPaymentAnswerText,
   buildPaymentQuestion,
+  buildPaymentUndoList,
+  buildPaymentUndoResult,
   parsePaymentCallback,
+  parsePaymentUndoCallback,
   paymentCallbackData,
+  PAYMENT_PUBLISH_DELAY_MS,
+  paymentUndoCallbackData,
   REPORT_BUTTON_LABEL,
+  UNDO_LIST_SIZE,
 } from "../src/lib/intake/payment-messages.ts";
+import {
+  buildBatchProgressText,
+  buildBatchStartedText,
+  buildNothingToPublishText,
+  progressBar,
+} from "../src/lib/intake/batch-messages.ts";
 
 const MIGRATION = fs.readFileSync(
   "supabase/migrations/20260904120000_intake_payment_and_publish_batches.sql",
@@ -30,6 +42,7 @@ const BATCH = fs.readFileSync("src/lib/intake/publish-batch.ts", "utf8");
 const PAYMENT = fs.readFileSync("src/lib/intake/payment.ts", "utf8");
 const PIPELINE = fs.readFileSync("src/lib/post-studio/pipeline.ts", "utf8");
 const TELEGRAM = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
+const ROUTER = fs.readFileSync("src/lib/post-studio/bot-router.ts", "utf8");
 
 /* ------------------------------------------------------------------ *
  * "Bugun" — Asia/Tashkent
@@ -238,11 +251,99 @@ test("an answered question is rewritten with its outcome", () => {
   const yes = buildPaymentAnswerText({ fullName: "Test Nomzod" }, true, new Date("2026-09-04T11:00:00Z"));
   assert.match(yes, /TO‘LOV QILGAN/);
   assert.match(yes, /16:00/);
-  assert.match(yes, /post tayyorlanmoqda/i);
+  // The grace period is stated, and so is the way out of a mis-tap.
+  assert.match(yes, /10 daqiqadan keyin boshlanadi/);
+  assert.match(yes, /To‘lov statusida adashish/);
 
   const no = buildPaymentAnswerText({ fullName: "Test Nomzod" }, false);
   assert.match(no, /To‘lov qilmagan/);
   assert.match(no, /2 soatdan keyin qayta so‘raladi/);
+});
+
+test("a confirmed payment waits out a grace period before anything is published", () => {
+  // Publishing an article and posting it to every editorial chat cannot be
+  // recalled, so a mis-tap needs a window in which it still can be.
+  assert.equal(PAYMENT_PUBLISH_DELAY_MS, 10 * 60 * 1000);
+  assert.match(PAYMENT, /Date\.now\(\) \+ PAYMENT_PUBLISH_DELAY_MS/);
+});
+
+test("the undo list offers the last ten confirmations, numbered", () => {
+  const candidates = Array.from({ length: 10 }, (_, i) => ({
+    id: `id-${i}`,
+    fullName: `Nomzod ${i + 1}`,
+    confirmedAt: "2026-09-04T09:00:00Z",
+    published: i === 0,
+  }));
+  const text = buildPaymentUndoList(candidates);
+  assert.match(text, /^1\. Nomzod 1/m);
+  assert.match(text, /^10\. Nomzod 10/m);
+  // An already-published candidate is flagged, so nobody taps it expecting the
+  // article to come back off the site.
+  assert.match(text, /Nomzod 1 —.*chop etilgan/);
+  assert.doesNotMatch(text, /Nomzod 2 —.*chop etilgan/);
+  assert.equal(UNDO_LIST_SIZE, 10);
+
+  assert.match(buildPaymentUndoList([]), /Hozircha .* nomzod yo‘q/);
+});
+
+test("undoing before publication is a real revert; after it, it says so", () => {
+  const pending = buildPaymentUndoResult({ fullName: "Test Nomzod", published: false });
+  assert.match(pending, /BEKOR QILINDI/);
+  assert.match(pending, /Nashr navbatidan chiqarildi/);
+
+  const late = buildPaymentUndoResult({ fullName: "Test Nomzod", published: true });
+  assert.match(late, /KECH QOLINDI/);
+  assert.match(late, /saytda/, "it does not pretend the article was withdrawn");
+});
+
+test("an undo round-trips and cannot be confused with a confirmation", () => {
+  const id = "3f1c2d4e-5a6b-4c8d-9e0f-1a2b3c4d5e6f";
+  const data = paymentUndoCallbackData(id);
+  assert.equal(parsePaymentUndoCallback(data), id);
+  assert.ok(Buffer.byteLength(data, "utf8") <= 64);
+  // The two prefixes must not overlap: they do opposite things to one candidate.
+  assert.equal(parsePaymentUndoCallback(paymentCallbackData(id, true)), null);
+  assert.equal(parsePaymentCallback(data), null);
+  assert.equal(parsePaymentUndoCallback("und:not-a-uuid"), null);
+});
+
+test("an undo takes the candidate back out of the publish queue", () => {
+  const undo = PAYMENT.match(/export async function undoPaymentConfirmation[\s\S]*?\n}/)?.[0] ?? "";
+  assert.match(undo, /payment_status: "unpaid"/);
+  assert.match(undo, /post_pipeline_status: "skipped"/, "the queued run is withdrawn");
+  // Guarded, so two taps on the same number do not double-write.
+  assert.match(undo, /\.eq\("payment_status", "paid"\)/);
+});
+
+test("the payment question goes out the moment a form is submitted", () => {
+  const route = fs.readFileSync("src/app/api/intake/submit/route.ts", "utf8");
+  assert.match(route, /await askPaymentOnSubmit\(resolved\.intakeId\)/);
+  // After the submit RPC succeeded — never in front of it. Compared against the
+  // call site, not the import, which naturally sits at the top of the file.
+  assert.ok(
+    route.indexOf("submit_candidate_intake") < route.indexOf("askPaymentOnSubmit(resolved"),
+    "the ask follows a successful submission",
+  );
+  // The manual admin path gets the same trigger.
+  const actions = fs.readFileSync("src/lib/actions/intakes.ts", "utf8");
+  assert.match(actions, /await askPaymentOnSubmit\(intakeId\)/);
+  // And it can never fail the submission it follows.
+  const fn = PAYMENT.match(/export async function askPaymentOnSubmit[\s\S]*?\n}/)?.[0] ?? "";
+  assert.match(fn, /try \{[\s\S]*\} catch/);
+});
+
+test("the report leads with today and puts the running totals underneath", () => {
+  const text = buildBotStatusReportText({
+    todayDate: "2026-09-05",
+    total: { filling: 57, submitted: 200, paid: 3, unpaid: 1, paymentUnknown: 196, posts: 47, published: 16 },
+    today: { filling: 2, submitted: 9, paid: 3, unpaid: 1, paymentUnknown: 5, posts: 1, published: 0 },
+  });
+  const todayAt = text.indexOf("BUGUN");
+  const totalAt = text.indexOf("JAMI");
+  assert.ok(todayAt > 0 && totalAt > 0, "both blocks are present");
+  assert.ok(todayAt < totalAt, "today comes first — it is what anyone acts on");
+  // Today's block carries the unanswered figure too, not just the totals.
+  assert.match(text.slice(todayAt, totalAt), /Javob berilmagan: 5/);
 });
 
 test("the report separates 'no answer yet' from 'did not pay'", () => {
@@ -424,11 +525,100 @@ test("the webhook is registered for button taps, not only for messages", () => {
   assert.match(script, /allowed_updates: \["message", "callback_query"\]/);
 });
 
-test("the report button is reachable as a button and as a command", () => {
+test("every editorial button is reachable as a button and as a command", () => {
+  // A keyboard button arrives as an ordinary message carrying its label, so
+  // both spellings have to hit the same branch.
   assert.equal(REPORT_BUTTON_LABEL, "📊 Hozirgi hisobot");
-  assert.match(TELEGRAM, /command === "\/hisobot"/);
-  assert.match(TELEGRAM, /=== REPORT_BUTTON_LABEL/);
-  assert.match(TELEGRAM, /replyKeyboard: BOT_KEYBOARD/);
+  for (const [command, label] of [
+    ["/hisobot", "REPORT_BUTTON_LABEL"],
+    ["/chop", "BATCH_BUTTON_LABEL"],
+    ["/bekor", "UNDO_BUTTON_LABEL"],
+  ] as const) {
+    assert.match(ROUTER, new RegExp(`command === "${command}"`), `${command} works typed`);
+    assert.match(ROUTER, new RegExp(`text === ${label}`), `${label} works tapped`);
+  }
+});
+
+test("editorial actions are refused outside the configured chats", () => {
+  // The keyboard is only half a guard: a label can be typed by any subscriber,
+  // and an inline keyboard can be forwarded anywhere.
+  assert.match(ROUTER, /async function isEditorialChat/);
+  assert.match(ROUTER, /configured\.includes\(chatId\)/);
+  for (const branch of ["/hisobot", "/chop", "/bekor"]) {
+    const at = ROUTER.indexOf(`command === "${branch}"`);
+    const block = ROUTER.slice(at, at + 400);
+    assert.match(block, /if \(!editorial\) return deny\(/, `${branch} checks membership`);
+  }
+  // Both callback kinds re-check it as well.
+  const callbacks = ROUTER.match(/async function handleCallbackQuery[\s\S]*?\n}/)?.[0] ?? "";
+  assert.equal(
+    (callbacks.match(/await isEditorialChat\(chatId\)/g) ?? []).length,
+    2,
+    "undo and payment callbacks are both guarded",
+  );
+});
+
+test("the bot's batch button drives the same queue as the panel", () => {
+  // Not a parallel implementation: one table, one worker, one ordering.
+  assert.match(BATCH, /export async function runBotBatchButton/);
+  assert.match(BATCH, /const activeId = await getActiveBatchId\(\)/);
+  assert.match(BATCH, /await createPublishBatch\(null, null\)/);
+  assert.match(ROUTER, /runBotBatchButton\(\)/);
+});
+
+test("the batch progress message reports done, in-flight and remaining", () => {
+  const text = buildBatchProgressText({
+    status: "running",
+    total: 12,
+    completed: 5,
+    failed: 1,
+    remaining: 6,
+    percent: 44,
+    currentName: "Rasuljonova Gulnoza",
+    currentStage: "Post render qilinmoqda",
+    elapsedMs: 372_000,
+    etaMs: 450_000,
+  });
+  assert.match(text, /44%/);
+  assert.match(text, /Qilindi: 5/);
+  assert.match(text, /Qilinyapti: Rasuljonova Gulnoza/);
+  assert.match(text, /Post render qilinmoqda/);
+  assert.match(text, /Qoldi: 6/);
+  assert.match(text, /Xato: 1/);
+  assert.match(text, /06:12/);
+  assert.match(text, /~ 07:30/);
+});
+
+test("the batch message never invents a countdown", () => {
+  const text = buildBatchProgressText({
+    status: "queued",
+    total: 4,
+    completed: 0,
+    failed: 0,
+    remaining: 4,
+    percent: 0,
+    currentName: null,
+    currentStage: null,
+    elapsedMs: 0,
+    etaMs: null,
+  });
+  assert.match(text, /hisoblanmoqda…/);
+  assert.doesNotMatch(text, /~ \d/);
+});
+
+test("the progress bar stays inside its own bounds", () => {
+  assert.equal(progressBar(0), "░░░░░░░░░░ 0%");
+  assert.equal(progressBar(100), "██████████ 100%");
+  assert.equal(progressBar(50), "█████░░░░░ 50%");
+  // Out-of-range input is clamped rather than drawn past the end of the bar.
+  assert.equal(progressBar(-20), "░░░░░░░░░░ 0%");
+  assert.equal(progressBar(140), "██████████ 100%");
+});
+
+test("starting a batch with nothing eligible is stated plainly, not as an error", () => {
+  assert.match(buildNothingToPublishText(), /CHOP ETISHGA TAYYOR NOMZOD YO‘Q/);
+  assert.match(buildBatchStartedText(12), /JAMOVIY CHOP ETISH BOSHLANDI/);
+  assert.match(buildBatchStartedText(12), /Jami: 12 ta nomzod/);
 });
 
 /* ------------------------------------------------------------------ *

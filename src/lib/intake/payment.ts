@@ -13,10 +13,16 @@ import {
   buildBotStatusReportText,
   buildPaymentAnswerText,
   buildPaymentQuestion,
+  buildPaymentUndoList,
+  buildPaymentUndoResult,
   PAYMENT_NO_LABEL,
+  PAYMENT_PUBLISH_DELAY_MS,
   PAYMENT_YES_LABEL,
   paymentCallbackData,
+  paymentUndoCallbackData,
+  UNDO_LIST_SIZE,
   type BotStatusCounts,
+  type UndoCandidate,
 } from "./payment-messages";
 
 /**
@@ -50,7 +56,13 @@ export const PAYMENT_ASK_BATCH_SIZE = 10;
  */
 const AWAITING_PAYMENT_STATUSES = ["submitted", "approved", "promoted"] as const;
 
-export { parsePaymentCallback, REPORT_BUTTON_LABEL } from "./payment-messages";
+export {
+  BATCH_BUTTON_LABEL,
+  parsePaymentCallback,
+  parsePaymentUndoCallback,
+  REPORT_BUTTON_LABEL,
+  UNDO_BUTTON_LABEL,
+} from "./payment-messages";
 
 interface PayableIntake {
   id: string;
@@ -257,6 +269,32 @@ async function resolveAskRecipients(): Promise<number[]> {
   return getPostDeliveryChatIds();
 }
 
+/**
+ * Asks about one candidate the moment their form lands.
+ *
+ * Waiting for the two-hourly sweep meant a candidate could sit unasked for
+ * almost two hours before anyone was even told they existed. Submission is the
+ * natural trigger, and the sweep stays as the safety net for anyone this misses.
+ *
+ * Never throws: a Telegram outage must not turn a successfully submitted form
+ * into an error for the candidate who just filled it in.
+ */
+export async function askPaymentOnSubmit(intakeId: string): Promise<void> {
+  try {
+    const result = await askPaymentForIntakes([intakeId]);
+    if (!result.ok) {
+      console.error("[payment] submit ask refused:", result.error);
+      return;
+    }
+    console.log(`[payment] submit ask sent intake=${intakeId} asked=${result.asked}`);
+  } catch (err) {
+    console.error(
+      "[payment] submit ask failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * Answering
  * ------------------------------------------------------------------ */
@@ -330,8 +368,14 @@ export async function handlePaymentCallback(
     // Publishing is gated on payment, so confirming it is what puts the intake
     // in front of the worker. attempts reset because this is a fresh mandate,
     // not a retry of a failed run.
+    //
+    // The run is scheduled ten minutes out rather than immediately: publishing
+    // an article and posting it to every editorial chat cannot be undone, and a
+    // mis-tap needs a window in which it still can be.
     patch.post_pipeline_status = "pending";
-    patch.post_pipeline_process_after = new Date().toISOString();
+    patch.post_pipeline_process_after = new Date(
+      Date.now() + PAYMENT_PUBLISH_DELAY_MS,
+    ).toISOString();
     patch.post_pipeline_attempts = 0;
     patch.post_pipeline_error = null;
   }
@@ -439,6 +483,121 @@ async function safeEdit(chatId: number, messageId: number, text: string): Promis
   } catch (err) {
     console.error("[payment] editMessageText failed", err instanceof Error ? err.message : err);
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * Undo — "to'lov statusida adashish"
+ * ------------------------------------------------------------------ */
+
+export interface UndoListPayload {
+  text: string;
+  /** Numbered buttons, laid out five to a row. */
+  keyboard: { text: string; callback_data: string }[][];
+}
+
+/**
+ * The most recent payment confirmations, newest first.
+ *
+ * Ten is enough to catch a mis-tap without turning the message into a wall:
+ * a mistake is noticed within minutes, not days.
+ */
+export async function buildPaymentUndoPayload(): Promise<UndoListPayload> {
+  const db = createSupabaseAdminClient();
+  const { data } = await db
+    .from("candidate_intakes")
+    .select("id, full_name, payment_confirmed_at, status")
+    .eq("payment_status", "paid")
+    .is("deleted_at", null)
+    .order("payment_confirmed_at", { ascending: false, nullsFirst: false })
+    .limit(UNDO_LIST_SIZE);
+
+  const candidates: UndoCandidate[] = (data ?? []).map((row) => ({
+    id: row.id as string,
+    fullName: row.full_name as string,
+    confirmedAt: (row.payment_confirmed_at as string | null) ?? null,
+    published: (row.status as string) === "published",
+  }));
+
+  const keyboard: UndoListPayload["keyboard"] = [];
+  for (let i = 0; i < candidates.length; i += 5) {
+    keyboard.push(
+      candidates.slice(i, i + 5).map((candidate, offset) => ({
+        text: String(i + offset + 1),
+        callback_data: paymentUndoCallbackData(candidate.id),
+      })),
+    );
+  }
+
+  return { text: buildPaymentUndoList(candidates), keyboard };
+}
+
+export interface UndoOutcome {
+  ok: boolean;
+  text: string;
+}
+
+/**
+ * Puts a candidate back to "not paid" and takes them out of the publish queue.
+ *
+ * The queue removal is the point: within the ten-minute grace period nothing
+ * has run yet, so this fully undoes the confirmation. Past that the article and
+ * post already exist and cannot be recalled from here — the message says so
+ * rather than implying a rollback that did not happen.
+ */
+export async function undoPaymentConfirmation(intakeId: string): Promise<UndoOutcome> {
+  const db = createSupabaseAdminClient();
+
+  const { data: intake } = await db
+    .from("candidate_intakes")
+    .select("id, full_name, payment_status, status")
+    .eq("id", intakeId)
+    .maybeSingle();
+
+  if (!intake) return { ok: false, text: "⚠️ Anketa topilmadi." };
+  if ((intake.payment_status as string) !== "paid") {
+    return {
+      ok: false,
+      text: `ℹ️ ${intake.full_name} allaqachon “to‘lov qilgan” emas — o‘zgarish kerak emas.`,
+    };
+  }
+
+  const published = (intake.status as string) === "published";
+
+  const { error } = await db
+    .from("candidate_intakes")
+    .update({
+      payment_status: "unpaid",
+      payment_confirmed_at: null,
+      payment_confirmed_by_chat_id: null,
+      // Taken off the queue. 'skipped' rather than null so the row reads as a
+      // deliberate decision instead of one the trigger never scheduled.
+      post_pipeline_status: "skipped",
+      post_pipeline_error: null,
+      // Asked about again on the next sweep rather than immediately, so an undo
+      // does not bounce the same question straight back into the chat.
+      payment_last_asked_at: new Date().toISOString(),
+    })
+    .eq("id", intakeId)
+    .eq("payment_status", "paid");
+
+  if (error) {
+    console.error("[payment] undo failed", error.message);
+    return { ok: false, text: "⚠️ Bekor qilib bo‘lmadi — qayta urinib ko‘ring." };
+  }
+
+  await logAudit({
+    actorId: null,
+    action: "intake.payment_undone",
+    entityType: "candidate_intake",
+    entityId: intakeId,
+    severity: "warning",
+    metadata: { alreadyPublished: published },
+  });
+
+  return {
+    ok: true,
+    text: buildPaymentUndoResult({ fullName: intake.full_name as string, published }),
+  };
 }
 
 /* ------------------------------------------------------------------ *

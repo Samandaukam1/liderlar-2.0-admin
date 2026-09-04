@@ -1,7 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { handleTelegramUpdate, isTelegramConfigured } from "@/lib/post-studio/telegram";
+import { handleTelegramUpdate } from "@/lib/post-studio/bot-router";
+import { isTelegramConfigured } from "@/lib/post-studio/telegram";
 
 // Node runtime: the handler talks to Supabase with the service-role client and
 // uses node:crypto for the secret comparison.

@@ -577,19 +577,22 @@ test("an older candidate with no structured extras still produces a layout", () 
 });
 
 test("the /start and /stop flow replies in Uzbek and toggles is_active", () => {
+  // The conversation lives in bot-router.ts; telegram.ts owns the subscriber
+  // rows those replies talk about.
+  const router = fs.readFileSync("src/lib/post-studio/bot-router.ts", "utf8");
   const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
 
-  assert.ok(telegram.includes("Assalomu alaykum! 👋"), "/start greeting");
+  assert.ok(router.includes("Assalomu alaykum! 👋"), "/start greeting");
   assert.ok(
-    telegram.includes("post yetkazib beruvchi botiga muvaffaqiyatli ulandingiz."),
+    router.includes("post yetkazib beruvchi botiga muvaffaqiyatli ulandingiz."),
     "/start confirmation",
   );
-  assert.ok(telegram.includes("Obunani to‘xtatish: /stop"), "/start explains /stop");
+  assert.ok(router.includes("Obunani to‘xtatish: /stop"), "/start explains /stop");
   assert.ok(
-    telegram.includes("Post xabarnomalari to‘xtatildi. Qayta ulanish uchun /start yuboring."),
+    router.includes("Post xabarnomalari to‘xtatildi. Qayta ulanish uchun /start yuboring."),
     "/stop reply",
   );
-  assert.ok(telegram.includes("/start — postlarni olish"), "help reply");
+  assert.ok(router.includes("/start — postlarni olish"), "help reply");
 
   // /start re-activates, /stop deactivates and stamps stopped_at.
   assert.match(telegram, /is_active: true,\s*\n\s*started_at:/);
@@ -609,7 +612,7 @@ test("a command sent in a group keeps working", async () => {
 });
 
 test("a database failure never silences the bot", () => {
-  const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
+  const telegram = fs.readFileSync("src/lib/post-studio/bot-router.ts", "utf8");
 
   // The upsert/deactivate calls must be inside try/catch, with the reply after
   // the catch — a bare `await upsertSubscriber(...)` in front of sendMessage is

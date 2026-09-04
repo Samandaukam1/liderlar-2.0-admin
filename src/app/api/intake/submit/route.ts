@@ -6,7 +6,9 @@ import { enforceRateLimit } from "@/lib/intake/rate-limit";
 import { clientIpHash, jsonError, noStoreJson, originAllowed, readJsonBody } from "@/lib/intake/http";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { canAdvanceAnswer, type AnswerState } from "@/lib/intake/constants";
+import { askPaymentOnSubmit } from "@/lib/intake/payment";
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** POST /api/intake/submit — save final contact/consent then run the validation RPC. */
@@ -125,6 +127,13 @@ export async function POST(request: NextRequest) {
     .update({ is_resolved: true })
     .eq("intake_id", resolved.intakeId)
     .eq("is_resolved", false);
+
+  // The editorial team is asked about payment straight away rather than at the
+  // next two-hourly sweep. It is deliberately awaited — a fire-and-forget
+  // promise is not guaranteed to survive the response on a serverless runtime —
+  // and it swallows its own failures, so a Telegram outage cannot turn a
+  // successful submission into an error for the candidate.
+  await askPaymentOnSubmit(resolved.intakeId);
 
   return noStoreJson({ ok: true });
 }

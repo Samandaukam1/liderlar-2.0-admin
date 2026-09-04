@@ -13,6 +13,11 @@ import {
   selectEligibleForBatch,
   sortBySubmittedAt,
 } from "./queue-order";
+import {
+  buildBatchProgressText,
+  buildBatchStartedText,
+  buildNothingToPublishText,
+} from "./batch-messages";
 
 /**
  * Boshqariladigan batch chop etish.
@@ -713,6 +718,64 @@ export async function getLatestBatchId(): Promise<string | null> {
     .limit(1)
     .maybeSingle();
   return (data?.id as string | undefined) ?? null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Bot tugmasi
+ * ------------------------------------------------------------------ */
+
+/**
+ * The bot's "Chop etishga tayyorlar" button.
+ *
+ * One button, two meanings, decided by what is actually happening: with a run
+ * in flight it reports on that run, otherwise it starts one. A separate
+ * "status" button would be dead weight most of the time, and two buttons that
+ * both start batches would be a way to start two.
+ *
+ * The batch it starts is the SAME queue the admin panel drives — same table,
+ * same worker, same order — so a run started here is visible there and vice
+ * versa. Authorization is the router's job: only configured editorial chats
+ * ever reach this.
+ */
+export async function runBotBatchButton(): Promise<string> {
+  const activeId = await getActiveBatchId();
+  if (activeId) {
+    const progress = await getBatchProgress(activeId);
+    if (progress) return renderProgress(progress);
+  }
+
+  const created = await createPublishBatch(null, null);
+  if (!created.ok || !created.batchId) {
+    // "Nothing eligible" is the ordinary case, not an error: it means every
+    // paid candidate is already published.
+    return created.error?.includes("topilmadi")
+      ? buildNothingToPublishText()
+      : `⚠️ ${created.error ?? "Batch boshlanmadi"}`;
+  }
+  return buildBatchStartedText(created.total ?? 0);
+}
+
+/** The most recent run, whether or not it is still going. */
+export async function buildLatestBatchReport(): Promise<string> {
+  const latest = (await getActiveBatchId()) ?? (await getLatestBatchId());
+  if (!latest) return buildNothingToPublishText();
+  const progress = await getBatchProgress(latest);
+  return progress ? renderProgress(progress) : buildNothingToPublishText();
+}
+
+function renderProgress(progress: BatchProgress): string {
+  return buildBatchProgressText({
+    status: progress.status,
+    total: progress.total,
+    completed: progress.completed,
+    failed: progress.failed,
+    remaining: Math.max(0, progress.total - progress.processed),
+    percent: progress.percent,
+    currentName: progress.currentName,
+    currentStage: progress.currentStage,
+    elapsedMs: progress.elapsedMs,
+    etaMs: progress.etaMs,
+  });
 }
 
 /* ------------------------------------------------------------------ *

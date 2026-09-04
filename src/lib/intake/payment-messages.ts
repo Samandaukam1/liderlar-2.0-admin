@@ -14,8 +14,27 @@ import { formatTashkent } from "../tashkent-day.ts";
 /** The persistent keyboard button that asks the bot for a status report. */
 export const REPORT_BUTTON_LABEL = "📊 Hozirgi hisobot";
 
+/** Undoes a payment confirmation that was tapped by mistake. */
+export const UNDO_BUTTON_LABEL = "🔁 To‘lov statusida adashish";
+
+/** Starts (or reports on) the batch publish run from inside the bot. */
+export const BATCH_BUTTON_LABEL = "🚀 Chop etishga tayyorlar";
+
 export const PAYMENT_YES_LABEL = "✅ Ha, to‘lov qildi";
 export const PAYMENT_NO_LABEL = "❌ Yo‘q, hali qilmadi";
+
+/**
+ * Grace period between confirming payment and the publish run starting.
+ *
+ * A mis-tap on "Ha" would otherwise publish a candidate and post them to every
+ * editorial chat within a couple of minutes, and none of that can be recalled.
+ * Ten minutes is enough to notice and undo, and short enough that a correct
+ * confirmation still feels immediate.
+ */
+export const PAYMENT_PUBLISH_DELAY_MS = 10 * 60 * 1000;
+
+/** How many recent confirmations the undo list offers. */
+export const UNDO_LIST_SIZE = 10;
 
 /**
  * Callback payload.
@@ -54,6 +73,87 @@ function isUuid(value: string | undefined): value is string {
     typeof value === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * Undo
+ * ------------------------------------------------------------------ */
+
+const UNDO_PREFIX = "und:";
+
+export function paymentUndoCallbackData(intakeId: string): string {
+  return `${UNDO_PREFIX}${intakeId}`;
+}
+
+/**
+ * Reads a tapped undo button.
+ *
+ * Kept separate from the answer prefix so an undo can never be mistaken for a
+ * confirmation — the two do opposite things to the same candidate.
+ */
+export function parsePaymentUndoCallback(data: string | undefined | null): string | null {
+  if (!data || !data.startsWith(UNDO_PREFIX)) return null;
+  const intakeId = data.slice(UNDO_PREFIX.length);
+  return isUuid(intakeId) ? intakeId : null;
+}
+
+export interface UndoCandidate {
+  id: string;
+  fullName: string;
+  confirmedAt: string | null;
+  /** True once the candidate is on the site — undoing no longer unpublishes. */
+  published: boolean;
+}
+
+export function buildPaymentUndoList(candidates: readonly UndoCandidate[]): string {
+  if (candidates.length === 0) {
+    return [
+      "🔁 TO‘LOV STATUSIDA ADASHISH",
+      "",
+      "Hozircha “to‘lov qilgan” deb belgilangan nomzod yo‘q.",
+    ].join("\n");
+  }
+
+  const lines = [
+    "🔁 TO‘LOV STATUSIDA ADASHISH",
+    "",
+    `Oxirgi ${candidates.length} ta tasdiqlangan to‘lov.`,
+    "Raqamni bosing — nomzod qayta “to‘lov qilmagan” holatiga qaytadi.",
+    "",
+  ];
+  candidates.forEach((candidate, index) => {
+    // A published candidate is flagged in the list itself, so nobody taps it
+    // expecting the article to come back off the site.
+    const mark = candidate.published ? " 🌐 chop etilgan" : "";
+    lines.push(
+      `${index + 1}. ${candidate.fullName} — ${formatTashkent(candidate.confirmedAt)}${mark}`,
+    );
+  });
+  return lines.join("\n");
+}
+
+export function buildPaymentUndoResult(
+  candidate: Pick<UndoCandidate, "fullName" | "published">,
+): string {
+  if (candidate.published) {
+    return [
+      "⚠️ KECH QOLINDI",
+      "",
+      `👤 ${candidate.fullName}`,
+      "",
+      "To‘lov holati “to‘lov qilmagan”ga qaytarildi, LEKIN bu nomzod allaqachon",
+      "chop etilgan — maqola saytda, post esa yuborilgan holicha qoladi.",
+      "Ularni olib tashlash uchun admin panelidan foydalaning.",
+    ].join("\n");
+  }
+  return [
+    "✅ BEKOR QILINDI",
+    "",
+    `👤 ${candidate.fullName}`,
+    "To‘lov holati: ❌ To‘lov qilmagan",
+    "",
+    "Nashr navbatidan chiqarildi. Keyingi tekshiruvda qayta so‘raladi.",
+  ].join("\n");
 }
 
 export interface PaymentQuestionCandidate {
@@ -101,7 +201,11 @@ export function buildPaymentAnswerText(
     `🕐 ${formatTashkent(answeredAt)}`,
     "",
     paid
-      ? "Maqola nashr qilinib, post tayyorlanmoqda…"
+      ? [
+          `⏳ Nashr ${Math.round(PAYMENT_PUBLISH_DELAY_MS / 60000)} daqiqadan keyin boshlanadi.`,
+          "",
+          `Xato bosilgan bo‘lsa — “${UNDO_BUTTON_LABEL}” tugmasi orqali bekor qiling.`,
+        ].join("\n")
       : "2 soatdan keyin qayta so‘raladi.",
   ];
   return lines.join("\n");
@@ -129,11 +233,27 @@ export interface BotStatusReportInput {
   todayDate: string;
 }
 
+/**
+ * Today first, totals underneath.
+ *
+ * The day's numbers are what anyone opening this actually acts on; the running
+ * totals are background. Putting them the other way round buried the live
+ * figures under a block that barely changes.
+ */
 export function buildBotStatusReportText(input: BotStatusReportInput): string {
   const { total, today } = input;
   return [
     "📊 HOZIRGI HISOBOT",
     `🕐 ${formatTashkent(new Date())}`,
+    "",
+    `— BUGUN (${input.todayDate}) —`,
+    `✍️ To‘ldirmoqda: ${today.filling}`,
+    `📝 To‘ldirib yuborgan: ${today.submitted}`,
+    `✅ To‘lov qilgan: ${today.paid}`,
+    `⏳ To‘lov qilmagan: ${today.unpaid}`,
+    `❔ Javob berilmagan: ${today.paymentUnknown}`,
+    `🖼 Postga aylantirilgan: ${today.posts}`,
+    `🌐 Saytda chop etilgan: ${today.published}`,
     "",
     "— JAMI —",
     `✍️ To‘ldirmoqda: ${total.filling}`,
@@ -143,13 +263,5 @@ export function buildBotStatusReportText(input: BotStatusReportInput): string {
     `❔ Javob berilmagan: ${total.paymentUnknown}`,
     `🖼 Postga aylantirilgan: ${total.posts}`,
     `🌐 Saytda chop etilgan: ${total.published}`,
-    "",
-    `— BUGUN (${input.todayDate}) —`,
-    `✍️ To‘ldirmoqda: ${today.filling}`,
-    `📝 To‘ldirib yuborgan: ${today.submitted}`,
-    `✅ To‘lov qilgan: ${today.paid}`,
-    `⏳ To‘lov qilmagan: ${today.unpaid}`,
-    `🖼 Postga aylantirilgan: ${today.posts}`,
-    `🌐 Saytda chop etilgan: ${today.published}`,
   ].join("\n");
 }
