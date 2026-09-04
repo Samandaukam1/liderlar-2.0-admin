@@ -748,6 +748,43 @@ test("the new tables are closed to public clients", () => {
   assert.match(MIGRATION, /revoke all on function public\.claim_next_publish_batch_item/);
 });
 
+test("every route that runs the pipeline is shipped the segmentation model", () => {
+  // The batch worker deployed without the model once. Nothing failed at build
+  // time: the function ran, reached the portrait stage, and every candidate it
+  // touched died at "Portret fonini olib tashlash amalga oshmadi" while the
+  // identical work on the pipeline cron succeeded.
+  const config = fs.readFileSync("next.config.ts", "utf8");
+  const listed = config.match(/const SEGMENTATION_ROUTES = \[([\s\S]*?)\];/)?.[1] ?? "";
+
+  const cronDir = "src/app/api/cron";
+  for (const entry of fs.readdirSync(cronDir)) {
+    const routeFile = `${cronDir}/${entry}/route.ts`;
+    if (!fs.existsSync(routeFile)) continue;
+    const source = fs.readFileSync(routeFile, "utf8");
+    // Anything reaching the pipeline reaches preparePortrait with it.
+    const runsPipeline = /post-studio\/pipeline|intake\/publish-batch/.test(source);
+    if (!runsPipeline) continue;
+    assert.ok(
+      listed.includes(`/api/cron/${entry}`),
+      `/api/cron/${entry} runs the pipeline but is not in SEGMENTATION_ROUTES`,
+    );
+  }
+
+  // And the includes are generated from that list, not hand-written per route —
+  // hand-listing is what let one ship without the model, the fonts or the
+  // backgrounds.
+  assert.match(config, /SEGMENTATION_ROUTES\.map\(\(route\) => \[\s*route,/);
+  assert.match(config, /\.\.\.POST_STUDIO_ASSETS, \.\.\.SEGMENTATION_MODEL/);
+});
+
+test("a missing model is reported as a build fault, not a bad photograph", () => {
+  const service = fs.readFileSync("src/lib/post-studio/service.ts", "utf8");
+  assert.match(service, /err\.code === "model_unavailable"/);
+  assert.match(service, /SEGMENTATION_ROUTES/, "the message points at the actual fix");
+  // And the underlying failure always reaches the logs, whatever is shown.
+  assert.match(service, /console\.error\("\[post-studio\] portrait failed"/);
+});
+
 test("the batch worker route pins Node and fails closed without its secret", () => {
   const cron = fs.readFileSync("src/app/api/cron/intake-publish-batches/route.ts", "utf8");
   assert.match(cron, /export const runtime = "nodejs"/);

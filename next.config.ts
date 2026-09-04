@@ -40,7 +40,18 @@ const SEGMENTATION_MODEL = [
  * studio page, whose server actions ("Portretni qayta ishlash", "Saqlash va
  * render") prepare a portrait before rendering.
  */
-const SEGMENTATION_ROUTES = ["/api/cron/post-pipeline", "/postlar/**"];
+const SEGMENTATION_ROUTES = [
+  "/api/cron/post-pipeline",
+  /**
+   * The batch worker runs the very same pipeline, portrait stage included. It
+   * was missing from this list once, and the symptom was not a build error: the
+   * function deployed happily and every candidate it picked up failed at
+   * "Portret fonini olib tashlash amalga oshmadi", while the identical work
+   * done by the pipeline cron succeeded.
+   */
+  "/api/cron/intake-publish-batches",
+  "/postlar/**",
+];
 
 /** Every route that pulls onnxruntime-node into its graph, model or not. */
 const ONNX_ROUTES = [...SEGMENTATION_ROUTES, "/api/admin/post-studio/**"];
@@ -59,8 +70,18 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/api/admin/candidates/**": ["public/assets/certificates/**/*"],
     "/api/admin/post-studio/**": POST_STUDIO_ASSETS,
-    "/api/cron/post-pipeline": [...POST_STUDIO_ASSETS, ...SEGMENTATION_MODEL],
-    "/postlar/**": [...POST_STUDIO_ASSETS, ...SEGMENTATION_MODEL],
+    /**
+     * Generated from SEGMENTATION_ROUTES rather than written out per route, so
+     * adding a route to that list is all it takes to give it the model, the
+     * fonts and the backgrounds. Hand-listing them is what let a new worker
+     * ship without any of the three.
+     */
+    ...Object.fromEntries(
+      SEGMENTATION_ROUTES.map((route) => [
+        route,
+        [...POST_STUDIO_ASSETS, ...SEGMENTATION_MODEL],
+      ]),
+    ),
   },
   /**
    * onnxruntime-node ships every platform's runtime in one package (283 MB).

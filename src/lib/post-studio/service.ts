@@ -229,9 +229,23 @@ export async function preparePortrait(
         ? ("portrait_low_quality" as const)
         : ("portrait_removal_failed" as const);
 
+    // A deployment with no model on disk is an infrastructure fault, not a bad
+    // photograph. Collapsing it into the generic message sent us hunting
+    // through perfectly good portraits; its own text says "fix the build".
+    const message =
+      err instanceof PortraitProcessingError && err.code === "model_unavailable"
+        ? `${detail} — bu deploymentda model yo‘q (next.config.ts / SEGMENTATION_ROUTES).`
+        : PORTRAIT_REMOVAL_FAILED_MESSAGE;
+
+    console.error("[post-studio] portrait failed", {
+      postId: post.id,
+      candidateId: post.candidateId,
+      error: detail,
+    });
+
     await updatePost(post.id, {
       status: "needs_review",
-      error: PORTRAIT_REMOVAL_FAILED_MESSAGE,
+      error: message,
       metadata: {
         ...post.metadata,
         portrait: {
@@ -244,7 +258,7 @@ export async function preparePortrait(
 
     return {
       processedUrl: post.portraitProcessedUrl,
-      warning: { code, message: PORTRAIT_REMOVAL_FAILED_MESSAGE },
+      warning: { code, message },
     };
   }
 }
