@@ -4,6 +4,20 @@ import { logAudit } from "@/lib/audit";
 import { resolvePublicWebUrl } from "./site-origin.ts";
 import { buildTelegramCaption, captionExceedsLimit } from "./telegram-markdown.ts";
 import { parseTelegramCommand } from "./telegram-command.ts";
+import {
+  answerCallbackQuery,
+  sendTelegramMessage,
+  sendTelegramPhoto,
+  TelegramSendError,
+  type SentPhoto,
+} from "./telegram-api.ts";
+import {
+  buildBotStatusReport,
+  handlePaymentCallback,
+  parsePaymentCallback,
+  REPORT_BUTTON_LABEL,
+} from "@/lib/intake/payment.ts";
+import { POST_DELIVERY_CHAT_IDS_KEY } from "./delivery-recipients.ts";
 
 /**
  * Private Telegram delivery bot.
@@ -12,9 +26,10 @@ import { parseTelegramCommand } from "./telegram-command.ts";
  * themselves with /start, and each finished post is sent to every active
  * subscriber's own chat with sendPhoto. The token stays server-side — nothing
  * in this module is importable from a client component.
+ *
+ * Transport (fetch, error shapes, keyboards) lives in telegram-api.ts; this
+ * module owns subscribers, delivery and update handling.
  */
-
-const TELEGRAM_API = "https://api.telegram.org";
 
 /**
  * Where "ariza qoldiring" in every caption points when nothing overrides it.
@@ -27,6 +42,7 @@ export const TELEGRAM_SETTINGS_KEYS = {
   applicationUrl: "telegram_bot.application_url",
   instagramUrl: "telegram_bot.instagram_url",
   username: "telegram_bot.username",
+  postDeliveryChatIds: POST_DELIVERY_CHAT_IDS_KEY,
 } as const;
 
 export interface TelegramSettings {
@@ -35,16 +51,6 @@ export interface TelegramSettings {
   applicationUrl: string | null;
   instagramUrl: string;
   username: string;
-}
-
-export function botToken(): string {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) throw new Error("TELEGRAM_BOT_TOKEN sozlanmagan.");
-  return token;
-}
-
-export function isTelegramConfigured(): boolean {
-  return Boolean(process.env.TELEGRAM_BOT_TOKEN);
 }
 
 /**
@@ -88,126 +94,41 @@ export async function getTelegramSettings(): Promise<TelegramSettings> {
 }
 
 /* ------------------------------------------------------------------ *
- * Bot API
+ * Delivery recipients
  * ------------------------------------------------------------------ */
 
-export interface TelegramApiError {
-  errorCode: number;
-  description: string;
-}
+/**
+ * Guarantees a subscriber row for every configured recipient.
+ *
+ * Deliveries are recorded against `telegram_post_subscribers`, and that row is
+ * what the "sent once" unique index keys on. A configured chat with no row
+ * could therefore be sent the same post twice. For a private chat Telegram uses
+ * the user's own id as the chat id, which is why one value seeds both columns.
+ */
+export async function ensureDeliverySubscribers(chatIds: number[]): Promise<void> {
+  if (chatIds.length === 0) return;
+  const db = createSupabaseAdminClient();
+  const { data: existing } = await db
+    .from("telegram_post_subscribers")
+    .select("chat_id")
+    .in("chat_id", chatIds);
 
-export class TelegramSendError extends Error {
-  /** Plain field, not a parameter property — see PortraitProcessingError. */
-  readonly errorCode: number;
-  /** Seconds Telegram asked us to wait, from a 429's `parameters`. */
-  readonly retryAfter: number | null;
+  const known = new Set((existing ?? []).map((r) => Number(r.chat_id)));
+  const missing = chatIds.filter((id) => !known.has(id));
+  if (missing.length === 0) return;
 
-  constructor(message: string, errorCode: number, retryAfter: number | null = null) {
-    super(message);
-    this.retryAfter = retryAfter;
-    this.name = "TelegramSendError";
-    this.errorCode = errorCode;
+  const { error } = await db.from("telegram_post_subscribers").upsert(
+    missing.map((id) => ({
+      telegram_user_id: id,
+      chat_id: id,
+      is_active: true,
+      first_name: "Tahririyat",
+    })),
+    { onConflict: "telegram_user_id" },
+  );
+  if (error) {
+    console.error("[telegram] delivery subscriber seed failed", error.message);
   }
-
-  /**
-   * Errors that mean this chat can never receive another message: the user
-   * blocked the bot, deleted their account, or the chat is gone. The
-   * subscriber is deactivated rather than retried forever.
-   */
-  get isPermanent(): boolean {
-    if (this.errorCode === 403) return true;
-    return this.errorCode === 400 && /chat not found|user is deactivated/i.test(this.message);
-  }
-
-  /**
-   * Worth trying again: Telegram's flood limit (429) and its own server
-   * errors. Recording these as a permanent failure is what made a large batch
-   * reach only the first few dozen subscribers.
-   */
-  get isTransient(): boolean {
-    return this.errorCode === 429 || this.errorCode >= 500;
-  }
-}
-
-async function callTelegram<T>(method: string, body: FormData | Record<string, unknown>): Promise<T> {
-  const isForm = body instanceof FormData;
-  const response = await fetch(`${TELEGRAM_API}/bot${botToken()}/${method}`, {
-    method: "POST",
-    headers: isForm ? undefined : { "Content-Type": "application/json" },
-    body: isForm ? body : JSON.stringify(body),
-  });
-
-  const raw = await response.text();
-  let payload: {
-    ok: boolean;
-    result?: T;
-    description?: string;
-    error_code?: number;
-    parameters?: { retry_after?: number };
-  } | null = null;
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    payload = null;
-  }
-
-  if (!payload?.ok) {
-    // The API's own description is the only thing that explains a 400 ("chat
-    // not found", "can't parse entities", ...), so it has to reach the logs.
-    // The URL is never logged — it carries the bot token.
-    console.error(
-      `[telegram-api] ${method} failed status=${response.status} body=${raw.slice(0, 500)}`,
-    );
-    throw new TelegramSendError(
-      payload?.description ?? `Telegram ${method} xatosi (${response.status})`,
-      payload?.error_code ?? response.status,
-      payload?.parameters?.retry_after ?? null,
-    );
-  }
-  return payload.result as T;
-}
-
-export async function sendTelegramMessage(chatId: number, text: string): Promise<void> {
-  await callTelegram("sendMessage", { chat_id: chatId, text });
-}
-
-export interface SentPhoto {
-  messageId: number;
-  /**
-   * Telegram's own handle for the uploaded image. Every send after the first
-   * passes this instead of the bytes: a poster is ~800KB, so re-uploading it
-   * per subscriber was the bulk of the delivery time and the main reason a
-   * batch ran into the function's timeout.
-   */
-  fileId: string | null;
-}
-
-/** Largest rendition Telegram kept, which is the one worth reusing. */
-function largestFileId(photos: { file_id: string; width: number }[] | undefined): string | null {
-  if (!photos?.length) return null;
-  return photos.reduce((a, b) => (b.width > a.width ? b : a)).file_id;
-}
-
-export async function sendTelegramPhoto(
-  chatId: number,
-  photo: Buffer | string,
-  caption: string,
-): Promise<SentPhoto> {
-  const common = { caption, parse_mode: "MarkdownV2" };
-  let result: { message_id: number; photo?: { file_id: string; width: number }[] };
-
-  if (typeof photo === "string") {
-    result = await callTelegram("sendPhoto", { chat_id: chatId, photo, ...common });
-  } else {
-    const form = new FormData();
-    form.append("chat_id", String(chatId));
-    form.append("caption", caption);
-    form.append("parse_mode", "MarkdownV2");
-    form.append("photo", new Blob([new Uint8Array(photo)], { type: "image/png" }), "post.png");
-    result = await callTelegram("sendPhoto", form);
-  }
-
-  return { messageId: result.message_id, fileId: largestFileId(result.photo) };
 }
 
 /* ------------------------------------------------------------------ *
@@ -296,7 +217,16 @@ export interface TelegramUpdate {
     from?: TelegramFrom;
     text?: string;
   };
+  callback_query?: {
+    id: string;
+    from?: TelegramFrom;
+    data?: string;
+    message?: { chat?: { id?: number }; message_id?: number };
+  };
 }
+
+/** The persistent keyboard every subscriber sees under the input box. */
+const BOT_KEYBOARD = [[REPORT_BUTTON_LABEL]];
 
 /**
  * Handles one webhook update.
@@ -309,6 +239,13 @@ export interface TelegramUpdate {
  * database failure is logged loudly instead of swallowing the conversation.
  */
 export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void> {
+  // A tapped inline button arrives as a callback_query, not a message. This is
+  // how the payment question is answered, so it is checked first.
+  if (update.callback_query) {
+    await handleCallbackQuery(update.callback_query);
+    return;
+  }
+
   const message = update.message;
   const chatId = message?.chat?.id;
   const from = message?.from;
@@ -331,7 +268,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
         err instanceof Error ? err.message : String(err),
       );
     }
-    await sendTelegramMessage(chatId, START_REPLY);
+    await sendTelegramMessage(chatId, START_REPLY, { replyKeyboard: BOT_KEYBOARD });
     console.log("[telegram-webhook] sendMessage success command=/start");
     return;
   }
@@ -351,9 +288,46 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
     return;
   }
 
+  // The report is reachable both as a typed command and as the keyboard button,
+  // because a button press arrives as an ordinary message carrying its label.
+  if (command === "/hisobot" || (message?.text ?? "").trim() === REPORT_BUTTON_LABEL) {
+    const report = await buildBotStatusReport();
+    await sendTelegramMessage(chatId, report, { replyKeyboard: BOT_KEYBOARD });
+    console.log("[telegram-webhook] sendMessage success command=report");
+    return;
+  }
+
   // Never leave a message unanswered.
-  await sendTelegramMessage(chatId, HELP_REPLY);
+  await sendTelegramMessage(chatId, HELP_REPLY, { replyKeyboard: BOT_KEYBOARD });
   console.log("[telegram-webhook] sendMessage success command=help");
+}
+
+/**
+ * One tapped inline button.
+ *
+ * The spinner is cleared first and the slow work runs after: Telegram keeps the
+ * button spinning for a few seconds and shows the tapper an error if nothing
+ * answers, regardless of what the handler is still doing.
+ */
+async function handleCallbackQuery(
+  query: NonNullable<TelegramUpdate["callback_query"]>,
+): Promise<void> {
+  const payment = parsePaymentCallback(query.data);
+  if (!payment) {
+    await answerCallbackQuery(query.id);
+    console.log("[telegram-webhook] callback ignored: unknown data");
+    return;
+  }
+
+  const outcome = await handlePaymentCallback({
+    intakeId: payment.intakeId,
+    paid: payment.paid,
+    chatId: query.message?.chat?.id ?? null,
+    messageId: query.message?.message_id ?? null,
+    fromUserId: query.from?.id ?? null,
+    callbackQueryId: query.id,
+  });
+  console.log(`[telegram-webhook] payment callback ${payment.paid ? "yes" : "no"} → ${outcome}`);
 }
 
 export interface SubscriberStats {
@@ -404,6 +378,12 @@ export interface DeliverOptions {
   /** Re-send only to subscribers whose last attempt for this post failed. */
   onlyFailed?: boolean;
   actorId?: string | null;
+  /**
+   * Restrict the fan-out to these chats. Automated runs pass the configured
+   * editorial recipients so a batch cannot post to the whole subscriber list;
+   * omitting it keeps the manual "send to everyone" behaviour.
+   */
+  chatIds?: number[];
 }
 
 /**
@@ -464,11 +444,21 @@ export async function deliverPostToSubscribers(
     );
   }
 
+  // A restricted run seeds its recipients first, so a configured editor who
+  // never pressed /start still gets the post — and still gets a delivery row,
+  // which is what makes the "sent once" guarantee hold for them too.
+  if (options.chatIds?.length) await ensureDeliverySubscribers(options.chatIds);
+
+  let subscriberQuery = db
+    .from("telegram_post_subscribers")
+    .select("id, chat_id, telegram_user_id")
+    .eq("is_active", true);
+  if (options.chatIds?.length) {
+    subscriberQuery = subscriberQuery.in("chat_id", options.chatIds);
+  }
+
   const [{ data: subscribers }, { data: deliveries }] = await Promise.all([
-    db
-      .from("telegram_post_subscribers")
-      .select("id, chat_id, telegram_user_id")
-      .eq("is_active", true),
+    subscriberQuery,
     db.from("telegram_post_deliveries").select("subscriber_id, status").eq("post_id", postId),
   ]);
 
@@ -580,3 +570,17 @@ export async function getPostDeliveryStats(postId: string): Promise<{
 
 export { buildTelegramCaption };
 export { parseTelegramCommand };
+
+// Transport moved to telegram-api.ts; re-exported so every existing importer
+// (routes, scheduler, server actions) keeps its single entry point.
+export {
+  answerCallbackQuery,
+  botToken,
+  editTelegramMessageText,
+  isTelegramConfigured,
+  sendTelegramMessage,
+  sendTelegramPhoto,
+  TelegramSendError,
+} from "./telegram-api.ts";
+export type { SentPhoto } from "./telegram-api.ts";
+export { getPostDeliveryChatIds } from "./delivery-recipients.ts";

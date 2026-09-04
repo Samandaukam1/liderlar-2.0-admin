@@ -3,6 +3,7 @@ import {
   LayoutDashboard,
   Users,
   UserPlus,
+  Rocket,
   Link2,
   Inbox,
   FileText,
@@ -56,6 +57,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Nomzodlar", href: "/candidates", icon: Users, permission: "candidates.view", keywords: "lider profil" },
       { label: "Nomzod anketalari", href: "/nomzodlar/anketalar", icon: UserPlus, permission: "intakes.view", keywords: "anketa intake qo'shish yangi nomzod havola" },
+      { label: "Chop etishga tayyorlar", href: "/nomzodlar/anketalar/chop-etishga-tayyorlar", icon: Rocket, permission: "intakes.view", keywords: "batch to'lov nashr telegram bugungi navbat" },
       { label: "Oylik havolalar", href: "/monthly-links", icon: Link2, permission: "tokens.view", keywords: "token 30 kun" },
       { label: "Yuborilgan yangilanishlar", href: "/monthly-updates", icon: Inbox, permission: "updates.view", keywords: "oylik submission" },
       { label: "Biografik maqolalar", href: "/articles", icon: FileText, permission: "articles.view", keywords: "maqola editor" },

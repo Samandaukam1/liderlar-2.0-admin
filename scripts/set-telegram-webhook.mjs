@@ -21,8 +21,13 @@ const response = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, 
   body: JSON.stringify({
     url: `${baseUrl}/api/telegram/webhook`,
     secret_token: secret,
-    // Only messages matter; the bot has no inline or callback surface.
-    allowed_updates: ["message"],
+    // callback_query is NOT optional: the payment question's "Ha"/"Yo'q"
+    // buttons arrive as callback queries, and an allowed_updates list that
+    // omits them makes Telegram drop every tap silently — the buttons spin and
+    // nothing is ever recorded.
+    allowed_updates: ["message", "callback_query"],
+    // Pending updates are dropped so a backlog queued while the webhook was
+    // misconfigured is not replayed as a burst of stale answers.
     drop_pending_updates: true,
   }),
 });

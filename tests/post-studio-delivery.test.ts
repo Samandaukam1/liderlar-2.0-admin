@@ -619,10 +619,10 @@ test("a database failure never silences the bot", () => {
     telegram.indexOf('if (command === "/stop")'),
   );
   assert.match(startBlock, /try \{[\s\S]*await upsertSubscriber\([\s\S]*\} catch/);
-  assert.match(startBlock, /\} catch[\s\S]*await sendTelegramMessage\(chatId, START_REPLY\)/);
+  assert.match(startBlock, /\} catch[\s\S]*await sendTelegramMessage\(chatId, START_REPLY/);
 
   // Any unknown text still gets an answer.
-  assert.match(telegram, /await sendTelegramMessage\(chatId, HELP_REPLY\)/);
+  assert.match(telegram, /await sendTelegramMessage\(chatId, HELP_REPLY/);
 });
 
 test("machine callers are exempt from the admin session redirect", () => {
@@ -652,17 +652,20 @@ test("the webhook checks its secret in constant time and awaits the reply", () =
 });
 
 test("a failed Telegram API call logs its response body, never the token", () => {
-  const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
-  assert.match(telegram, /\[telegram-api\] \$\{method\} failed status=/);
-  assert.match(telegram, /body=\$\{raw\.slice\(0, 500\)\}/);
+  // Transport (fetch, error shapes, keyboards) lives in telegram-api.ts; the
+  // subscriber and delivery logic that consumes it stays in telegram.ts.
+  const api = fs.readFileSync("src/lib/post-studio/telegram-api.ts", "utf8");
+  assert.match(api, /\[telegram-api\] \$\{method\} failed status=/);
+  assert.match(api, /body=\$\{raw\.slice\(0, 500\)\}/);
   // The request URL embeds the bot token, so it must not be interpolated in.
-  assert.ok(!/console\.error\([^)]*TELEGRAM_API/.test(telegram));
+  assert.ok(!/console\.error\([^)]*TELEGRAM_API/.test(api));
 });
 
 test("a blocked or deleted chat deactivates that subscriber instead of retrying forever", () => {
   const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
-  assert.match(telegram, /if \(this\.errorCode === 403\) return true/);
-  assert.match(telegram, /chat not found\|user is deactivated/);
+  const api = fs.readFileSync("src/lib/post-studio/telegram-api.ts", "utf8");
+  assert.match(api, /if \(this\.errorCode === 403\) return true/);
+  assert.match(api, /chat not found\|user is deactivated/);
   assert.match(telegram, /if \(error\?\.isPermanent\) await deactivateSubscriberById\(id\)/);
   // One failure must not abort the fan-out.
   assert.match(telegram, /result\.failed \+= 1;/);
@@ -742,17 +745,18 @@ test("the application link points at the real form on the public site", () => {
 
 test("a flood limit pauses the batch instead of failing the rest of it", () => {
   const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
+  const api = fs.readFileSync("src/lib/post-studio/telegram-api.ts", "utf8");
 
   // Telegram's own retry_after is parsed and honoured.
-  assert.match(telegram, /parameters\?\.retry_after \?\? null/);
-  assert.match(telegram, /get isTransient\(\)[\s\S]*errorCode === 429[\s\S]*errorCode >= 500/);
+  assert.match(api, /parameters\?\.retry_after \?\? null/);
+  assert.match(api, /get isTransient\(\)[\s\S]*errorCode === 429[\s\S]*errorCode >= 500/);
 
   const retry = telegram.slice(telegram.indexOf("async function sendWithRetry"));
   assert.match(retry, /if \(!error\?\.isTransient \|\| attempt >= MAX_SEND_ATTEMPTS\) throw err/);
   assert.match(retry, /Math\.min\(\(error\.retryAfter \?\? attempt\) \* 1000, MAX_RETRY_WAIT_MS\)/);
 
   // A permanent error is still permanent — a blocked user is not retried.
-  assert.match(telegram, /get isPermanent\(\)[\s\S]*errorCode === 403/);
+  assert.match(api, /get isPermanent\(\)[\s\S]*errorCode === 403/);
 });
 
 test("the poster is uploaded once and then referenced by file_id", () => {
@@ -768,8 +772,9 @@ test("the poster is uploaded once and then referenced by file_id", () => {
   assert.match(telegram, /const SEND_INTERVAL_MS = 40/);
 
   // sendPhoto accepts either the bytes or the handle.
-  assert.match(telegram, /photo: Buffer \| string/);
-  assert.match(telegram, /if \(typeof photo === "string"\)/);
+  const api = fs.readFileSync("src/lib/post-studio/telegram-api.ts", "utf8");
+  assert.match(api, /photo: Buffer \| string/);
+  assert.match(api, /if \(typeof photo === "string"\)/);
 });
 
 test("the caption handle comes from settings, not a hardcoded string", () => {

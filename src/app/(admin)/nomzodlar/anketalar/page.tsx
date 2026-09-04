@@ -167,6 +167,20 @@ export default async function IntakesPipelinePage(props: {
 
       {/* Tabs */}
       <div className="mb-4 flex gap-1.5 overflow-x-auto pb-1">
+        {/* The batch board is its own route: it is stateful (selection, live
+            progress) in a way the filtered list is not. */}
+        <Link
+          href="/nomzodlar/anketalar/chop-etishga-tayyorlar"
+          className="shrink-0 rounded-full border border-brand/40 bg-brand/10 px-3.5 py-1.5 text-sm font-semibold text-brand transition hover:bg-brand/15"
+        >
+          Chop etishga tayyorlar
+        </Link>
+        <Link
+          href="/nomzodlar/anketalar/chop-etishga-tayyorlar?view=unpaid"
+          className="shrink-0 rounded-full border border-line bg-card px-3.5 py-1.5 text-sm font-semibold text-ink-soft transition hover:border-brand/40 hover:text-ink"
+        >
+          To‘lov qilmaganlar
+        </Link>
         {INTAKE_TABS.map((t) => (
           <Link
             key={t.key}

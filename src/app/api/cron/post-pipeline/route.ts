@@ -2,6 +2,8 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { runDuePipelines } from "@/lib/post-studio/pipeline";
 import { sendDueScheduledPosts } from "@/lib/post-studio/scheduler";
+import { runPaymentAskSweep } from "@/lib/intake/payment";
+import { getPostDeliveryChatIds } from "@/lib/post-studio/telegram";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,13 +42,20 @@ export async function GET(request: NextRequest) {
   const results = await runDuePipelines();
   const scheduled = await sendDueScheduledPosts();
 
+  // Payment questions go to the same editorial chats the finished posts do.
+  // The sweep itself enforces the two-hour gap per candidate, so running it on
+  // every quarter-hour tick asks nobody twice.
+  const paymentAsks = await runPaymentAskSweep(await getPostDeliveryChatIds());
+
   return NextResponse.json({
     ok: true,
     processed: results.length,
     needsReview: results.filter((r) => r.needsReview).length,
     failed: results.filter((r) => !r.ok).length,
     scheduledSent: scheduled.filter((r) => r.ok).length,
+    paymentAsked: paymentAsks.length,
     results,
     scheduled,
+    paymentAsks,
   });
 }
