@@ -7,8 +7,9 @@ import { INTAKE_TABS } from "@/lib/intake/constants";
 import {
   getBatchProgress,
   getLatestBatchId,
-  loadTodayPublishQueue,
+  loadPublishQueue,
 } from "@/lib/intake/publish-batch";
+import { parseCalendarDate, tashkentToday } from "@/lib/tashkent-day";
 import { PublishQueueClient } from "./queue-client";
 
 export const metadata = { title: "Chop etishga tayyorlar" };
@@ -28,7 +29,12 @@ export default async function PublishQueuePage(props: {
   const sp = await props.searchParams;
   const view = sp.view === "unpaid" ? "unpaid" : "ready";
 
-  const queue = await loadTodayPublishQueue();
+  // An unparseable ?date= falls back to today rather than erroring: a stale or
+  // hand-edited link should land on a usable board, not a stack trace.
+  const today = tashkentToday();
+  const date = (typeof sp.date === "string" ? parseCalendarDate(sp.date) : null) ?? today;
+
+  const queue = await loadPublishQueue(date);
 
   // The panel opens already watching the most recent batch, so a reload during
   // a long run does not lose the progress view.
@@ -42,7 +48,11 @@ export default async function PublishQueuePage(props: {
     <>
       <PageHeader
         title="Chop etishga tayyorlar"
-        description={`Bugun (${queue.summary.date}, Toshkent) yuborilgan anketalar — to‘lov, nashr va Telegram oqimi`}
+        description={
+          date === today
+            ? `Bugun (${date}, Toshkent) yuborilgan anketalar — to‘lov, nashr va Telegram oqimi`
+            : `${date} (Toshkent) kuni yuborilgan anketalar — to‘lov, nashr va Telegram oqimi`
+        }
         breadcrumbs={[
           { label: "Nomzod anketalari", href: "/nomzodlar/anketalar" },
           { label: "Chop etishga tayyorlar" },
@@ -68,7 +78,7 @@ export default async function PublishQueuePage(props: {
         {VIEWS.map((v) => (
           <Link
             key={v.key}
-            href={`/nomzodlar/anketalar/chop-etishga-tayyorlar?view=${v.key}`}
+            href={`/nomzodlar/anketalar/chop-etishga-tayyorlar?view=${v.key}&date=${date}`}
             className={cn(
               "shrink-0 rounded-full border px-3.5 py-1.5 text-sm font-semibold transition",
               v.key === view
@@ -90,6 +100,8 @@ export default async function PublishQueuePage(props: {
         rows={queue.rows}
         summary={queue.summary}
         view={view}
+        date={date}
+        today={today}
         initialProgress={initialProgress}
         canPublish={canPublish}
         canAskPayment={canAskPayment}

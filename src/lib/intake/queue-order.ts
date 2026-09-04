@@ -12,6 +12,12 @@ export interface OrderableIntake {
   submittedAt: string | null;
   status: string;
   paymentStatus: string;
+  /**
+   * Set when someone of this name is already published on the site. Such a
+   * candidate is never re-processed — a second run would rewrite their article
+   * and post them again as if they were new.
+   */
+  alreadyPublished?: { candidateId: string; slug: string } | null;
 }
 
 /**
@@ -44,11 +50,14 @@ export const PROCESSABLE_STATUSES = ["submitted", "approved", "promoted"] as con
 /**
  * What a batch may actually queue.
  *
- * Three rules, all of them deliberate:
+ * Four rules, all of them deliberate:
  *
  *  - payment must be CONFIRMED. `unknown` is not `unpaid`, but neither is it
  *    permission to publish — an unanswered question means nobody has said yes.
  *  - `published` candidates are already done and are never re-run.
+ *  - neither is anyone already on the site under the same name, even from an
+ *    earlier intake: re-running them would rewrite a live article and post the
+ *    same person a second time.
  *  - selection, when present, only ever narrows. It cannot reorder: the result
  *    comes back in submission order no matter which order the boxes were
  *    ticked in.
@@ -64,7 +73,8 @@ export function selectEligibleForBatch<T extends OrderableIntake>(
       (row) =>
         (!selected || selected.has(row.id)) &&
         row.paymentStatus === "paid" &&
-        processable.has(row.status),
+        processable.has(row.status) &&
+        !row.alreadyPublished,
     ),
   );
 }

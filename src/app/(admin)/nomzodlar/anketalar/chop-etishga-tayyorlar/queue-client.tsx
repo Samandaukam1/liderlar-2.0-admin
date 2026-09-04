@@ -4,7 +4,10 @@ import { useCallback, useEffect, useMemo, useState, useTransition } from "react"
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  CalendarDays,
   CheckSquare,
+  ChevronLeft,
+  ChevronRight,
   CircleDollarSign,
   Inbox,
   Loader2,
@@ -51,6 +54,10 @@ interface Props {
   rows: PublishQueueRow[];
   summary: PublishQueueSummary;
   view: "ready" | "unpaid";
+  /** Tashkent calendar date the board is showing. */
+  date: string;
+  /** Today in Tashkent, for the "Bugun" shortcut and the max on the picker. */
+  today: string;
   initialProgress: BatchProgress | null;
   canPublish: boolean;
   canAskPayment: boolean;
@@ -60,6 +67,8 @@ export function PublishQueueClient({
   rows,
   summary,
   view,
+  date,
+  today,
   initialProgress,
   canPublish,
   canAskPayment,
@@ -83,9 +92,15 @@ export function PublishQueueClient({
     [rows, view],
   );
 
-  /** Candidates a batch can actually act on: paid and not yet published. */
+  /**
+   * Candidates a batch can actually act on: paid, not yet published, and not
+   * someone already on the site under the same name.
+   */
   const eligible = useMemo(
-    () => rows.filter((r) => r.paymentStatus === "paid" && r.status !== "published"),
+    () =>
+      rows.filter(
+        (r) => r.paymentStatus === "paid" && r.status !== "published" && !r.alreadyPublished,
+      ),
     [rows],
   );
   const eligibleIds = useMemo(() => new Set(eligible.map((r) => r.id)), [eligible]);
@@ -143,7 +158,9 @@ export function PublishQueueClient({
     setBusy(true);
     try {
       const ids = selectionMode && selectedEligible.length > 0 ? selectedEligible : null;
-      const result = await startPublishBatchAction(ids);
+      // The date travels with the request: pressing the button on an archive
+      // day must queue that day, not today's.
+      const result = await startPublishBatchAction(ids, date);
       if (!result.ok) {
         toast("error", "Batch boshlanmadi", result.error);
         return;
@@ -234,8 +251,24 @@ export function PublishQueueClient({
       ? `Tanlanganlarni chop etish (${selectedEligible.length})`
       : `Barchasini chop etish (${eligible.length})`;
 
+  const goToDate = (next: string) => {
+    startTransition(() => {
+      router.push(
+        `/nomzodlar/anketalar/chop-etishga-tayyorlar?view=${view}&date=${next}`,
+      );
+    });
+  };
+
   return (
     <div className="space-y-4">
+      <DatePicker
+        date={date}
+        today={today}
+        busy={pending}
+        onChange={goToDate}
+        count={summary.total}
+      />
+
       <SummaryCards summary={summary} />
 
       {/* ----------------------------- actions ----------------------------- */}
@@ -328,11 +361,17 @@ export function PublishQueueClient({
         {visible.length === 0 && (
           <EmptyState
             icon={<Inbox className="h-7 w-7" />}
-            title={view === "unpaid" ? "To‘lov qilmaganlar yo‘q" : "Bugun anketa yo‘q"}
+            title={
+              view === "unpaid"
+                ? "To‘lov qilmaganlar yo‘q"
+                : date === today
+                  ? "Bugun anketa yo‘q"
+                  : `${date} kuni anketa yo‘q`
+            }
             description={
               view === "unpaid"
-                ? "Bugungi barcha nomzodlarning to‘lovi tasdiqlangan."
-                : "Bugun (Toshkent vaqti bilan) hali hech kim anketa yubormagan."
+                ? "Bu kundagi barcha nomzodlarning to‘lovi tasdiqlangan."
+                : `${date} (Toshkent vaqti bilan) sanasida hech kim anketa yubormagan. Yuqoridagi kalendardan boshqa kunni tanlang.`
             }
           />
         )}
@@ -376,16 +415,101 @@ export function PublishQueueClient({
  * Pieces
  * ------------------------------------------------------------------ */
 
+/**
+ * The day the board is showing.
+ *
+ * Arrows and the native picker all push a `?date=` URL rather than holding the
+ * date in component state, so the view is linkable, survives a reload, and the
+ * server does the filtering — the client never slices a cached list.
+ */
+function DatePicker({
+  date,
+  today,
+  busy,
+  count,
+  onChange,
+}: {
+  date: string;
+  today: string;
+  busy: boolean;
+  count: number;
+  onChange: (next: string) => void;
+}) {
+  const isToday = date === today;
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-panel border border-line bg-card px-3 py-2.5">
+      <CalendarDays className="h-4 w-4 shrink-0 text-brand" />
+
+      <button
+        type="button"
+        onClick={() => onChange(shiftDate(date, -1))}
+        disabled={busy}
+        aria-label="Oldingi kun"
+        className="rounded-lg border border-line p-1.5 text-ink-soft transition hover:border-brand/50 hover:text-ink disabled:opacity-50"
+      >
+        <ChevronLeft className="h-4 w-4" />
+      </button>
+
+      <input
+        type="date"
+        value={date}
+        // Future days hold nothing: submissions cannot arrive before they exist.
+        max={today}
+        disabled={busy}
+        onChange={(e) => {
+          if (e.target.value) onChange(e.target.value);
+        }}
+        className="h-9 rounded-[12px] border border-line bg-surface px-3 text-sm font-semibold text-ink focus:border-brand/60 focus:outline-2 focus:outline-brand/25"
+      />
+
+      <button
+        type="button"
+        onClick={() => onChange(shiftDate(date, 1))}
+        disabled={busy || isToday}
+        aria-label="Keyingi kun"
+        className="rounded-lg border border-line p-1.5 text-ink-soft transition hover:border-brand/50 hover:text-ink disabled:opacity-40"
+      >
+        <ChevronRight className="h-4 w-4" />
+      </button>
+
+      {!isToday && (
+        <button
+          type="button"
+          onClick={() => onChange(today)}
+          disabled={busy}
+          className="rounded-full border border-brand/40 bg-brand/10 px-3 py-1 text-xs font-bold text-brand transition hover:bg-brand/15"
+        >
+          Bugunga qaytish
+        </button>
+      )}
+
+      <span className="ml-auto flex items-center gap-2 text-xs text-ink-soft">
+        {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+        {isToday ? "Bugun" : "Arxiv"} · {count} ta anketa
+      </span>
+    </div>
+  );
+}
+
+/** Calendar arithmetic on the YYYY-MM-DD string, with no timezone in play. */
+function shiftDate(date: string, days: number): string {
+  const [year, month, day] = date.split("-").map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day + days));
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())}`;
+}
+
 function SummaryCards({ summary }: { summary: PublishQueueSummary }) {
   const cards = [
-    { label: "Bugun yuborilgan", value: summary.total, accent: "text-brand" },
+    { label: "Yuborilgan", value: summary.total, accent: "text-brand" },
     { label: "Chop etishga tayyor", value: summary.ready, accent: "text-green" },
     { label: "To‘lov qilmagan", value: summary.unpaid, accent: "text-coral" },
     { label: "Javob kutilmoqda", value: summary.unknown, accent: "text-amber" },
     { label: "Chop etilgan", value: summary.published, accent: "text-electric" },
+    { label: "Avval chiqqan", value: summary.duplicates, accent: "text-[#6a52c7]" },
   ];
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       {cards.map((c) => (
         <div key={c.label} className="rounded-panel border border-line bg-card px-4 py-3">
           <p className={cn("font-display text-2xl font-semibold", c.accent)}>{c.value}</p>
@@ -614,11 +738,15 @@ function QueueRow({
         <StatusBadge status={row.status} />
       </td>
       <td className="px-3 py-2.5 text-xs text-ink-soft">
-        {row.batchItemStatus === "running"
-          ? row.batchStage ?? "Ishlanmoqda"
-          : row.batchItemStatus
-            ? ITEM_STATUS_LABELS[row.batchItemStatus] ?? row.batchItemStatus
-            : "—"}
+        {row.alreadyPublished ? (
+          <span className="font-semibold text-[#6a52c7]">Avval chiqqan</span>
+        ) : row.batchItemStatus === "running" ? (
+          row.batchStage ?? "Ishlanmoqda"
+        ) : row.batchItemStatus ? (
+          ITEM_STATUS_LABELS[row.batchItemStatus] ?? row.batchItemStatus
+        ) : (
+          "—"
+        )}
       </td>
       <td className="px-3 py-2.5 text-xs">
         <div className="flex flex-wrap gap-2">
@@ -632,7 +760,17 @@ function QueueRow({
               Post
             </Link>
           )}
-          {!row.candidateSlug && !row.postId && <span className="text-ink-soft">—</span>}
+          {row.alreadyPublished && !row.candidateSlug && (
+            <Link
+              href={`/candidates/${row.alreadyPublished.candidateId}`}
+              className="font-semibold text-[#6a52c7] hover:underline"
+            >
+              Mavjud maqola
+            </Link>
+          )}
+          {!row.candidateSlug && !row.postId && !row.alreadyPublished && (
+            <span className="text-ink-soft">—</span>
+          )}
         </div>
         {row.pipelineError && (
           <p className="mt-1 max-w-[220px] truncate text-[11px] text-coral" title={row.pipelineError}>

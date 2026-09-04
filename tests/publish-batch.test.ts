@@ -4,9 +4,13 @@ import fs from "node:fs";
 
 import {
   formatTashkent,
+  parseCalendarDate,
+  shiftCalendarDate,
   tashkentDayRange,
+  tashkentDayRangeForDate,
   tashkentHour,
   tashkentOffsetMinutes,
+  tashkentToday,
 } from "../src/lib/tashkent-day.ts";
 import {
   classifyPayment,
@@ -93,6 +97,45 @@ test("a UTC server past 19:00 already shows the next Tashkent day", () => {
   // own date here is what would keep the board on yesterday until 05:00 UTC.
   assert.equal(tashkentDayRange(new Date("2026-09-04T19:05:00Z")).date, "2026-09-05");
   assert.equal(tashkentDayRange(new Date("2026-09-04T18:55:00Z")).date, "2026-09-04");
+});
+
+test("any calendar date can be turned into its own Tashkent day", () => {
+  // The board reaches back through the archive, so the range comes from a date
+  // rather than from whichever day the server happens to be inside.
+  const range = tashkentDayRangeForDate("2026-08-14");
+  assert.equal(range.date, "2026-08-14");
+  assert.equal(range.startIso, "2026-08-13T19:00:00.000Z");
+  assert.equal(range.endIso, "2026-08-14T19:00:00.000Z");
+
+  // A leap day is a real day and must survive the round trip.
+  assert.equal(tashkentDayRangeForDate("2028-02-29").date, "2028-02-29");
+});
+
+test("a hand-edited date is rejected rather than silently reinterpreted", () => {
+  assert.equal(parseCalendarDate("2026-09-04"), "2026-09-04");
+  assert.equal(parseCalendarDate(null), null);
+  assert.equal(parseCalendarDate(""), null);
+  assert.equal(parseCalendarDate("04.09.2026"), null);
+  assert.equal(parseCalendarDate("2026-9-4"), null);
+  // Shape-valid but non-existent: without the round-trip check this would
+  // quietly become 2026-03-02.
+  assert.equal(parseCalendarDate("2026-02-30"), null);
+  assert.equal(parseCalendarDate("2026-13-01"), null);
+  assert.equal(parseCalendarDate("2026-00-10"), null);
+});
+
+test("today is the Tashkent calendar date, not the server's", () => {
+  // 19:05 UTC is already tomorrow in Tashkent; the default board must follow
+  // the zone, not the machine.
+  assert.equal(tashkentToday(new Date("2026-09-04T19:05:00Z")), "2026-09-05");
+  assert.equal(tashkentToday(new Date("2026-09-04T18:55:00Z")), "2026-09-04");
+});
+
+test("stepping between days crosses month and year boundaries", () => {
+  assert.equal(shiftCalendarDate("2026-09-05", -1), "2026-09-04");
+  assert.equal(shiftCalendarDate("2026-09-01", -1), "2026-08-31");
+  assert.equal(shiftCalendarDate("2026-12-31", 1), "2027-01-01");
+  assert.equal(shiftCalendarDate("2028-02-28", 1), "2028-02-29");
 });
 
 test("wall-clock helpers report Tashkent time, not UTC", () => {
@@ -187,6 +230,24 @@ test("selection narrows the batch without touching anyone else", () => {
 test("selecting an unpaid candidate does not force them through", () => {
   const rows = [row("a", "2026-09-04T08:00:00Z", "unpaid")];
   assert.equal(selectEligibleForBatch(rows, ["a"]).length, 0);
+});
+
+test("someone already on the site is never queued again", () => {
+  // A returning candidate, or a second form under the same name: re-running
+  // them would rewrite their live article and post them as if they were new.
+  const rows = [
+    { ...row("fresh", "2026-09-04T08:00:00Z"), alreadyPublished: null },
+    {
+      ...row("returning", "2026-09-04T08:01:00Z"),
+      alreadyPublished: { candidateId: "cand-1", slug: "aliyev-ali" },
+    },
+  ];
+  assert.deepEqual(
+    selectEligibleForBatch(rows, null).map((r) => r.id),
+    ["fresh"],
+  );
+  // Not even by ticking them by hand.
+  assert.equal(selectEligibleForBatch(rows, ["returning"]).length, 0);
 });
 
 /* ------------------------------------------------------------------ *
@@ -313,6 +374,37 @@ test("an undo takes the candidate back out of the publish queue", () => {
   assert.match(undo, /post_pipeline_status: "skipped"/, "the queued run is withdrawn");
   // Guarded, so two taps on the same number do not double-write.
   assert.match(undo, /\.eq\("payment_status", "paid"\)/);
+});
+
+test("a duplicate is caught by identity, on both publish paths", () => {
+  const NAMESAKE = fs.readFileSync("src/lib/intake/namesake.ts", "utf8");
+  // The site's own identity for a person: publishing derives every slug from
+  // slugify(full_name), and the slug is unique among live candidates.
+  assert.match(NAMESAKE, /slugify\(fullName\)/);
+  assert.match(NAMESAKE, /\.eq\("status", "published"\)/);
+  assert.match(NAMESAKE, /\.is\("deleted_at", null\)/);
+  // An intake promoted earlier matches its own slug; that is continuation.
+  assert.match(NAMESAKE, /excludeCandidateId && data\.id === excludeCandidateId/);
+
+  // Checked on the batch path AND on the payment-triggered automatic path —
+  // gating only one of them would leave the other free to republish.
+  assert.match(BATCH, /findPublishedNamesake\(/);
+  assert.match(PIPELINE, /findPublishedNamesake\(/);
+  // And in the pipeline it runs BEFORE anything is promoted or published.
+  assert.ok(
+    PIPELINE.indexOf("findPublishedNamesake(") < PIPELINE.indexOf("promoteIntakeToDraft(intakeId"),
+    "the check precedes promotion",
+  );
+});
+
+test("the board can be pointed at any past day, and the batch follows it", () => {
+  assert.match(BATCH, /export async function loadPublishQueue/);
+  assert.match(BATCH, /date \? tashkentDayRangeForDate\(date\) : tashkentDayRange\(now\)/);
+  // Starting a batch on an archive day must queue that day, not today's.
+  assert.match(BATCH, /const queue = await loadPublishQueue\(date\)/);
+  const actions = fs.readFileSync("src/lib/actions/publish-batch.ts", "utf8");
+  assert.match(actions, /parseCalendarDate\(date\)/, "the date is validated, not trusted");
+  assert.match(actions, /Sana noto‘g‘ri/);
 });
 
 test("the payment question goes out the moment a form is submitted", () => {

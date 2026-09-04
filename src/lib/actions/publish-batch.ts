@@ -10,6 +10,7 @@ import {
   type BatchProgress,
 } from "@/lib/intake/publish-batch";
 import { askPaymentForIntakes, type PaymentAskChunkResult } from "@/lib/intake/payment";
+import { parseCalendarDate } from "@/lib/tashkent-day";
 
 /**
  * Batch nashr va to'lov so'rovi uchun server action'lar.
@@ -40,13 +41,19 @@ export interface BatchActionResult {
  */
 export async function startPublishBatchAction(
   intakeIds: string[] | null,
+  date?: string | null,
 ): Promise<BatchActionResult> {
   const ctx = await requirePermission("intakes.publish");
   if (intakeIds !== null && intakeIds.length === 0) {
     return { ok: false, error: "Hech kim tanlanmagan." };
   }
 
-  const result = await createPublishBatch(intakeIds, ctx.userId);
+  // The date is validated rather than trusted: it reaches the day-range helper,
+  // and a malformed value there would silently widen or empty the query.
+  const day = date ? parseCalendarDate(date) : null;
+  if (date && !day) return { ok: false, error: "Sana noto‘g‘ri." };
+
+  const result = await createPublishBatch(intakeIds, ctx.userId, day);
   if (!result.ok) return { ok: false, error: result.error };
 
   revalidatePath(QUEUE_PATH);

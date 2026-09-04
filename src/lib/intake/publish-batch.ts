@@ -1,7 +1,8 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
-import { tashkentDayRange } from "@/lib/tashkent-day";
+import { slugify } from "@/lib/utils";
+import { tashkentDayRange, tashkentDayRangeForDate } from "@/lib/tashkent-day";
 import {
   PIPELINE_STAGE_LABELS,
   runPipelineForIntake,
@@ -18,6 +19,7 @@ import {
   buildBatchStartedText,
   buildNothingToPublishText,
 } from "./batch-messages";
+import { findPublishedNamesake, NAMESAKE_SKIP_MESSAGE } from "./namesake";
 
 /**
  * Boshqariladigan batch chop etish.
@@ -70,6 +72,8 @@ export interface PublishQueueRow {
   /** Live batch state, when this candidate sits in an active batch. */
   batchItemStatus: string | null;
   batchStage: string | null;
+  /** Already on the site under this name — from this intake or an earlier one. */
+  alreadyPublished: { candidateId: string; slug: string } | null;
 }
 
 export interface PublishQueueSummary {
@@ -80,6 +84,8 @@ export interface PublishQueueSummary {
   unpaid: number;
   unknown: number;
   published: number;
+  /** Rows held back because that person is already on the site. */
+  duplicates: number;
 }
 
 export interface PublishQueue {
@@ -88,18 +94,22 @@ export interface PublishQueue {
 }
 
 /**
- * Today's board, Asia/Tashkent.
+ * One day's board, Asia/Tashkent.
  *
- * The day range is recomputed on every call rather than captured once, so a
- * panel left open past midnight starts showing the new day instead of freezing
- * on the old one.
+ * `date` is a YYYY-MM-DD calendar date so the panel can reach back through the
+ * archive, not only the day the server happens to be inside. Omitting it means
+ * today, recomputed on every call — a panel left open past midnight rolls over
+ * instead of freezing on the old day.
  *
  * Ordered by `submitted_at` ASC: whoever sent their form first is processed
  * first, and the batch inherits exactly this order.
  */
-export async function loadTodayPublishQueue(now: Date = new Date()): Promise<PublishQueue> {
+export async function loadPublishQueue(
+  date?: string | null,
+  now: Date = new Date(),
+): Promise<PublishQueue> {
   const db = createSupabaseAdminClient();
-  const day = tashkentDayRange(now);
+  const day = date ? tashkentDayRangeForDate(date) : tashkentDayRange(now);
 
   const { data, error } = await db
     .from("candidate_intakes")
@@ -121,23 +131,40 @@ export async function loadTodayPublishQueue(now: Date = new Date()): Promise<Pub
   const intakes = data ?? [];
   const candidateIds = intakes.map((r) => r.candidate_id as string | null).filter(Boolean) as string[];
   const intakeIds = intakes.map((r) => r.id as string);
+  // The site's own identity for a person: the publish flow derives every
+  // candidate slug from the same slugify(full_name), and the slug is unique
+  // among live candidates. Matching on it is therefore the same question the
+  // site would ask, not a fuzzy guess at name similarity.
+  const nameSlugs = [...new Set(intakes.map((r) => slugify(r.full_name as string)))].filter(Boolean);
 
-  const [{ data: candidates }, { data: posts }, { data: items }] = await Promise.all([
-    candidateIds.length
-      ? db.from("candidates").select("id, slug").in("id", candidateIds)
-      : Promise.resolve({ data: [] as { id: string; slug: string }[] }),
-    candidateIds.length
-      ? db.from("candidate_social_posts").select("id, candidate_id").in("candidate_id", candidateIds)
-      : Promise.resolve({ data: [] as { id: string; candidate_id: string }[] }),
-    intakeIds.length
-      ? db
-          .from("intake_publish_batch_items")
-          .select("intake_id, status, current_stage, updated_at")
-          .in("intake_id", intakeIds)
-          .order("updated_at", { ascending: false })
-      : Promise.resolve({ data: [] as Record<string, unknown>[] }),
-  ]);
+  const [{ data: candidates }, { data: posts }, { data: items }, { data: liveCandidates }] =
+    await Promise.all([
+      candidateIds.length
+        ? db.from("candidates").select("id, slug").in("id", candidateIds)
+        : Promise.resolve({ data: [] as { id: string; slug: string }[] }),
+      candidateIds.length
+        ? db.from("candidate_social_posts").select("id, candidate_id").in("candidate_id", candidateIds)
+        : Promise.resolve({ data: [] as { id: string; candidate_id: string }[] }),
+      intakeIds.length
+        ? db
+            .from("intake_publish_batch_items")
+            .select("intake_id, status, current_stage, updated_at")
+            .in("intake_id", intakeIds)
+            .order("updated_at", { ascending: false })
+        : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+      nameSlugs.length
+        ? db
+            .from("candidates")
+            .select("id, slug")
+            .eq("status", "published")
+            .is("deleted_at", null)
+            .in("slug", nameSlugs)
+        : Promise.resolve({ data: [] as { id: string; slug: string }[] }),
+    ]);
 
+  const publishedBySlug = new Map(
+    (liveCandidates ?? []).map((c) => [c.slug as string, c.id as string]),
+  );
   const slugById = new Map((candidates ?? []).map((c) => [c.id as string, c.slug as string]));
   const postByCandidate = new Map(
     (posts ?? []).map((p) => [p.candidate_id as string, p.id as string]),
@@ -161,6 +188,8 @@ export async function loadTodayPublishQueue(now: Date = new Date()): Promise<Pub
     intakes.map((r) => {
       const candidateId = (r.candidate_id as string | null) ?? null;
       const item = latestItem.get(r.id as string);
+      const nameSlug = slugify(r.full_name as string);
+      const liveId = publishedBySlug.get(nameSlug) ?? null;
       return {
         id: r.id as string,
         fullName: r.full_name as string,
@@ -177,6 +206,10 @@ export async function loadTodayPublishQueue(now: Date = new Date()): Promise<Pub
         postId: candidateId ? postByCandidate.get(candidateId) ?? null : null,
         batchItemStatus: item?.status ?? null,
         batchStage: item?.stage ? stageLabel(item.stage) : null,
+        // Only a candidate OTHER than this intake's own counts as a duplicate:
+        // an intake that has already been promoted naturally matches itself.
+        alreadyPublished:
+          liveId && liveId !== candidateId ? { candidateId: liveId, slug: nameSlug } : null,
       };
     }),
   );
@@ -186,16 +219,19 @@ export async function loadTodayPublishQueue(now: Date = new Date()): Promise<Pub
     summary: {
       date: day.date,
       total: rows.length,
-      ready: rows.filter((r) => r.paymentStatus === "paid" && r.status !== "published").length,
+      ready: rows.filter(
+        (r) => r.paymentStatus === "paid" && r.status !== "published" && !r.alreadyPublished,
+      ).length,
       unpaid: rows.filter((r) => r.paymentStatus === "unpaid").length,
       unknown: rows.filter((r) => r.paymentStatus === "unknown").length,
       published: rows.filter((r) => r.status === "published").length,
+      duplicates: rows.filter((r) => r.alreadyPublished).length,
     },
   };
 }
 
 function emptySummary(date: string): PublishQueueSummary {
-  return { date, total: 0, ready: 0, unpaid: 0, unknown: 0, published: 0 };
+  return { date, total: 0, ready: 0, unpaid: 0, unknown: 0, published: 0, duplicates: 0 };
 }
 
 function stageLabel(stage: string): string {
@@ -224,6 +260,7 @@ export interface CreateBatchResult {
 export async function createPublishBatch(
   selectedIntakeIds: string[] | null,
   actorId: string | null,
+  date?: string | null,
 ): Promise<CreateBatchResult> {
   const db = createSupabaseAdminClient();
 
@@ -236,7 +273,10 @@ export async function createPublishBatch(
     return { ok: false, error: "Faol batch allaqachon ishlayapti — avval uni kuting yoki bekor qiling." };
   }
 
-  const queue = await loadTodayPublishQueue();
+  // The batch is built from the same board the admin was looking at, including
+  // its date: pressing the button on an archive day must queue that day, not
+  // today's (empty) one.
+  const queue = await loadPublishQueue(date);
   const eligible = selectEligibleForBatch(queue.rows, selectedIntakeIds);
 
   if (eligible.length === 0) {
@@ -443,7 +483,7 @@ async function runItem(itemId: string, intakeId: string): Promise<ItemOutcome> {
 
   const { data: intake } = await db
     .from("candidate_intakes")
-    .select("id, status, candidate_id, payment_status, post_pipeline_attempts")
+    .select("id, full_name, status, candidate_id, payment_status, post_pipeline_attempts")
     .eq("id", intakeId)
     .maybeSingle();
 
@@ -457,6 +497,18 @@ async function runItem(itemId: string, intakeId: string): Promise<ItemOutcome> {
   }
   if (!(PROCESSABLE_STATUSES as readonly string[]).includes(intake.status as string)) {
     return outcome("skipped", "done", (intake.candidate_id as string) ?? null, null, null);
+  }
+
+  // Last line of defence against republishing someone already on the site. The
+  // board filters them out, but a batch queued minutes ago could have been
+  // overtaken — and rewriting a live article is not a mistake worth risking on
+  // a stale read.
+  const duplicate = await findPublishedNamesake(
+    intake.full_name as string,
+    (intake.candidate_id as string | null) ?? null,
+  );
+  if (duplicate) {
+    return outcome("skipped", "done", duplicate.candidateId, null, NAMESAKE_SKIP_MESSAGE);
   }
 
   try {

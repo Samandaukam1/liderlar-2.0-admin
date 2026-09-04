@@ -6,6 +6,7 @@ import {
   runIntakeAiImprovement,
 } from "@/lib/intake/improve-service";
 import { promoteIntakeToDraft, publishPromotedIntake } from "@/lib/intake/promotion-service";
+import { findPublishedNamesake, NAMESAKE_SKIP_MESSAGE } from "@/lib/intake/namesake";
 import { createPostDraft, getPost, updatePost } from "./repository.ts";
 import { preparePortrait, refreshPostCaption, renderAndStorePost } from "./service.ts";
 import { downloadPostAsset } from "./storage.ts";
@@ -230,9 +231,20 @@ export async function runPipelineForIntake(
   const db = createSupabaseAdminClient();
   let { data: current } = await db
     .from("candidate_intakes")
-    .select("status, candidate_id")
+    .select("status, candidate_id, full_name")
     .eq("id", intakeId)
     .maybeSingle();
+
+  // Nobody is published twice. A returning candidate — or a second form under
+  // the same name — would otherwise have their LIVE article rewritten and be
+  // posted again as if they were new. The run stops for a human instead.
+  const namesake = await findPublishedNamesake(
+    (current?.full_name as string) ?? "",
+    (current?.candidate_id as string | null) ?? intake.candidate_id,
+  );
+  if (namesake) {
+    return fail(intakeId, "promotion", NAMESAKE_SKIP_MESSAGE, true);
+  }
 
   if (current?.status === "approved") {
     await stage("promotion");
