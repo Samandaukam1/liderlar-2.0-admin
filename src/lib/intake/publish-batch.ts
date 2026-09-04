@@ -74,6 +74,8 @@ export interface PublishQueueRow {
   batchStage: string | null;
   /** Already on the site under this name — from this intake or an earlier one. */
   alreadyPublished: { candidateId: string; slug: string } | null;
+  /** Published, but their post never went out — a repair the batch runs first. */
+  postPending: boolean;
 }
 
 export interface PublishQueueSummary {
@@ -86,6 +88,8 @@ export interface PublishQueueSummary {
   published: number;
   /** Rows held back because that person is already on the site. */
   duplicates: number;
+  /** Published candidates still waiting for their post — the batch's repairs. */
+  postPending: number;
 }
 
 export interface PublishQueue {
@@ -143,8 +147,11 @@ export async function loadPublishQueue(
         ? db.from("candidates").select("id, slug").in("id", candidateIds)
         : Promise.resolve({ data: [] as { id: string; slug: string }[] }),
       candidateIds.length
-        ? db.from("candidate_social_posts").select("id, candidate_id").in("candidate_id", candidateIds)
-        : Promise.resolve({ data: [] as { id: string; candidate_id: string }[] }),
+        ? db
+            .from("candidate_social_posts")
+            .select("id, candidate_id, status")
+            .in("candidate_id", candidateIds)
+        : Promise.resolve({ data: [] as { id: string; candidate_id: string; status: string }[] }),
       intakeIds.length
         ? db
             .from("intake_publish_batch_items")
@@ -168,6 +175,9 @@ export async function loadPublishQueue(
   const slugById = new Map((candidates ?? []).map((c) => [c.id as string, c.slug as string]));
   const postByCandidate = new Map(
     (posts ?? []).map((p) => [p.candidate_id as string, p.id as string]),
+  );
+  const postStatusByCandidate = new Map(
+    (posts ?? []).map((p) => [p.candidate_id as string, p.status as string]),
   );
   // Rows arrive newest-first, so the first entry per intake is its latest state.
   const latestItem = new Map<string, { status: string; stage: string | null }>();
@@ -210,6 +220,12 @@ export async function loadPublishQueue(
         // an intake that has already been promoted naturally matches itself.
         alreadyPublished:
           liveId && liveId !== candidateId ? { candidateId: liveId, slug: nameSlug } : null,
+        // On the site, but nothing announcing them: either no post exists or
+        // the one that does never reached Telegram.
+        postPending:
+          (r.status as string) === "published" &&
+          Boolean(candidateId) &&
+          postStatusByCandidate.get(candidateId as string) !== "published",
       };
     }),
   );
@@ -219,19 +235,34 @@ export async function loadPublishQueue(
     summary: {
       date: day.date,
       total: rows.length,
+      // "Ready" is everything the batch would actually pick up: new work plus
+      // the published candidates still owed a post.
       ready: rows.filter(
-        (r) => r.paymentStatus === "paid" && r.status !== "published" && !r.alreadyPublished,
+        (r) =>
+          r.paymentStatus === "paid" &&
+          !r.alreadyPublished &&
+          (r.status !== "published" || r.postPending),
       ).length,
       unpaid: rows.filter((r) => r.paymentStatus === "unpaid").length,
       unknown: rows.filter((r) => r.paymentStatus === "unknown").length,
       published: rows.filter((r) => r.status === "published").length,
       duplicates: rows.filter((r) => r.alreadyPublished).length,
+      postPending: rows.filter((r) => r.postPending && !r.alreadyPublished).length,
     },
   };
 }
 
 function emptySummary(date: string): PublishQueueSummary {
-  return { date, total: 0, ready: 0, unpaid: 0, unknown: 0, published: 0, duplicates: 0 };
+  return {
+    date,
+    total: 0,
+    ready: 0,
+    unpaid: 0,
+    unknown: 0,
+    published: 0,
+    duplicates: 0,
+    postPending: 0,
+  };
 }
 
 function stageLabel(stage: string): string {
@@ -495,18 +526,25 @@ async function runItem(itemId: string, intakeId: string): Promise<ItemOutcome> {
   if ((intake.payment_status as string) !== "paid") {
     return outcome("skipped", "queued", null, null, "To‘lov tasdiqlanmagan");
   }
+  // A published candidate is normally done — unless their post never went out,
+  // in which case this run is the repair: the pipeline skips straight past the
+  // article stages and redoes only the post half.
+  const candidateId = (intake.candidate_id as string | null) ?? null;
   if (!(PROCESSABLE_STATUSES as readonly string[]).includes(intake.status as string)) {
-    return outcome("skipped", "done", (intake.candidate_id as string) ?? null, null, null);
+    const repairable =
+      (intake.status as string) === "published" &&
+      candidateId !== null &&
+      (await postAwaitingDelivery(candidateId));
+    if (!repairable) {
+      return outcome("skipped", "done", candidateId, null, null);
+    }
   }
 
   // Last line of defence against republishing someone already on the site. The
   // board filters them out, but a batch queued minutes ago could have been
   // overtaken — and rewriting a live article is not a mistake worth risking on
   // a stale read.
-  const duplicate = await findPublishedNamesake(
-    intake.full_name as string,
-    (intake.candidate_id as string | null) ?? null,
-  );
+  const duplicate = await findPublishedNamesake(intake.full_name as string, candidateId);
   if (duplicate) {
     return outcome("skipped", "done", duplicate.candidateId, null, NAMESAKE_SKIP_MESSAGE);
   }
@@ -516,7 +554,7 @@ async function runItem(itemId: string, intakeId: string): Promise<ItemOutcome> {
       {
         id: intakeId,
         status: intake.status as string,
-        candidate_id: (intake.candidate_id as string | null) ?? null,
+        candidate_id: candidateId,
         post_pipeline_attempts: (intake.post_pipeline_attempts as number) ?? 0,
       },
       {
@@ -557,6 +595,17 @@ async function runItem(itemId: string, intakeId: string): Promise<ItemOutcome> {
       err instanceof Error ? err.message : String(err),
     );
   }
+}
+
+/** True when this candidate has no post, or one that never reached Telegram. */
+async function postAwaitingDelivery(candidateId: string): Promise<boolean> {
+  const db = createSupabaseAdminClient();
+  const { data } = await db
+    .from("candidate_social_posts")
+    .select("status")
+    .eq("candidate_id", candidateId)
+    .maybeSingle();
+  return (data?.status as string | undefined) !== "published";
 }
 
 function outcome(
@@ -790,10 +839,17 @@ export async function getLatestBatchId(): Promise<string | null> {
  * ever reach this.
  */
 export async function runBotBatchButton(): Promise<string> {
+  // A run started anywhere — this button or the admin panel — is reported here.
+  // The panel and the bot drive one queue, so pressing this while the panel's
+  // 38 candidates are working shows those 38, and never starts a second run.
   const activeId = await getActiveBatchId();
   if (activeId) {
     const progress = await getBatchProgress(activeId);
-    if (progress) return renderProgress(progress);
+    // A batch row with no readable progress must not fall through to "start a
+    // new one" — that is how one press becomes two concurrent runs.
+    return progress
+      ? renderProgress(progress)
+      : "⏳ Jamoviy chop etish ishlamoqda, holatni hozircha o‘qib bo‘lmadi.";
   }
 
   const created = await createPublishBatch(null, null);

@@ -232,6 +232,34 @@ test("selecting an unpaid candidate does not force them through", () => {
   assert.equal(selectEligibleForBatch(rows, ["a"]).length, 0);
 });
 
+test("candidates whose post never went out are finished first", () => {
+  // They are already on the site with nothing announcing them, and finishing
+  // one costs a single post while a fresh candidate costs the whole chain.
+  const rows = [
+    { ...row("fresh-early", "2026-09-04T07:00:00Z"), postPending: false },
+    { ...row("repair-late", "2026-09-04T11:00:00Z", "paid", "published"), postPending: true },
+    { ...row("fresh-late", "2026-09-04T09:00:00Z"), postPending: false },
+    { ...row("repair-early", "2026-09-04T08:00:00Z", "paid", "published"), postPending: true },
+  ];
+  assert.deepEqual(
+    selectEligibleForBatch(rows, null).map((r) => r.id),
+    // Repairs first, each group still in submission order.
+    ["repair-early", "repair-late", "fresh-early", "fresh-late"],
+  );
+});
+
+test("a published candidate whose post already went out is left alone", () => {
+  const rows = [{ ...row("done", "2026-09-04T08:00:00Z", "paid", "published"), postPending: false }];
+  assert.equal(selectEligibleForBatch(rows, null).length, 0);
+});
+
+test("a repair is still refused when the payment is not confirmed", () => {
+  const rows = [
+    { ...row("x", "2026-09-04T08:00:00Z", "unknown", "published"), postPending: true },
+  ];
+  assert.equal(selectEligibleForBatch(rows, null).length, 0);
+});
+
 test("someone already on the site is never queued again", () => {
   // A returning candidate, or a second form under the same name: re-running
   // them would rewrite their live article and post them as if they were new.
@@ -651,11 +679,28 @@ test("editorial actions are refused outside the configured chats", () => {
 });
 
 test("the bot's batch button drives the same queue as the panel", () => {
-  // Not a parallel implementation: one table, one worker, one ordering.
+  // Not a parallel implementation: one table, one worker, one ordering. A run
+  // started from the panel is therefore what the bot button reports on.
   assert.match(BATCH, /export async function runBotBatchButton/);
   assert.match(BATCH, /const activeId = await getActiveBatchId\(\)/);
   assert.match(BATCH, /await createPublishBatch\(null, null\)/);
   assert.match(ROUTER, /runBotBatchButton\(\)/);
+
+  // With a run in flight the button NEVER reaches createPublishBatch — an
+  // unreadable progress row must not fall through to starting a second one.
+  const fn = BATCH.match(/export async function runBotBatchButton[\s\S]*?\n}/)?.[0] ?? "";
+  const activeBranch = fn.slice(fn.indexOf("if (activeId)"), fn.indexOf("const created"));
+  assert.match(activeBranch, /return progress\s*\?/);
+  assert.ok(!activeBranch.includes("createPublishBatch"), "no second run while one is active");
+});
+
+test("the batch repair path reaches the pipeline for a published candidate", () => {
+  // runItem normally skips anything already published; the exception is a
+  // candidate still owed a post, and the pipeline then skips straight past the
+  // article stages to the post half.
+  assert.match(BATCH, /const repairable =/);
+  assert.match(BATCH, /await postAwaitingDelivery\(candidateId\)/);
+  assert.match(BATCH, /\.eq\("candidate_id", candidateId\)/);
 });
 
 test("the batch progress message reports done, in-flight and remaining", () => {

@@ -99,7 +99,11 @@ export function PublishQueueClient({
   const eligible = useMemo(
     () =>
       rows.filter(
-        (r) => r.paymentStatus === "paid" && r.status !== "published" && !r.alreadyPublished,
+        (r) =>
+          r.paymentStatus === "paid" &&
+          !r.alreadyPublished &&
+          // Either still to publish, or published and still owed a post.
+          (r.status !== "published" || r.postPending),
       ),
     [rows],
   );
@@ -386,6 +390,12 @@ export function PublishQueueClient({
           </b>{" "}
           ta nomzod ketma-ket qayta ishlanadi.
         </p>
+        {summary.postPending > 0 && (
+          <p className="mt-2 rounded-[12px] border border-peach/60 bg-amber/10 px-3 py-2 text-xs text-ink">
+            Avval <b>{summary.postPending} ta</b> posti chiqmay qolgan nomzod navbatma-navbat
+            tugatiladi, keyin qolganlari davom etadi.
+          </p>
+        )}
         <ol className="mt-3 space-y-1 text-sm text-ink-soft">
           <li>1. Jaxongir AI — javoblarni yaxshilash</li>
           <li>2. Tasdiqlash</li>
@@ -506,10 +516,11 @@ function SummaryCards({ summary }: { summary: PublishQueueSummary }) {
     { label: "To‘lov qilmagan", value: summary.unpaid, accent: "text-coral" },
     { label: "Javob kutilmoqda", value: summary.unknown, accent: "text-amber" },
     { label: "Chop etilgan", value: summary.published, accent: "text-electric" },
+    { label: "Posti kutilmoqda", value: summary.postPending, accent: "text-amber" },
     { label: "Avval chiqqan", value: summary.duplicates, accent: "text-[#6a52c7]" },
   ];
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
       {cards.map((c) => (
         <div key={c.label} className="rounded-panel border border-line bg-card px-4 py-3">
           <p className={cn("font-display text-2xl font-semibold", c.accent)}>{c.value}</p>
@@ -740,6 +751,8 @@ function QueueRow({
       <td className="px-3 py-2.5 text-xs text-ink-soft">
         {row.alreadyPublished ? (
           <span className="font-semibold text-[#6a52c7]">Avval chiqqan</span>
+        ) : row.postPending && !row.batchItemStatus ? (
+          <span className="font-semibold text-amber">Posti kutilmoqda</span>
         ) : row.batchItemStatus === "running" ? (
           row.batchStage ?? "Ishlanmoqda"
         ) : row.batchItemStatus ? (

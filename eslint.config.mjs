@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // `vercel build` writes the assembled lambda output here. It is generated,
+    // minified and gitignored; linting it drowns real findings in thousands of
+    // warnings from third-party bundles.
+    ".vercel/**",
   ]),
 ]);
 

@@ -54,6 +54,46 @@ let sessionPromise: Promise<OrtSession> | null = null;
  * The session is created once per warm lambda and reused. Building it parses
  * 44 MB of weights, so doing it per request would dominate the request time.
  */
+/**
+ * What the deployment actually contains, next to what it needs.
+ *
+ * The native runtime fails with a bare `libonnxruntime.so.1: cannot open
+ * shared object file`, which says nothing about WHERE it looked. Reporting the
+ * three facts that decide the outcome — is the model there, is the shared
+ * library there, is it beside its binding — turns the next failure into a
+ * finding instead of another round of guessing.
+ */
+function nativeRuntimeReport(): Record<string, unknown> {
+  const binDir = path.join(
+    process.cwd(),
+    "node_modules",
+    "onnxruntime-node",
+    "bin",
+    "napi-v6",
+    process.platform,
+    process.arch,
+  );
+  const exists = (file: string) => {
+    try {
+      return fs.existsSync(file);
+    } catch {
+      return false;
+    }
+  };
+  return {
+    cwd: process.cwd(),
+    platform: `${process.platform}/${process.arch}`,
+    model: modelPath(),
+    modelExists: exists(modelPath()),
+    binDir,
+    binDirExists: exists(binDir),
+    // The binding's RPATH is $ORIGIN, so the library must sit beside it.
+    bindingExists: exists(path.join(binDir, "onnxruntime_binding.node")),
+    sharedLibExists: exists(path.join(binDir, "libonnxruntime.so.1")),
+    ldLibraryPath: process.env.LD_LIBRARY_PATH ?? null,
+  };
+}
+
 export function loadSegmentationSession(): Promise<OrtSession> {
   if (!sessionPromise) {
     sessionPromise = (async () => {
@@ -68,6 +108,13 @@ export function loadSegmentationSession(): Promise<OrtSession> {
         intraOpNumThreads: 0,
       });
     })().catch((err) => {
+      console.error(
+        "[segmentation] session load failed",
+        JSON.stringify({
+          error: err instanceof Error ? err.message : String(err),
+          ...nativeRuntimeReport(),
+        }),
+      );
       // A failed load must not poison every later request with the same
       // rejected promise — the next call gets a fresh attempt.
       sessionPromise = null;

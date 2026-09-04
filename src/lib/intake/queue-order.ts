@@ -18,6 +18,11 @@ export interface OrderableIntake {
    * and post them again as if they were new.
    */
   alreadyPublished?: { candidateId: string; slug: string } | null;
+  /**
+   * Published on the site, but their post never made it out. These are repairs:
+   * the article stands, only the post half of the run has to be redone.
+   */
+  postPending?: boolean;
 }
 
 /**
@@ -68,15 +73,25 @@ export function selectEligibleForBatch<T extends OrderableIntake>(
 ): T[] {
   const selected = selectedIds ? new Set(selectedIds) : null;
   const processable = new Set<string>(PROCESSABLE_STATUSES);
-  return sortBySubmittedAt(
-    rows.filter(
-      (row) =>
-        (!selected || selected.has(row.id)) &&
-        row.paymentStatus === "paid" &&
-        processable.has(row.status) &&
-        !row.alreadyPublished,
-    ),
+  const eligible = rows.filter(
+    (row) =>
+      (!selected || selected.has(row.id)) &&
+      row.paymentStatus === "paid" &&
+      !row.alreadyPublished &&
+      // Either there is still a publication to do, or the publication is done
+      // and only the post is outstanding.
+      (processable.has(row.status) || row.postPending === true),
   );
+
+  // Repairs run first, and only then the new work.
+  //
+  // Someone published this morning whose post never went out is already
+  // half-delivered: they are on the site with nothing announcing them. Finishing
+  // them costs one post each, while a fresh candidate costs the whole chain — so
+  // putting repairs behind the queue would leave the visible gap open longest.
+  const repairs = eligible.filter((row) => row.postPending === true);
+  const fresh = eligible.filter((row) => row.postPending !== true);
+  return [...sortBySubmittedAt(repairs), ...sortBySubmittedAt(fresh)];
 }
 
 export type PaymentClassification = "paid" | "unpaid" | "unknown";
