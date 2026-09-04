@@ -46,6 +46,16 @@ export default async function AdminLayout({
         <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-6 md:px-8">
           {children}
         </main>
+        <footer className="mx-auto w-full max-w-[1600px] px-4 pb-4 text-center md:px-8">
+          <a
+            href="https://t.me/jaxongirman"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[11px] text-[#7f95ad] transition hover:text-cyan-light"
+          >
+            Jaxongirmans IT TEAMS tomonidan ishlab chiqilgan
+          </a>
+        </footer>
       </div>
     </div>
   );
