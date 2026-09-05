@@ -1254,3 +1254,27 @@ test("the hint warns that an empty answer will be written for them", () => {
   assert.equal(rebuilt, CANONICAL_POST_QUOTE_HELP_TEXT);
   assert.doesNotMatch(migration, /drop table|delete from|truncate/i);
 });
+
+test("the photo step states the rule and its consequence", () => {
+  // The instruction used to read as a suggestion, and candidates uploaded
+  // ordinary photos. What makes it a rule is naming the tools, saying only
+  // this prompt's output is accepted, and stating what happens otherwise.
+  const form = fs.readFileSync("src/components/intake/intake-form.tsx", "utf8");
+  for (const phrase of [
+    "ChatGPT yoki Gemini",
+    "aynan shu promt bilan yaratilgan bo\u2018lishi shart",
+    "Boshqa rasmlar qabul qilinmaydi",
+    "maqola chiqmaydi",
+  ]) {
+    assert.ok(form.includes(phrase), `the photo step says: ${phrase}`);
+  }
+
+  // Carried by the warning styling too — a rule in the same soft blue as a
+  // hint reads as a hint.
+  assert.match(form, /border-coral\/50[\s\S]{0,200}<AlertTriangle/);
+
+  // And the copy-paste card repeats the consequence, since that is the part
+  // people reach for without reading the banner above it.
+  assert.match(form, /Rasm AYNAN shu promt bilan yaratilishi shart/);
+  assert.match(form, /oddiy rasm qabul qilinmaydi/);
+});

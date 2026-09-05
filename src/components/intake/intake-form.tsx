@@ -986,14 +986,20 @@ function PhotoStage({
   return (
     <div className="text-center">
       {showPromptGuide && (
-        <div className="mb-6 flex items-start gap-3 rounded-[22px] border border-cyan/35 bg-gradient-to-br from-brand/[0.07] to-cyan/[0.09] p-4 text-left">
-          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-brand/10 text-brand">
-            <Info className="h-4 w-4" />
+        <div className="mb-6 flex items-start gap-3 rounded-[22px] border border-coral/50 bg-coral/[0.07] p-4 text-left">
+          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-coral/15 text-coral">
+            <AlertTriangle className="h-4 w-4" />
           </span>
-          <p className="text-sm leading-relaxed text-ink">
-            Avval quyidagi matnni nusxalab oling, rasmingiz bilan birga sun’iy intellektga bering va
-            tayyor bo‘lgan natijani shu yerga yuklang.
-          </p>
+          <div className="text-sm leading-relaxed text-ink">
+            <p className="font-bold">
+              Pastdagi promtni nusxalab, ChatGPT yoki Gemini’ga rasmingiz bilan birga bering va
+              natijani shu yerga yuklang.
+            </p>
+            <p className="mt-1.5 font-semibold text-coral">
+              Rasm aynan shu promt bilan yaratilgan bo‘lishi shart. Boshqa rasmlar qabul qilinmaydi
+              va maqola chiqmaydi.
+            </p>
+          </div>
         </div>
       )}
       <span className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan/20 to-lavender/20 text-brand">
@@ -1071,11 +1077,15 @@ function PhotoPromptCard({
   return (
     <div className="mt-6 rounded-field border border-line bg-surface/40 p-4 text-left">
       <p className="flex items-center gap-1.5 text-sm font-bold text-ink">
-        <Sparkles className="h-4 w-4 text-brand" /> Rasmingizni sun’iy intellektga bering va natijani yuboring
+        <Sparkles className="h-4 w-4 text-brand" /> Rasm AYNAN shu promt bilan yaratilishi shart
       </p>
       <p className="mt-1.5 text-xs leading-relaxed text-ink-soft">
-        Quyidagi matnni nusxalang va rasmingiz bilan birga o‘zingiz foydalanadigan sun’iy intellekt
-        xizmatiga yuboring. Tayyor rasmni yuqoridagi «Rasm yuklash» tugmasi orqali joylang.
+        Quyidagi matnni nusxalang va rasmingiz bilan birga ChatGPT yoki Gemini’ga bering. Tayyor
+        natijani yuqoridagi «Rasm yuklash» tugmasi orqali joylang.
+      </p>
+      <p className="mt-1.5 text-xs font-semibold leading-relaxed text-coral">
+        Boshqa usulda tayyorlangan yoki oddiy rasm qabul qilinmaydi — bunday holatda maqola
+        chiqarilmaydi.
       </p>
 
       {!gender && (
