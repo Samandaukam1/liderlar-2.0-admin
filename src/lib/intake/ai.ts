@@ -440,3 +440,77 @@ export async function editIntakePhoto(params: {
     }),
   };
 }
+
+/* ============================================================
+ * Post iqtibosi
+ * ============================================================ */
+
+const QUOTE_SYSTEM_PROMPT = `Sen O'zbekistonlik yosh liderlar uchun post iqtiboslarini tayyorlaydigan muharrirsan.
+
+QAT'IY QOIDALAR:
+- Javob FAQAT iqtibos matni bo'lsin. Izoh, sarlavha, qo'shtirnoq yoki emoji QO'SHMA.
+- Iqtibos BIRINCHI SHAXSDA, nomzodning o'z og'zidan yozilgan bo'lsin.
+- Til: o'zbek tili, lotin alifbosi. Imlo xatosiz.
+- Mavzu: mehnat, bilim, mas'uliyat, orzu sari intilish kabi umuminsoniy qadriyatlar.
+- Aniq shaxs, tashkilot, sana, raqam yoki geografik nom ISHLATMA.
+- Siyosat, din va bahsli mavzularga umuman tegma.`;
+
+export interface QuotePolishRequest {
+  /** The candidate's raw answer, or null when there is nothing to adapt. */
+  original: string | null;
+  fullName: string;
+  /** Rule violations from the previous attempt, named so this one corrects them. */
+  problems: readonly string[];
+  rules: { sentences: number; minWords: number; maxWords: number };
+}
+
+/**
+ * Adapts a candidate's quote to the stated shape, or writes one for them.
+ *
+ * Two distinct jobs behind one call because they share every constraint and
+ * differ only in whether there is source material. Adapting is explicitly NOT
+ * free composition: the candidate's own idea has to survive, or the poster
+ * would be attributing someone else's thought to them.
+ */
+export async function polishQuoteWithAi(request: QuotePolishRequest): Promise<string> {
+  const shape = [
+    `- Aynan ${request.rules.sentences} ta gap.`,
+    `- Har bir gapda kamida ${request.rules.minWords}, ko'pi bilan ${request.rules.maxWords} ta so'z.`,
+    "- Har bir gap nuqta, undov yoki so'roq belgisi bilan tugasin.",
+  ].join("\n");
+
+  const task = request.original
+    ? [
+        "VAZIFA: quyidagi iqtibosni talab qilingan shaklga keltir.",
+        "Nomzodning FIKRI va MA'NOSI saqlanishi SHART — yangi g'oya o'ylab topma.",
+        "Imlo va uslub xatolarini tuzat, kerak bo'lsa gaplarni qayta taqsimla.",
+        "",
+        "NOMZODNING ASL IQTIBOSI:",
+        request.original,
+      ].join("\n")
+    : [
+        "VAZIFA: nomzod iqtibos yozmadi — uning nomidan yangi iqtibos yoz.",
+        "18-24 yoshli yosh lider tengdoshlariga aytadigan, ilhomlantiruvchi fikr bo'lsin.",
+        "Umumiy va samimiy bo'lsin; nomzodning shaxsiy tafsilotlarini O'YLAB TOPMA.",
+      ].join("\n");
+
+  const retry =
+    request.problems.length > 0
+      ? ["", "OLDINGI URINISHDAGI XATOLAR — ularni tuzat:", ...request.problems.map((p) => `- ${p}`)].join("\n")
+      : "";
+
+  const completion = await openai().chat.completions.create({
+    model: textModel(),
+    // Enough variety that a repeat can be escaped on retry, not so much that
+    // the candidate's own meaning drifts on the first pass.
+    temperature: request.problems.length > 0 ? 0.9 : 0.6,
+    messages: [
+      { role: "system", content: QUOTE_SYSTEM_PROMPT },
+      { role: "user", content: [task, "", "SHAKL TALABLARI:", shape, retry].join("\n") },
+    ],
+  });
+
+  return (completion.choices[0]?.message?.content ?? "")
+    .replace(/^["'«»“”\s]+|["'«»“”\s]+$/g, "")
+    .trim();
+}

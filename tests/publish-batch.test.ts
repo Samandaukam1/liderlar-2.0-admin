@@ -40,6 +40,15 @@ import {
 import { CANONICAL_POST_QUOTE_HELP_TEXT } from "../src/lib/intake/canonical-quote.ts";
 import { blacklistKey } from "../src/lib/intake/name-key.ts";
 import {
+  checkQuote,
+  countWords,
+  isBlankQuote,
+  quoteFingerprint,
+  splitSentences,
+  QUOTE_MIN_WORDS_PER_SENTENCE,
+  QUOTE_SENTENCE_COUNT,
+} from "../src/lib/intake/quote-rules.ts";
+import {
   buildBatchProgressText,
   buildBatchStartedText,
   buildNothingToPublishText,
@@ -1124,4 +1133,124 @@ test("extending a link actually hands the form back to the candidate", () => {
   // And the panel says which of the two things happened.
   const panel = fs.readFileSync("src/components/intake/link-panel.tsx", "utf8");
   assert.match(panel, /r\.reopened \? "Havola ochildi" : "Muddat uzaytirildi"/);
+});
+
+/* ------------------------------------------------------------------ *
+ * Post iqtibosi qoidalari
+ * ------------------------------------------------------------------ */
+
+test("a quote is judged by the rule the candidate was shown", () => {
+  const good = checkQuote(
+    "Har kuni kichik qadam tashlagan inson albatta manzilga yetadi. " +
+      "Bilim olishdan hech qachon qo\u2018rqmang va to\u2018xtamang.",
+  );
+  assert.equal(good.ok, true, good.problems.join(" | "));
+  assert.equal(good.sentences.length, QUOTE_SENTENCE_COUNT);
+  assert.ok(good.wordCounts.every((n) => n >= QUOTE_MIN_WORDS_PER_SENTENCE));
+});
+
+test("each way of breaking the rule is named, so a retry can correct it", () => {
+  // One sentence instead of two.
+  const one = checkQuote("Har kuni kichik qadam tashlagan inson albatta manzilga yetadi.");
+  assert.equal(one.ok, false);
+  assert.match(one.problems.join(" "), /aynan 2 ta bo\u2018lishi kerak/);
+
+  // Second sentence too short.
+  const short = checkQuote(
+    "Har kuni kichik qadam tashlagan inson manzilga yetadi. Harakat qiling.",
+  );
+  assert.equal(short.ok, false);
+  assert.match(short.problems.join(" "), /2-gapda 2 ta so\u2018z/);
+
+  // No terminator on the last sentence.
+  const open = checkQuote(
+    "Har kuni kichik qadam tashlagan inson manzilga yetadi. Bilim olishdan hech qachon qo\u2018rqmang",
+  );
+  assert.equal(open.ok, false);
+  assert.match(open.problems.join(" "), /nuqta, undov yoki so\u2018roq/);
+});
+
+test("sentence splitting survives real punctuation", () => {
+  assert.equal(splitSentences("Birinchi gap! Ikkinchi gap?").length, 2);
+  assert.equal(splitSentences("Bitta gap.").length, 1);
+  assert.equal(splitSentences("   ").length, 0);
+  // A run of terminators is still one sentence, and no empty trailing entry.
+  assert.equal(splitSentences("Harakat qiling!!! Yana urinib ko\u2018ring.").length, 2);
+  // Apostrophes belong to the word, not between words.
+  assert.equal(countWords("o\u2018qish va o\u2018rganish"), 3);
+});
+
+test("two quotes differing only by punctuation count as the same quote", () => {
+  // Shipping both would be exactly the repetition this prevents.
+  assert.equal(
+    quoteFingerprint("Bilim — kuch, harakat esa natija!"),
+    quoteFingerprint("bilim kuch harakat esa natija"),
+  );
+  assert.equal(quoteFingerprint("O\u2018qish"), quoteFingerprint("o'qish"));
+  assert.notEqual(quoteFingerprint("Bilim kuch"), quoteFingerprint("Mehnat kuch"));
+
+  assert.equal(isBlankQuote(""), true);
+  assert.equal(isBlankQuote("   \n  "), true);
+  assert.equal(isBlankQuote("—"), true, "punctuation alone is not an answer");
+  assert.equal(isBlankQuote("Bilim"), false);
+});
+
+test("the quote is polished or written, and never over the raw answer", () => {
+  const polish = fs.readFileSync("src/lib/intake/quote-polish.ts", "utf8");
+  // Written to the intake, so the candidate's own wording stays recoverable.
+  assert.match(polish, /post_quote: result\.text/);
+  assert.match(polish, /post_quote_generated: result\.generated/);
+  assert.ok(
+    !polish.includes("candidate_intake_answers"),
+    "the raw answer row is never written to",
+  );
+
+  // Empty answer means write one for them; anything else is adapted.
+  assert.match(polish, /const generated = isBlankQuote\(raw\)/);
+
+  // A repeat is retried with the failure named, not silently accepted.
+  assert.match(polish, /seen\.has\(quoteFingerprint\(text\)\)/);
+  assert.match(polish, /allaqachon ishlatilgan/);
+
+  // Uniqueness spans both what future posters will carry and what past ones did.
+  assert.match(polish, /\.from\("candidate_intakes"\)/);
+  assert.match(polish, /\.from\("candidate_social_posts"\)/);
+
+  // Failing every attempt still yields something rather than stopping the run.
+  assert.match(polish, /return \{ text: best \|\| raw/);
+});
+
+test("the polished quote is what reaches the poster", () => {
+  const repository = fs.readFileSync("src/lib/post-studio/repository.ts", "utf8");
+  assert.match(repository, /const polished = preserveCanonicalPostQuote\(intake\.postQuote\)/);
+  // An editor's manual edit still outranks it; the raw answer is the fallback.
+  assert.match(repository, /manuallyEdited \|\|\s*polished \|\|/);
+
+  // And it runs as part of the automatic editorial pass.
+  const improve = fs.readFileSync("src/lib/intake/improve-service.ts", "utf8");
+  assert.match(improve, /await applyPostQuote\(/);
+  // A failure there must not lose the whole pass.
+  assert.match(improve, /catch \(quoteError\)/);
+});
+
+test("the hint warns that an empty answer will be written for them", () => {
+  for (const phrase of ["Ikkita gap", "kamida 6 ta so\u2018z", "ChatGPT", "Jaxongir AI", "1 oy"]) {
+    assert.ok(
+      CANONICAL_POST_QUOTE_HELP_TEXT.includes(phrase),
+      `the hint states: ${phrase}`,
+    );
+  }
+  const migration = fs.readFileSync(
+    "supabase/migrations/20260905060000_post_quote_polish.sql",
+    "utf8",
+  );
+  const setBlock = migration.slice(
+    migration.indexOf("set help_text ="),
+    migration.indexOf("where canonical_key = 'post_quote'"),
+  );
+  const rebuilt = (setBlock.match(/'([^']*)'/g) ?? [])
+    .map((literal) => literal.slice(1, -1))
+    .join("");
+  assert.equal(rebuilt, CANONICAL_POST_QUOTE_HELP_TEXT);
+  assert.doesNotMatch(migration, /drop table|delete from|truncate/i);
 });

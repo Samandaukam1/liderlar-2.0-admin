@@ -156,13 +156,15 @@ test("canonical quote identity survives question reordering and preserves the ra
   );
   assert.match(migration, /canonical_key = 'post_quote'/);
 
-  // The instruction itself was rewritten later, so the live wording lives in
-  // the migration that last set it — checking the original would pin the text
-  // to whatever it happened to say first.
-  const hintMigration = fs.readFileSync(
-    "supabase/migrations/20260905030000_quote_hint_and_blacklist.sql",
-    "utf8",
-  );
+  // The instruction has been rewritten more than once, and whichever migration
+  // set it LAST is the wording the candidate actually reads — pinning the first
+  // would freeze the check to text nobody sees any more.
+  const hintFile = fs
+    .readdirSync("supabase/migrations")
+    .filter((f) => fs.readFileSync(`supabase/migrations/${f}`, "utf8").includes("set help_text ="))
+    .sort()
+    .pop()!;
+  const hintMigration = fs.readFileSync(`supabase/migrations/${hintFile}`, "utf8");
   assert.match(hintMigration, /canonical_key = 'post_quote'/);
 
   // The migration builds the text with SQL `||`, so the file never contains it

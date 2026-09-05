@@ -9,6 +9,7 @@ import {
   isCanonicalPostQuoteQuestion,
   preserveCanonicalPostQuote,
 } from "@/lib/intake/canonical-quote";
+import { applyPostQuote } from "@/lib/intake/quote-polish";
 
 /**
  * The Jaxongir AI editorial pass over an intake's answers, extracted from the
@@ -254,6 +255,27 @@ export async function runIntakeAiImprovement(
       }
     } catch {
       /* moderation failure is non-fatal */
+    }
+
+    // The poster quote is brought up to the stated rules — two sentences, six
+    // words each, spelling corrected — or written from scratch when the
+    // candidate left it empty. It is stored on the intake, never over their raw
+    // answer, so both versions remain visible side by side.
+    const rawQuote = reviewInput.find((a) => canonicalQuestionNos.has(a.question_no))?.plain_text;
+    try {
+      await applyPostQuote({
+        intakeId,
+        fullName: intake.full_name as string,
+        raw: rawQuote,
+        actorId: params.actorId,
+      });
+    } catch (quoteError) {
+      // A quote that could not be polished must not lose the whole editorial
+      // pass; the post stage reports a missing quote on its own.
+      console.error(
+        "[quote] polish failed",
+        quoteError instanceof Error ? quoteError.message : quoteError,
+      );
     }
 
     // The short bio is a badge row, never a paragraph: the limits are enforced

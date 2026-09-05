@@ -82,6 +82,8 @@ interface CandidateIntakeRef {
   selectedPhotoSource: string | null;
   selectedOriginalAttachmentId: string | null;
   selectedPhotoEditId: string | null;
+  /** The polished/generated poster quote, when one has been produced. */
+  postQuote: string | null;
 }
 
 async function resolveCandidateIntake(
@@ -92,7 +94,7 @@ async function resolveCandidateIntake(
   let query = db
     .from("candidate_intakes")
     .select(
-      "id, template_id, selected_photo_source, selected_original_attachment_id, selected_photo_edit_id",
+      "id, template_id, selected_photo_source, selected_original_attachment_id, selected_photo_edit_id, post_quote",
     );
 
   query = sourceIntakeId
@@ -108,6 +110,7 @@ async function resolveCandidateIntake(
     selectedOriginalAttachmentId:
       (data.selected_original_attachment_id as string | null) ?? null,
     selectedPhotoEditId: (data.selected_photo_edit_id as string | null) ?? null,
+    postQuote: (data.post_quote as string | null) ?? null,
   };
 }
 
@@ -160,7 +163,20 @@ export async function loadCanonicalIntakeQuote(
     answer?.editor_state === "manual"
       ? preserveCanonicalPostQuote(answer.final_text as string | null)
       : "";
-  const text = answer?.answer_state === "answered" ? manuallyEdited || originalText : "";
+
+  /**
+   * The stored poster quote outranks the raw answer.
+   *
+   * It is the candidate's own words brought to the stated shape — or, when they
+   * left the question empty, a quote written for them. Falling back to the raw
+   * answer would put a one-word reply, or nothing at all, on the poster. An
+   * editor's manual edit still wins over both.
+   */
+  const polished = preserveCanonicalPostQuote(intake.postQuote);
+  const text =
+    manuallyEdited ||
+    polished ||
+    (answer?.answer_state === "answered" ? originalText : "");
 
   return {
     intakeId: intake.id,

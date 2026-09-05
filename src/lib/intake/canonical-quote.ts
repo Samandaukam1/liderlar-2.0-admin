@@ -22,7 +22,10 @@ export const CANONICAL_POST_QUOTE_HELP_TEXT =
   "Ikkita gap yozing. Har bir gap kamida 6 ta so‘zdan iborat bo‘lsin va imloviy " +
   "xatolarsiz bo‘lsin. Iltimos, avval matnni ChatGPT orqali tekshirib, " +
   "moslashtirilgan variantini shu yerga joylashtiring — iqtibosingiz qanday " +
-  "yozilgan bo‘lsa, postga shundayligicha olinadi va o‘zgartirilmaydi.";
+  "yozilgan bo‘lsa, postga shundayligicha olinadi va o‘zgartirilmaydi. " +
+  "Agar iqtibos yozmasangiz, biz uni sizning nomingizdan o‘zimiz yozamiz: " +
+  "bu yerda Jaxongir AI ishlaydi, matn 1 oy tahrirsiz qoladi va iqtibos " +
+  "o‘zgartirilmaydi.";
 
 export interface CanonicalQuestionIdentity {
   canonical_key?: string | null;
