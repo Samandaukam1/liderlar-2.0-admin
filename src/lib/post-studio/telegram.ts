@@ -237,6 +237,16 @@ export interface DeliverOptions {
    * omitting it keeps the manual "send to everyone" behaviour.
    */
   chatIds?: number[];
+  /**
+   * Deliberately send this post again to chats that already have it.
+   *
+   * This is the one path that bypasses the "sent once" guarantee, so it is
+   * never reached by a retry, a cron tick or a batch — only by an admin who
+   * confirmed it. The prior `sent` rows are cleared first: the partial unique
+   * index would otherwise reject the second insert, and leaving them would make
+   * the delivery history claim two simultaneous sends.
+   */
+  force?: boolean;
 }
 
 /**
@@ -315,9 +325,25 @@ export async function deliverPostToSubscribers(
     db.from("telegram_post_deliveries").select("subscriber_id, status").eq("post_id", postId),
   ]);
 
-  const alreadySent = new Set(
-    (deliveries ?? []).filter((d) => d.status === "sent").map((d) => d.subscriber_id as string),
-  );
+  // A forced resend treats nobody as already served. The old `sent` rows are
+  // dropped so the partial unique index accepts the new ones; the audit entry
+  // below is what records that this happened.
+  const alreadySent = options.force
+    ? new Set<string>()
+    : new Set(
+        (deliveries ?? []).filter((d) => d.status === "sent").map((d) => d.subscriber_id as string),
+      );
+
+  if (options.force) {
+    const recipients = (subscribers ?? []).map((s) => s.id as string);
+    if (recipients.length > 0) {
+      await db
+        .from("telegram_post_deliveries")
+        .delete()
+        .eq("post_id", postId)
+        .in("subscriber_id", recipients);
+    }
+  }
   const previouslyFailed = new Set(
     (deliveries ?? []).filter((d) => d.status === "failed").map((d) => d.subscriber_id as string),
   );
@@ -389,11 +415,17 @@ export async function deliverPostToSubscribers(
 
   await logAudit({
     actorId: options.actorId ?? null,
-    action: "post.telegram_delivered",
+    action: options.force ? "post.telegram_force_resent" : "post.telegram_delivered",
     entityType: "candidate_social_posts",
     entityId: postId,
-    severity: result.failed > 0 ? "warning" : "info",
-    metadata: { ...result, onlyFailed: Boolean(options.onlyFailed) },
+    // A forced resend is always worth a second look in the log: it is the only
+    // way a subscriber receives the same post twice.
+    severity: options.force || result.failed > 0 ? "warning" : "info",
+    metadata: {
+      ...result,
+      onlyFailed: Boolean(options.onlyFailed),
+      forced: Boolean(options.force),
+    },
   });
 
   return result;

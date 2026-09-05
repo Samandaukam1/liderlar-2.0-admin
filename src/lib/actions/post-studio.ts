@@ -341,6 +341,14 @@ export async function sendPostToSubscribersAction(
   const ctx = await requirePermission("posts.publish");
   const postId = String(formData.get("post_id") ?? "");
   const onlyFailed = formData.get("only_failed") === "on";
+  /**
+   * The only way to send a post someone already has.
+   *
+   * Read from an explicit field rather than inferred from anything, so no
+   * retry, cron tick or batch can ever reach it — this needs an admin who
+   * confirmed the dialog.
+   */
+  const force = formData.get("force") === "on";
 
   if (!isTelegramConfigured()) return { ok: false, error: "TELEGRAM_BOT_TOKEN sozlanmagan" };
 
@@ -357,6 +365,7 @@ export async function sendPostToSubscribersAction(
   try {
     const result = await deliverPostToSubscribers(postId, photo, post.telegramCaption, {
       onlyFailed,
+      force,
       actorId: ctx.userId,
     });
 
@@ -375,7 +384,9 @@ export async function sendPostToSubscribersAction(
       sent: result.sent,
       failed: result.failed,
       skipped: result.skipped,
-      message: `${result.sent} ta yuborildi, ${result.failed} ta xato, ${result.skipped} ta o‘tkazib yuborildi.`,
+      message: force
+        ? `Majburiy qayta yuborildi: ${result.sent} ta ketdi, ${result.failed} ta xato.`
+        : `${result.sent} ta yuborildi, ${result.failed} ta xato, ${result.skipped} ta o‘tkazib yuborildi.`,
     };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Yuborishda xatolik" };

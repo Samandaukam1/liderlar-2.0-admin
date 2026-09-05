@@ -13,6 +13,7 @@ import {
 import { Badge } from "@/components/admin/badges";
 import { Button, Input, Label, Textarea } from "@/components/ui/primitives";
 import { PostPreviewCanvas } from "@/components/post-studio/preview-canvas";
+import { ConfirmDialog } from "@/components/ui/overlays";
 import type { PostRecord } from "@/lib/post-studio/repository";
 import type { QuoteCandidate } from "@/lib/post-studio/quote-source";
 import {
@@ -185,6 +186,7 @@ export function PostStudio(props: StudioProps) {
   const [nameLines, setNameLines] = useState(post.nameLines.join("\n"));
   const [bioItems, setBioItems] = useState(post.shortBioItems.join("\n"));
   const [transform, setTransform] = useState(post.portraitTransform);
+  const [forceResendOpen, setForceResendOpen] = useState(false);
   const [caption, setCaption] = useState(post.telegramCaption ?? "");
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
   const [pending, startTransition] = useTransition();
@@ -681,6 +683,22 @@ export function PostStudio(props: StudioProps) {
                   </Button>
                 </form>
               ) : null}
+
+              {/* The only way past the "sent once" guarantee, so it asks first:
+                  everyone who already has this post receives it a second time. */}
+              {delivery.sent > 0 ? (
+                <Button
+                  type="button"
+                  variant="danger"
+                  size="sm"
+                  className="w-full"
+                  disabled={pending}
+                  onClick={() => setForceResendOpen(true)}
+                >
+                  <Send className="h-3.5 w-3.5" />
+                  Majburiy qayta yuborish ({delivery.sent})
+                </Button>
+              ) : null}
             </div>
           ) : null}
         </Panel>
@@ -713,6 +731,23 @@ export function PostStudio(props: StudioProps) {
           </Panel>
         ) : null}
       </div>
+
+      <ConfirmDialog
+        open={forceResendOpen}
+        onClose={() => setForceResendOpen(false)}
+        danger
+        loading={pending}
+        title="Majburiy qayta yuborish"
+        confirmLabel="Ha, qayta yubor"
+        description={`Bu post allaqachon ${delivery.sent} ta chatga yetkazilgan. Davom etsangiz, ular xuddi shu postni IKKINCHI marta oladi — yuborilgan xabarni qaytarib bo'lmaydi.`}
+        onConfirm={() => {
+          setForceResendOpen(false);
+          const formData = new FormData();
+          formData.set("post_id", post.id);
+          formData.set("force", "on");
+          run(() => sendPostToSubscribersAction(formData));
+        }}
+      />
     </div>
   );
 }

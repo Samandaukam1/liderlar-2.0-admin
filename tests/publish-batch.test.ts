@@ -1059,3 +1059,34 @@ test("the copy-paste photo prompt comes from the admin panel, not a constant", (
   assert.match(form, /prompts\?\.\[promptGender\]\?\.trim\(\) \|\| MANUAL_PHOTO_PROMPTS\[promptGender\]/);
   assert.match(form, /<PhotoPromptCard gender=\{gender\} prompts=\{photoPrompts\} \/>/);
 });
+
+test("a forced resend is the only path past the sent-once guarantee", () => {
+  // Normal delivery skips anyone holding a `sent` row, which is what made a
+  // second press report "0 sent, 4 skipped". Forcing clears those rows first —
+  // the partial unique index would otherwise reject the new ones.
+  assert.match(TELEGRAM, /const alreadySent = options\.force\s*\?\s*new Set<string>\(\)/);
+  assert.match(TELEGRAM, /if \(options\.force\) \{/);
+  assert.match(TELEGRAM, /\.from\("telegram_post_deliveries"\)\s*\.delete\(\)/);
+  // It is recorded as its own action, at warning severity.
+  assert.match(TELEGRAM, /options\.force \? "post\.telegram_force_resent"/);
+
+  // Reachable only from an explicit field, so no retry, cron or batch hits it.
+  const actions = fs.readFileSync("src/lib/actions/post-studio.ts", "utf8");
+  assert.match(actions, /const force = formData\.get\("force"\) === "on"/);
+  const scheduler = fs.readFileSync("src/lib/post-studio/scheduler.ts", "utf8");
+  assert.ok(!scheduler.includes("force"), "the scheduled sweep never forces");
+  assert.ok(!PIPELINE.includes("force:"), "the pipeline never forces");
+
+  // And the admin confirms before it happens.
+  const studio = fs.readFileSync(
+    "src/app/(admin)/postlar/[postId]/studio-client.tsx",
+    "utf8",
+  );
+  assert.match(studio, /Majburiy qayta yuborish/);
+  assert.match(studio, /formData\.set\("force", "on"\)/);
+  assert.match(studio, /<ConfirmDialog/);
+  assert.ok(
+    studio.indexOf("setForceResendOpen(true)") < studio.indexOf('formData.set("force", "on")'),
+    "the dialog opens before anything is sent",
+  );
+});
