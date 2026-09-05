@@ -2,9 +2,8 @@ import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 import { tashkentDayRange } from "@/lib/tashkent-day";
-import { addToBlacklist, findBlacklistedSlugs, isBlacklisted } from "./blacklist";
+import { addToBlacklist, blacklistKey, findBlacklistedSlugs, isBlacklisted } from "./blacklist";
 import { findPublishedNamesake } from "./namesake";
-import { slugify } from "@/lib/utils";
 import {
   answerCallbackQuery,
   editTelegramMessageText,
@@ -219,7 +218,7 @@ export async function runPaymentAskSweep(
   const results: PaymentAskResult[] = [];
 
   for (const intake of due) {
-    if (blacklisted.has(slugify(intake.full_name))) {
+    if (blacklisted.has(blacklistKey(intake.full_name))) {
       await markAsked(intake.id, intake.payment_ask_count);
       continue;
     }

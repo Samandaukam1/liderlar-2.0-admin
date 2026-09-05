@@ -38,6 +38,7 @@ import {
   withinAskingHours,
 } from "../src/lib/intake/payment-messages.ts";
 import { CANONICAL_POST_QUOTE_HELP_TEXT } from "../src/lib/intake/canonical-quote.ts";
+import { blacklistKey } from "../src/lib/intake/name-key.ts";
 import {
   buildBatchProgressText,
   buildBatchStartedText,
@@ -908,13 +909,13 @@ test("nobody already on the site is asked about payment", () => {
   // trigger a republish.
   const sweep = PAYMENT.match(/export async function runPaymentAskSweep[\s\S]*?\n}/)?.[0] ?? "";
   assert.match(sweep, /await findPublishedNamesake\(intake\.full_name, null\)/);
-  assert.match(sweep, /blacklisted\.has\(slugify\(intake\.full_name\)\)/);
+  assert.match(sweep, /blacklisted\.has\(blacklistKey\(intake\.full_name\)\)/);
 });
 
 test("the blacklist is keyed by name, so a fresh form still matches", () => {
   // A terminated contract has to survive the person filling the form again
   // under a brand-new intake id.
-  assert.match(BLACKLIST, /slugify\(input\.fullName\)/);
+  assert.match(BLACKLIST, /blacklistKey\(input\.fullName\)/);
   assert.match(BLACKLIST, /onConflict: "name_slug"/);
   assert.match(BLACKLIST, /export async function findBlacklistedSlugs/);
   // A lookup failure must not silently block a legitimate candidate.
@@ -998,4 +999,40 @@ test("the poster uses the photo the site is showing right now", () => {
   // The intake sources remain as the fallback for candidates with no avatar.
   assert.match(fn, /selection: "confirmed_original"/);
   assert.match(fn, /selection: "primary_photo"/);
+});
+
+test("every way of writing an Uzbek name reaches one blacklist key", () => {
+  // slugify keeps U+02BB, so "oʻgʻli" and "o'g'li" produced two different keys
+  // and the list silently missed the same person written the other way. The
+  // blacklist key collapses all five apostrophes first.
+  const variants = [
+    "Vohidov Jamshid Shuxrat o\u02BBg\u02BBli", // ʻ modifier turned comma
+    "Vohidov Jamshid Shuxrat o\u02BCg\u02BCli", // ʼ modifier apostrophe
+    "Vohidov Jamshid Shuxrat o\u2018g\u2018li", // ‘ left single quote
+    "Vohidov Jamshid Shuxrat o\u2019g\u2019li", // ’ right single quote
+    "Vohidov Jamshid Shuxrat o'g'li", //             ASCII
+    "Vohidov Jamshid Shuxrat ogli", //               none at all
+  ];
+  const keys = new Set(variants.map(blacklistKey));
+  assert.equal(keys.size, 1, `variants split into ${[...keys].join(", ")}`);
+  assert.equal([...keys][0], "vohidov-jamshid-shuxrat-ogli");
+
+  // Different people still get different keys.
+  assert.notEqual(blacklistKey("Vohidov Jamshid"), blacklistKey("Vohidov Jasur"));
+  assert.equal(blacklistKey(""), "");
+});
+
+test("the seeded blacklist keys match what the code computes", () => {
+  // A key written by hand into the migration that the app never produces would
+  // be a row that can never match anyone.
+  const seed = fs.readFileSync(
+    "supabase/migrations/20260905040000_seed_blacklist.sql",
+    "utf8",
+  );
+  const rows = [...seed.matchAll(/\n\s+'([a-z0-9-]+)',\n\s+'([^']*(?:'')?[^']*)',/g)];
+  assert.ok(rows.length >= 5, `found ${rows.length} seeded rows`);
+  for (const [, slug, fullName] of rows) {
+    assert.equal(blacklistKey(fullName), slug, `${fullName} keys to ${slug}`);
+  }
+  assert.match(seed, /on conflict \(name_slug\) do nothing/);
 });

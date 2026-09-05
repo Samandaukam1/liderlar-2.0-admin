@@ -1,16 +1,16 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
-import { slugify } from "@/lib/utils";
+import { blacklistKey } from "./name-key";
 
 /**
  * Qora ro'yxat — shartnomasi buzilgan nomzodlar.
  *
- * Kalit sifatida ism slug'i ishlatiladi, anketa ID emas. Odam qayta anketa
- * to'ldirsa yangi qator va yangi ID paydo bo'ladi; sayt esa nomzodni aynan
- * slug bo'yicha taniydi (nashr oqimi slug'ni slugify(full_name) dan yasaydi).
- * Shuning uchun qora ro'yxat ham shu identifikatorda turadi — odam butunlay
- * yangi anketa bilan qaytib kelsa ham tanib olinadi.
+ * Kalit sifatida ism normallashtirilgan ko'rinishi ishlatiladi, anketa ID
+ * emas. Odam qayta anketa to'ldirsa yangi qator va yangi ID paydo bo'ladi,
+ * ism esa o'sha-o'sha — shuning uchun ro'yxat uni butunlay yangi anketa bilan
+ * qaytib kelganda ham tanib oladi. Kalit qanday hisoblanishi blacklistKey()
+ * da izohlangan.
  */
 
 export interface BlacklistEntry {
@@ -22,6 +22,8 @@ export interface BlacklistEntry {
 
 export const BLACKLIST_REASON_CONTRACT = "Shartnoma buzildi";
 
+export { blacklistKey };
+
 /** Adds a candidate, keyed by their name. Repeating it is a no-op. */
 export async function addToBlacklist(input: {
   fullName: string;
@@ -29,7 +31,7 @@ export async function addToBlacklist(input: {
   reason?: string;
   chatId: number | null;
 }): Promise<{ ok: boolean; alreadyListed: boolean; nameSlug: string }> {
-  const nameSlug = slugify(input.fullName);
+  const nameSlug = blacklistKey(input.fullName);
   if (!nameSlug) return { ok: false, alreadyListed: false, nameSlug: "" };
 
   const db = createSupabaseAdminClient();
@@ -64,7 +66,7 @@ export async function addToBlacklist(input: {
 
 /** The entry for this name, if the person is listed. */
 export async function isBlacklisted(fullName: string): Promise<BlacklistEntry | null> {
-  const nameSlug = slugify(fullName);
+  const nameSlug = blacklistKey(fullName);
   if (!nameSlug) return null;
 
   const db = createSupabaseAdminClient();
@@ -96,7 +98,7 @@ export async function isBlacklisted(fullName: string): Promise<BlacklistEntry | 
  * a lookup per row.
  */
 export async function findBlacklistedSlugs(fullNames: readonly string[]): Promise<Set<string>> {
-  const slugs = [...new Set(fullNames.map(slugify))].filter(Boolean);
+  const slugs = [...new Set(fullNames.map(blacklistKey))].filter(Boolean);
   if (slugs.length === 0) return new Set();
 
   const db = createSupabaseAdminClient();
@@ -113,7 +115,7 @@ export async function findBlacklistedSlugs(fullNames: readonly string[]): Promis
 }
 
 export async function removeFromBlacklist(fullName: string): Promise<void> {
-  const nameSlug = slugify(fullName);
+  const nameSlug = blacklistKey(fullName);
   if (!nameSlug) return;
   const db = createSupabaseAdminClient();
   await db.from("intake_blacklist").delete().eq("name_slug", nameSlug);
