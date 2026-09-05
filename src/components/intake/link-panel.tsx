@@ -46,8 +46,19 @@ export function LinkPanel({
   const extend = () =>
     startTransition(async () => {
       const r = await extendLinkAction(intakeId);
-      if (r.ok) toast.toast("success", "Muddat uzaytirildi");
-      else toast.toast("error", "Xatolik", r.error);
+      if (!r.ok) {
+        toast.toast("error", "Xatolik", r.error);
+        return;
+      }
+      // Reopening is the part worth reporting: the candidate can type again,
+      // which a bare "extended" would not have told anyone.
+      toast.toast(
+        "success",
+        r.reopened ? "Havola ochildi" : "Muddat uzaytirildi",
+        r.reopened
+          ? "Anketa tahrirlash uchun qayta ochildi — nomzod havola orqali davom etishi mumkin."
+          : undefined,
+      );
     });
 
   const revoke = () =>

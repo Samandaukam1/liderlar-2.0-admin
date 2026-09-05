@@ -34,6 +34,8 @@ export interface IntakeActionResult {
   conflict?: boolean;
   server?: unknown;
   lockVersion?: number;
+  /** True when extending also handed the form back to the candidate. */
+  reopened?: boolean;
 }
 
 
@@ -193,10 +195,53 @@ export async function revokeLinkAction(intakeId: string): Promise<IntakeActionRe
   return { ok: true };
 }
 
+/**
+ * Statuses "Uzaytirish" can hand back to the candidate.
+ *
+ * `promoted` and `published` are excluded: their article already exists, and
+ * letting the candidate edit the form behind a live page would put the two out
+ * of sync with nothing saying so. `archived` is excluded for the same reason.
+ */
+const REOPENABLE_STATUSES = [
+  "draft",
+  "submitted",
+  "ai_reviewing",
+  "needs_clarification",
+  "approved",
+] as const;
+
+/**
+ * Extends the link AND reopens the form.
+ *
+ * A submitted intake leaves `resolveActiveLink` refusing the token — it only
+ * serves `draft` and `needs_clarification` — so pushing `expires_at` out on its
+ * own changed nothing the candidate could see: the admin extended the deadline
+ * and the link stayed dead. Extending is only ever pressed to let someone carry
+ * on working, so it now does what that requires.
+ */
 export async function extendLinkAction(intakeId: string): Promise<IntakeActionResult> {
   const ctx = await requirePermission("intakes.link");
   const settings = await getIntakeSettings();
   const admin = createSupabaseAdminClient();
+
+  const { data: intake } = await admin
+    .from("candidate_intakes")
+    .select("status")
+    .eq("id", intakeId)
+    .maybeSingle();
+  if (!intake) return { ok: false, error: "Anketa topilmadi" };
+
+  const status = intake.status as string;
+  if (!(REOPENABLE_STATUSES as readonly string[]).includes(status)) {
+    return {
+      ok: false,
+      error:
+        status === "archived"
+          ? "Anketa arxivlangan — havolani uzaytirib bo‘lmaydi."
+          : "Nomzod allaqachon nashr qilingan — anketani qayta ochib bo‘lmaydi. Kerak bo‘lsa yangi havola yarating.",
+    };
+  }
+
   const expiresAt = new Date(Date.now() + settings.linkTtlDays * 86400000).toISOString();
   const { error } = await admin
     .from("candidate_intake_links")
@@ -204,15 +249,34 @@ export async function extendLinkAction(intakeId: string): Promise<IntakeActionRe
     .eq("intake_id", intakeId)
     .eq("status", "active");
   if (error) return { ok: false, error: error.message };
+
+  // Already open — the date was the only thing standing in the way.
+  const alreadyOpen = status === "draft" || status === "needs_clarification";
+  if (!alreadyOpen) {
+    await admin
+      .from("candidate_intakes")
+      .update({
+        status: "needs_clarification",
+        // A queued publish must not fire while the candidate is mid-edit. Set
+        // to null rather than 'skipped' so the submit trigger re-arms it on
+        // their next submission instead of leaving them stuck outside the
+        // pipeline for good.
+        post_pipeline_status: null,
+        post_pipeline_error: null,
+      })
+      .eq("id", intakeId);
+  }
+
   await logAudit({
     actorId: ctx.userId,
     action: "intake.link.extend",
     entityType: "candidate_intake",
     entityId: intakeId,
-    metadata: { expiresAt },
+    severity: alreadyOpen ? "info" : "warning",
+    metadata: { expiresAt, reopenedFrom: alreadyOpen ? null : status },
   });
   revalidatePath(`/nomzodlar/anketalar/${intakeId}`);
-  return { ok: true, expiresAt };
+  return { ok: true, expiresAt, reopened: !alreadyOpen };
 }
 
 /* --------------------------- manual answers --------------------------- */

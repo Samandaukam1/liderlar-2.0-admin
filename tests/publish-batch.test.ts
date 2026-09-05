@@ -1090,3 +1090,38 @@ test("a forced resend is the only path past the sent-once guarantee", () => {
     "the dialog opens before anything is sent",
   );
 });
+
+test("extending a link actually hands the form back to the candidate", () => {
+  // resolveActiveLink only serves `draft` and `needs_clarification`, so a
+  // submitted intake left the token refused. Pushing expires_at out on its own
+  // changed nothing anyone could see: the admin extended, the link stayed dead.
+  const data = fs.readFileSync("src/lib/intake/data.ts", "utf8");
+  assert.match(data, /\["draft", "needs_clarification"\]\.includes/);
+
+  const actions = fs.readFileSync("src/lib/actions/intakes.ts", "utf8");
+  const fn = actions.slice(
+    actions.indexOf("export async function extendLinkAction"),
+    actions.indexOf("/* --------------------------- manual answers"),
+  );
+  assert.match(fn, /status: "needs_clarification"/, "the form is reopened");
+  assert.match(fn, /expires_at: expiresAt/, "the deadline still moves");
+
+  // A queued publish must not fire while the candidate is mid-edit, and null
+  // (not 'skipped') lets the submit trigger re-arm it on their next send.
+  assert.match(fn, /post_pipeline_status: null/);
+
+  // An already-published candidate is refused: their article exists, and
+  // editing the form behind a live page would silently desync the two.
+  assert.match(actions, /const REOPENABLE_STATUSES/);
+  for (const status of ["promoted", "published", "archived"]) {
+    assert.ok(
+      !new RegExp(`REOPENABLE_STATUSES[\\s\\S]*?"${status}"[\\s\\S]*?\\] as const`).test(actions),
+      `${status} is not reopenable`,
+    );
+  }
+  assert.match(fn, /nashr qilingan/, "the refusal explains itself");
+
+  // And the panel says which of the two things happened.
+  const panel = fs.readFileSync("src/components/intake/link-panel.tsx", "utf8");
+  assert.match(panel, /r\.reopened \? "Havola ochildi" : "Muddat uzaytirildi"/);
+});
