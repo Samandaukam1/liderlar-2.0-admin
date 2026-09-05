@@ -23,6 +23,8 @@ export interface OrderableIntake {
    * the article stands, only the post half of the run has to be redone.
    */
   postPending?: boolean;
+  /** Contract terminated — never published, never asked about payment again. */
+  blacklisted?: boolean;
 }
 
 /**
@@ -78,6 +80,8 @@ export function selectEligibleForBatch<T extends OrderableIntake>(
       (!selected || selected.has(row.id)) &&
       row.paymentStatus === "paid" &&
       !row.alreadyPublished &&
+      // A terminated contract is never published, however it got queued.
+      row.blacklisted !== true &&
       // Either there is still a publication to do, or the publication is done
       // and only the post is outstanding.
       (processable.has(row.status) || row.postPending === true),

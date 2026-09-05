@@ -7,6 +7,7 @@ import {
 } from "@/lib/intake/improve-service";
 import { promoteIntakeToDraft, publishPromotedIntake } from "@/lib/intake/promotion-service";
 import { findPublishedNamesake, NAMESAKE_SKIP_MESSAGE } from "@/lib/intake/namesake";
+import { isBlacklisted } from "@/lib/intake/blacklist";
 import { createPostDraft, getPost, updatePost } from "./repository.ts";
 import { preparePortrait, refreshPostCaption, renderAndStorePost } from "./service.ts";
 import { downloadPostAsset } from "./storage.ts";
@@ -244,6 +245,12 @@ export async function runPipelineForIntake(
   );
   if (namesake) {
     return fail(intakeId, "promotion", NAMESAKE_SKIP_MESSAGE, true);
+  }
+
+  // A terminated contract stops the run wherever it reaches this point — the
+  // automatic payment-triggered path included, not just the batch.
+  if (await isBlacklisted((current?.full_name as string) ?? "")) {
+    return fail(intakeId, "promotion", "Shartnoma buzildi — qora ro‘yxatdagi nomzod.", true);
   }
 
   if (current?.status === "approved") {

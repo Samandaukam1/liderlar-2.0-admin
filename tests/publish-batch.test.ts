@@ -30,7 +30,14 @@ import {
   paymentUndoCallbackData,
   REPORT_BUTTON_LABEL,
   UNDO_LIST_SIZE,
+  blacklistCallbackData,
+  buildBlacklistWarningText,
+  parseBlacklistCallback,
+  PAYMENT_ASK_END_HOUR,
+  PAYMENT_ASK_START_HOUR,
+  withinAskingHours,
 } from "../src/lib/intake/payment-messages.ts";
+import { CANONICAL_POST_QUOTE_HELP_TEXT } from "../src/lib/intake/canonical-quote.ts";
 import {
   buildBatchProgressText,
   buildBatchStartedText,
@@ -44,6 +51,7 @@ const MIGRATION = fs.readFileSync(
 );
 const BATCH = fs.readFileSync("src/lib/intake/publish-batch.ts", "utf8");
 const PAYMENT = fs.readFileSync("src/lib/intake/payment.ts", "utf8");
+const BLACKLIST = fs.readFileSync("src/lib/intake/blacklist.ts", "utf8");
 const PIPELINE = fs.readFileSync("src/lib/post-studio/pipeline.ts", "utf8");
 const TELEGRAM = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
 const ROUTER = fs.readFileSync("src/lib/post-studio/bot-router.ts", "utf8");
@@ -673,8 +681,8 @@ test("editorial actions are refused outside the configured chats", () => {
   const callbacks = ROUTER.match(/async function handleCallbackQuery[\s\S]*?\n}/)?.[0] ?? "";
   assert.equal(
     (callbacks.match(/await isEditorialChat\(chatId\)/g) ?? []).length,
-    2,
-    "undo and payment callbacks are both guarded",
+    3,
+    "blacklist, undo and payment callbacks are each guarded",
   );
 });
 
@@ -865,4 +873,129 @@ test("no server secret can reach the queue panel bundle", () => {
   assert.ok(!client.includes("SUPABASE_SERVICE_ROLE"));
   // The wide table scrolls inside its own box rather than the page.
   assert.match(client, /overflow-x-auto/);
+});
+
+/* ------------------------------------------------------------------ *
+ * Ish vaqti, qora ro'yxat va iqtibos eslatmasi
+ * ------------------------------------------------------------------ */
+
+test("payment questions are only sent during working hours", () => {
+  // 09:00-21:00 Tashkent. The question repeats every two hours until answered,
+  // so without a quiet window an unanswered candidate wakes the editors all
+  // night.
+  assert.equal(withinAskingHours(new Date("2026-09-05T03:59:00Z")), false); // 08:59
+  assert.equal(withinAskingHours(new Date("2026-09-05T04:00:00Z")), true); //  09:00
+  assert.equal(withinAskingHours(new Date("2026-09-05T15:59:00Z")), true); //  20:59
+  assert.equal(withinAskingHours(new Date("2026-09-05T16:00:00Z")), false); // 21:00
+  assert.equal(withinAskingHours(new Date("2026-09-05T20:00:00Z")), false); // 01:00
+  assert.equal(PAYMENT_ASK_START_HOUR, 9);
+  assert.equal(PAYMENT_ASK_END_HOUR, 21);
+});
+
+test("a skipped night does not count as having asked", () => {
+  // The stamp is only written when something is actually sent, so the morning
+  // sweep picks everyone up instead of treating the night as a round of asking.
+  const sweep = PAYMENT.match(/export async function runPaymentAskSweep[\s\S]*?\n}/)?.[0] ?? "";
+  assert.match(sweep, /if \(!withinAskingHours\(now\)\) return \[\]/);
+  assert.ok(
+    sweep.indexOf("withinAskingHours") < sweep.indexOf("findIntakesNeedingPaymentAsk"),
+    "the hour is checked before any query",
+  );
+});
+
+test("nobody already on the site is asked about payment", () => {
+  // Their article is out; asking whether they paid is noise, and a "yes" would
+  // trigger a republish.
+  const sweep = PAYMENT.match(/export async function runPaymentAskSweep[\s\S]*?\n}/)?.[0] ?? "";
+  assert.match(sweep, /await findPublishedNamesake\(intake\.full_name, null\)/);
+  assert.match(sweep, /blacklisted\.has\(slugify\(intake\.full_name\)\)/);
+});
+
+test("the blacklist is keyed by name, so a fresh form still matches", () => {
+  // A terminated contract has to survive the person filling the form again
+  // under a brand-new intake id.
+  assert.match(BLACKLIST, /slugify\(input\.fullName\)/);
+  assert.match(BLACKLIST, /onConflict: "name_slug"/);
+  assert.match(BLACKLIST, /export async function findBlacklistedSlugs/);
+  // A lookup failure must not silently block a legitimate candidate.
+  assert.match(BLACKLIST, /\[blacklist\] lookup failed/);
+});
+
+test("a terminated contract blocks every publish path", () => {
+  assert.match(BATCH, /await isBlacklisted\(intake\.full_name as string\)/);
+  assert.match(PIPELINE, /await isBlacklisted\(/);
+  // And the button that sets it also takes them out of the queue. Sliced by
+  // index rather than matched to `\n}`, which a multi-line parameter type ends
+  // long before the body does.
+  const from = PAYMENT.indexOf("export async function handleBlacklistCallback");
+  const fn = PAYMENT.slice(from, from + 2000);
+  assert.match(fn, /post_pipeline_status: "skipped"/);
+  assert.match(fn, /payment_status: "unpaid"/);
+});
+
+test("a blacklisted person returning raises a warning instead of a payment ask", () => {
+  const fn = PAYMENT.match(/export async function askPaymentOnSubmit[\s\S]*?\n}/)?.[0] ?? "";
+  assert.match(fn, /if \(await warnIfBlacklisted\(intakeId\)\) return;/);
+  assert.ok(
+    fn.indexOf("warnIfBlacklisted") < fn.indexOf("askPaymentForIntakes"),
+    "the warning replaces the question rather than following it",
+  );
+  const warning = buildBlacklistWarningText({
+    fullName: "Test Nomzod",
+    phone: "+998901234567",
+    telegramUsername: "test",
+    reason: "Shartnoma buzildi",
+    listedAt: "2026-09-01T09:00:00Z",
+  });
+  assert.match(warning, /OGOHLANTIRISH/);
+  assert.match(warning, /AVTOMATIK chiqarilmaydi/);
+});
+
+test("the blacklist button round-trips and stays distinct from the other two", () => {
+  const id = "3f1c2d4e-5a6b-4c8d-9e0f-1a2b3c4d5e6f";
+  const data = blacklistCallbackData(id);
+  assert.equal(parseBlacklistCallback(data), id);
+  assert.ok(Buffer.byteLength(data, "utf8") <= 64);
+  // Three buttons, three prefixes — none may be read as another.
+  assert.equal(parseBlacklistCallback(paymentCallbackData(id, true)), null);
+  assert.equal(parseBlacklistCallback(paymentUndoCallbackData(id)), null);
+  assert.equal(parsePaymentCallback(data), null);
+  assert.equal(parsePaymentUndoCallback(data), null);
+});
+
+test("the quote instruction states every rule the poster depends on", () => {
+  // This answer goes onto the poster verbatim — the AI is blocked from
+  // rewriting it — so the instruction has to carry the constraints itself.
+  assert.match(CANONICAL_POST_QUOTE_HELP_TEXT, /Ikkita gap/);
+  assert.match(CANONICAL_POST_QUOTE_HELP_TEXT, /kamida 6 ta so‘z/);
+  assert.match(CANONICAL_POST_QUOTE_HELP_TEXT, /imloviy/i);
+  assert.match(CANONICAL_POST_QUOTE_HELP_TEXT, /ChatGPT/);
+  assert.match(CANONICAL_POST_QUOTE_HELP_TEXT, /o‘zgartirilmaydi/);
+
+  const migration = fs.readFileSync(
+    "supabase/migrations/20260905030000_quote_hint_and_blacklist.sql",
+    "utf8",
+  );
+  assert.match(migration, /canonical_key = 'post_quote'/);
+  assert.match(migration, /Ikkita gap yozing/);
+  assert.match(migration, /create table if not exists public\.intake_blacklist/);
+  assert.match(migration, /enable row level security/);
+  assert.doesNotMatch(migration, /drop table|delete from|truncate/i);
+});
+
+test("the poster uses the photo the site is showing right now", () => {
+  // avatar_url is what the published article displays. Once an editor replaces
+  // it, re-rendering from the original intake attachment would put a picture on
+  // the poster that no longer matches the article it links to.
+  const repository = fs.readFileSync("src/lib/post-studio/repository.ts", "utf8");
+  const fn = repository.match(
+    /export async function resolveCandidatePortraitSource[\s\S]*?\n}/,
+  )?.[0] ?? "";
+  assert.ok(
+    fn.indexOf('selection: "candidate_avatar"') < fn.indexOf('selection: "confirmed_ai"'),
+    "the live site photo is resolved before the intake attachments",
+  );
+  // The intake sources remain as the fallback for candidates with no avatar.
+  assert.match(fn, /selection: "confirmed_original"/);
+  assert.match(fn, /selection: "primary_photo"/);
 });

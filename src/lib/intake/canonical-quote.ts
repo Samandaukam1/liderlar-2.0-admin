@@ -12,8 +12,17 @@ export const CANONICAL_POST_QUOTE_KEY = "post_quote";
 export const CANONICAL_POST_QUOTE_PROMPT =
   "Boshqa yoshlar uchun qanday maslahat yoki motivatsion fikr bildirasiz?";
 
+/**
+ * The candidate's own words go onto the poster untouched — Jaxongir AI is
+ * blocked from rewriting this one answer — so the instruction has to carry
+ * every constraint the poster depends on: length, spelling, and the fact that
+ * nobody will tidy it afterwards.
+ */
 export const CANONICAL_POST_QUOTE_HELP_TEXT =
-  "Bitta gap bilan yozing, chunki bu iqtibos postga qo‘shiladi. Ortiqcha so‘zlarsiz yozing.";
+  "Ikkita gap yozing. Har bir gap kamida 6 ta so‘zdan iborat bo‘lsin va imloviy " +
+  "xatolarsiz bo‘lsin. Iltimos, avval matnni ChatGPT orqali tekshirib, " +
+  "moslashtirilgan variantini shu yerga joylashtiring — iqtibosingiz qanday " +
+  "yozilgan bo‘lsa, postga shundayligicha olinadi va o‘zgartirilmaydi.";
 
 export interface CanonicalQuestionIdentity {
   canonical_key?: string | null;

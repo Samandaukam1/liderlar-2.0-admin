@@ -16,7 +16,9 @@ import {
   BATCH_BUTTON_LABEL,
   buildBotStatusReport,
   buildPaymentUndoPayload,
+  handleBlacklistCallback,
   handlePaymentCallback,
+  parseBlacklistCallback,
   parsePaymentCallback,
   parsePaymentUndoCallback,
   REPORT_BUTTON_LABEL,
@@ -202,6 +204,23 @@ async function handleCallbackQuery(
   query: NonNullable<TelegramUpdate["callback_query"]>,
 ): Promise<void> {
   const chatId = query.message?.chat?.id ?? null;
+
+  const blacklistId = parseBlacklistCallback(query.data);
+  if (blacklistId) {
+    if (chatId == null || !(await isEditorialChat(chatId))) {
+      await safeAnswerCallback(query.id, "Ruxsat yo‘q");
+      return;
+    }
+    const outcome = await handleBlacklistCallback({
+      intakeId: blacklistId,
+      chatId,
+      messageId: query.message?.message_id ?? null,
+      fromUserId: query.from?.id ?? null,
+      callbackQueryId: query.id,
+    });
+    console.log(`[telegram-webhook] blacklist → ${outcome}`);
+    return;
+  }
 
   const undoId = parsePaymentUndoCallback(query.data);
   if (undoId) {

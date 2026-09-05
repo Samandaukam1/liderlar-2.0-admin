@@ -9,7 +9,7 @@
 
 // Relative, not "@/": this module is exercised by the raw node:test runner,
 // which resolves no tsconfig path aliases.
-import { formatTashkent } from "../tashkent-day.ts";
+import { formatTashkent, tashkentHour } from "../tashkent-day.ts";
 
 /** The persistent keyboard button that asks the bot for a status report. */
 export const REPORT_BUTTON_LABEL = "📊 Hozirgi hisobot";
@@ -22,6 +22,23 @@ export const BATCH_BUTTON_LABEL = "🚀 Chop etishga tayyorlar";
 
 export const PAYMENT_YES_LABEL = "✅ Ha, to‘lov qildi";
 export const PAYMENT_NO_LABEL = "❌ Yo‘q, hali qilmadi";
+export const PAYMENT_BLACKLIST_LABEL = "🚫 Bu kishi bilan shartnoma buzuldi";
+
+/**
+ * Working hours in Tashkent for the payment sweep.
+ *
+ * The question repeats every two hours until it is answered, so without a
+ * quiet window an unanswered candidate would wake the editors through the
+ * night. Inclusive start, exclusive end: the last send is at 20:xx.
+ */
+export const PAYMENT_ASK_START_HOUR = 9;
+export const PAYMENT_ASK_END_HOUR = 21;
+
+/** True inside the editorial working day, Tashkent time. */
+export function withinAskingHours(now: Date = new Date()): boolean {
+  const hour = tashkentHour(now);
+  return hour >= PAYMENT_ASK_START_HOUR && hour < PAYMENT_ASK_END_HOUR;
+}
 
 /**
  * Grace period between confirming payment and the publish run starting.
@@ -76,8 +93,71 @@ function isUuid(value: string | undefined): value is string {
 }
 
 /* ------------------------------------------------------------------ *
- * Undo
+ * Blacklist
  * ------------------------------------------------------------------ */
+
+const BLACKLIST_PREFIX = "blk:";
+
+export function blacklistCallbackData(intakeId: string): string {
+  return `${BLACKLIST_PREFIX}${intakeId}`;
+}
+
+export function parseBlacklistCallback(data: string | undefined | null): string | null {
+  if (!data || !data.startsWith(BLACKLIST_PREFIX)) return null;
+  const intakeId = data.slice(BLACKLIST_PREFIX.length);
+  return isUuid(intakeId) ? intakeId : null;
+}
+
+/** Replaces the question once the contract is marked as broken. */
+export function buildBlacklistedText(
+  fullName: string,
+  answeredAt: Date = new Date(),
+): string {
+  return [
+    "🚫 SHARTNOMA BUZILDI",
+    "",
+    `👤 ${fullName}`,
+    `🕐 ${formatTashkent(answeredAt)}`,
+    "",
+    "Bu nomzod qora ro‘yxatga olindi:",
+    "• to‘lov haqida boshqa so‘ralmaydi;",
+    "• maqola va post chiqarilmaydi;",
+    "• kelajakda shu ism bilan qaytib kelsa, ogohlantirish yuboriladi.",
+  ].join("\n");
+}
+
+/**
+ * Sent when a blacklisted name turns up again.
+ *
+ * The point of the list is that nobody has to remember: a person can return
+ * months later under a fresh form, and this is what makes that visible before
+ * anything of theirs is published.
+ */
+export function buildBlacklistWarningText(candidate: {
+  fullName: string;
+  phone: string | null;
+  telegramUsername: string | null;
+  reason: string | null;
+  listedAt: string | null;
+}): string {
+  const lines = [
+    "⚠️ OGOHLANTIRISH — QORA RO‘YXATDAGI NOMZOD",
+    "",
+    `👤 ${candidate.fullName}`,
+  ];
+  if (candidate.phone) lines.push(`📱 ${candidate.phone}`);
+  if (candidate.telegramUsername) {
+    lines.push(`💬 ${formatUsername(candidate.telegramUsername)}`);
+  }
+  lines.push(
+    `🚫 Sabab: ${candidate.reason ?? "Shartnoma buzildi"}`,
+    `🗓 Ro‘yxatga olingan: ${formatTashkent(candidate.listedAt)}`,
+    "",
+    "Bu kishi yangi anketa yubordi va chop etish ro‘yxatiga tushdi.",
+    "Maqolasi va posti AVTOMATIK chiqarilmaydi — qo‘lda hal qiling.",
+  );
+  return lines.join("\n");
+}
 
 const UNDO_PREFIX = "und:";
 

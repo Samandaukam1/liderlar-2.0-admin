@@ -154,8 +154,28 @@ test("canonical quote identity survives question reordering and preserves the ra
     "supabase/migrations/20260827220000_canonical_intake_quote.sql",
     "utf8",
   );
-  assert.ok(migration.includes(CANONICAL_POST_QUOTE_HELP_TEXT));
   assert.match(migration, /canonical_key = 'post_quote'/);
+
+  // The instruction itself was rewritten later, so the live wording lives in
+  // the migration that last set it — checking the original would pin the text
+  // to whatever it happened to say first.
+  const hintMigration = fs.readFileSync(
+    "supabase/migrations/20260905030000_quote_hint_and_blacklist.sql",
+    "utf8",
+  );
+  assert.match(hintMigration, /canonical_key = 'post_quote'/);
+
+  // The migration builds the text with SQL `||`, so the file never contains it
+  // as one string. Rebuilding it here is what keeps the database wording and
+  // the constant from drifting apart — the candidate reads the database one.
+  const setBlock = hintMigration.slice(
+    hintMigration.indexOf("set help_text ="),
+    hintMigration.indexOf("where canonical_key = 'post_quote'"),
+  );
+  const rebuilt = (setBlock.match(/'([^']*)'/g) ?? [])
+    .map((literal) => literal.slice(1, -1))
+    .join("");
+  assert.equal(rebuilt, CANONICAL_POST_QUOTE_HELP_TEXT);
 });
 
 /* ------------------------------------------------------------------ *

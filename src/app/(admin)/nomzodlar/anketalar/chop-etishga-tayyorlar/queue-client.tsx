@@ -102,6 +102,7 @@ export function PublishQueueClient({
         (r) =>
           r.paymentStatus === "paid" &&
           !r.alreadyPublished &&
+          !r.blacklisted &&
           // Either still to publish, or published and still owed a post.
           (r.status !== "published" || r.postPending),
       ),
@@ -518,9 +519,10 @@ function SummaryCards({ summary }: { summary: PublishQueueSummary }) {
     { label: "Chop etilgan", value: summary.published, accent: "text-electric" },
     { label: "Posti kutilmoqda", value: summary.postPending, accent: "text-amber" },
     { label: "Avval chiqqan", value: summary.duplicates, accent: "text-[#6a52c7]" },
+    { label: "Qora ro‘yxat", value: summary.blacklisted, accent: "text-coral" },
   ];
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-8">
       {cards.map((c) => (
         <div key={c.label} className="rounded-panel border border-line bg-card px-4 py-3">
           <p className={cn("font-display text-2xl font-semibold", c.accent)}>{c.value}</p>
@@ -749,7 +751,9 @@ function QueueRow({
         <StatusBadge status={row.status} />
       </td>
       <td className="px-3 py-2.5 text-xs text-ink-soft">
-        {row.alreadyPublished ? (
+        {row.blacklisted ? (
+          <span className="font-semibold text-coral">Qora ro‘yxat</span>
+        ) : row.alreadyPublished ? (
           <span className="font-semibold text-[#6a52c7]">Avval chiqqan</span>
         ) : row.postPending && !row.batchItemStatus ? (
           <span className="font-semibold text-amber">Posti kutilmoqda</span>

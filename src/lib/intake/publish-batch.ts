@@ -20,6 +20,7 @@ import {
   buildNothingToPublishText,
 } from "./batch-messages";
 import { findPublishedNamesake, NAMESAKE_SKIP_MESSAGE } from "./namesake";
+import { findBlacklistedSlugs, isBlacklisted } from "./blacklist";
 
 /**
  * Boshqariladigan batch chop etish.
@@ -76,6 +77,8 @@ export interface PublishQueueRow {
   alreadyPublished: { candidateId: string; slug: string } | null;
   /** Published, but their post never went out — a repair the batch runs first. */
   postPending: boolean;
+  /** Contract terminated — held out of every run. */
+  blacklisted: boolean;
 }
 
 export interface PublishQueueSummary {
@@ -90,6 +93,8 @@ export interface PublishQueueSummary {
   duplicates: number;
   /** Published candidates still waiting for their post — the batch's repairs. */
   postPending: number;
+  /** Rows held out because the contract with that person was terminated. */
+  blacklisted: number;
 }
 
 export interface PublishQueue {
@@ -169,6 +174,9 @@ export async function loadPublishQueue(
         : Promise.resolve({ data: [] as { id: string; slug: string }[] }),
     ]);
 
+  const blacklistedSlugs = await findBlacklistedSlugs(
+    intakes.map((r) => r.full_name as string),
+  );
   const publishedBySlug = new Map(
     (liveCandidates ?? []).map((c) => [c.slug as string, c.id as string]),
   );
@@ -226,6 +234,7 @@ export async function loadPublishQueue(
           (r.status as string) === "published" &&
           Boolean(candidateId) &&
           postStatusByCandidate.get(candidateId as string) !== "published",
+        blacklisted: blacklistedSlugs.has(nameSlug),
       };
     }),
   );
@@ -241,13 +250,15 @@ export async function loadPublishQueue(
         (r) =>
           r.paymentStatus === "paid" &&
           !r.alreadyPublished &&
+          !r.blacklisted &&
           (r.status !== "published" || r.postPending),
       ).length,
       unpaid: rows.filter((r) => r.paymentStatus === "unpaid").length,
       unknown: rows.filter((r) => r.paymentStatus === "unknown").length,
       published: rows.filter((r) => r.status === "published").length,
       duplicates: rows.filter((r) => r.alreadyPublished).length,
-      postPending: rows.filter((r) => r.postPending && !r.alreadyPublished).length,
+      postPending: rows.filter((r) => r.postPending && !r.alreadyPublished && !r.blacklisted).length,
+      blacklisted: rows.filter((r) => r.blacklisted).length,
     },
   };
 }
@@ -262,6 +273,7 @@ function emptySummary(date: string): PublishQueueSummary {
     published: 0,
     duplicates: 0,
     postPending: 0,
+    blacklisted: 0,
   };
 }
 
@@ -547,6 +559,12 @@ async function runItem(itemId: string, intakeId: string): Promise<ItemOutcome> {
   const duplicate = await findPublishedNamesake(intake.full_name as string, candidateId);
   if (duplicate) {
     return outcome("skipped", "done", duplicate.candidateId, null, NAMESAKE_SKIP_MESSAGE);
+  }
+
+  // Re-checked here, not only when the board was drawn: a contract can be
+  // terminated while the batch is already queued, and that answer has to win.
+  if (await isBlacklisted(intake.full_name as string)) {
+    return outcome("skipped", "done", candidateId, null, "Shartnoma buzildi — qora ro‘yxat");
   }
 
   try {

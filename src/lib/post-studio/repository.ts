@@ -219,6 +219,26 @@ export async function resolveCandidatePortraitSource(
   }
   const intake = await resolveCandidateIntake(candidateId, sourceIntakeId);
 
+  /**
+   * The live site photo wins.
+   *
+   * `avatar_url` is the image the published article is actually showing right
+   * now. For a candidate promoted the ordinary way it is a copy of the intake
+   * photo, so nothing changes — but once an editor replaces the portrait on the
+   * site, the two diverge, and re-rendering a post from the original intake
+   * attachment would put a picture on the poster that no longer matches the
+   * article it links to. The intake sources below stay as the fallback for
+   * candidates that have no avatar yet.
+   */
+  if (avatarUrl?.trim()) {
+    return {
+      kind: "remote",
+      url: avatarUrl.trim(),
+      sourceId: candidateId,
+      selection: "candidate_avatar",
+    };
+  }
+
   if (intake?.selectedPhotoSource === "ai" && intake.selectedPhotoEditId) {
     const { data: edit } = await db
       .from("candidate_intake_photo_edits")
@@ -286,14 +306,6 @@ export async function resolveCandidatePortraitSource(
     }
   }
 
-  if (avatarUrl?.trim()) {
-    return {
-      kind: "remote",
-      url: avatarUrl.trim(),
-      sourceId: candidateId,
-      selection: "candidate_avatar",
-    };
-  }
   return null;
 }
 

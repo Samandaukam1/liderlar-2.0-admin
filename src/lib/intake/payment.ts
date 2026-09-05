@@ -2,6 +2,9 @@ import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 import { tashkentDayRange } from "@/lib/tashkent-day";
+import { addToBlacklist, findBlacklistedSlugs, isBlacklisted } from "./blacklist";
+import { findPublishedNamesake } from "./namesake";
+import { slugify } from "@/lib/utils";
 import {
   answerCallbackQuery,
   editTelegramMessageText,
@@ -15,6 +18,11 @@ import {
   buildPaymentQuestion,
   buildPaymentUndoList,
   buildPaymentUndoResult,
+  blacklistCallbackData,
+  buildBlacklistedText,
+  buildBlacklistWarningText,
+  withinAskingHours,
+  PAYMENT_BLACKLIST_LABEL,
   PAYMENT_NO_LABEL,
   PAYMENT_PUBLISH_DELAY_MS,
   PAYMENT_YES_LABEL,
@@ -58,10 +66,12 @@ const AWAITING_PAYMENT_STATUSES = ["submitted", "approved", "promoted"] as const
 
 export {
   BATCH_BUTTON_LABEL,
+  parseBlacklistCallback,
   parsePaymentCallback,
   parsePaymentUndoCallback,
   REPORT_BUTTON_LABEL,
   UNDO_BUTTON_LABEL,
+  withinAskingHours,
 } from "./payment-messages";
 
 interface PayableIntake {
@@ -135,6 +145,7 @@ async function askOne(intake: PayableIntake, chatIds: number[]): Promise<Payment
   const inlineKeyboard = [
     [{ text: PAYMENT_YES_LABEL, callback_data: paymentCallbackData(intake.id, true) }],
     [{ text: PAYMENT_NO_LABEL, callback_data: paymentCallbackData(intake.id, false) }],
+    [{ text: PAYMENT_BLACKLIST_LABEL, callback_data: blacklistCallbackData(intake.id) }],
   ];
 
   const rows: Record<string, unknown>[] = [];
@@ -178,19 +189,61 @@ async function askOne(intake: PayableIntake, chatIds: number[]): Promise<Payment
   return { intakeId: intake.id, fullName: intake.full_name, round, sent, failed };
 }
 
-/** One sweep: asks about every candidate whose two-hour window has elapsed. */
+/**
+ * One sweep: asks about every candidate whose two-hour window has elapsed.
+ *
+ * Outside 09:00–21:00 nothing is sent. The question repeats every two hours
+ * until answered, so without the quiet window an unanswered candidate would
+ * wake the editors through the night — and the `payment_last_asked_at` stamp is
+ * deliberately NOT touched when we skip, so the morning sweep picks everyone up
+ * rather than treating the night as if they had been asked.
+ */
 export async function runPaymentAskSweep(
   chatIds: number[],
   limit = PAYMENT_ASK_BATCH_SIZE,
+  now: Date = new Date(),
 ): Promise<PaymentAskResult[]> {
   if (!isTelegramConfigured() || chatIds.length === 0) return [];
+  if (!withinAskingHours(now)) return [];
 
   const due = await findIntakesNeedingPaymentAsk(limit);
+  if (due.length === 0) return [];
+
+  // Two whole groups are dropped before anything is sent:
+  //
+  //  - anyone already on the site. Their article is out; asking whether they
+  //    paid is noise, and the answer would trigger a republish.
+  //  - anyone blacklisted. The contract is over; the point of the list is that
+  //    nobody has to remember that.
+  const blacklisted = await findBlacklistedSlugs(due.map((i) => i.full_name));
   const results: PaymentAskResult[] = [];
+
   for (const intake of due) {
+    if (blacklisted.has(slugify(intake.full_name))) {
+      await markAsked(intake.id, intake.payment_ask_count);
+      continue;
+    }
+    if (await findPublishedNamesake(intake.full_name, null)) {
+      await markAsked(intake.id, intake.payment_ask_count);
+      continue;
+    }
     results.push(await askOne(intake, chatIds));
   }
   return results;
+}
+
+/**
+ * Stamps a candidate as handled without sending anything.
+ *
+ * Skipped rows still need the stamp, or every sweep would re-examine the same
+ * ones ahead of candidates that genuinely need asking.
+ */
+async function markAsked(intakeId: string, askCount: number): Promise<void> {
+  const db = createSupabaseAdminClient();
+  await db
+    .from("candidate_intakes")
+    .update({ payment_last_asked_at: new Date().toISOString(), payment_ask_count: askCount })
+    .eq("id", intakeId);
 }
 
 export interface PaymentAskChunkResult {
@@ -281,6 +334,11 @@ async function resolveAskRecipients(): Promise<number[]> {
  */
 export async function askPaymentOnSubmit(intakeId: string): Promise<void> {
   try {
+    // A blacklisted person coming back gets a warning INSTEAD of a payment
+    // question. That is the whole value of the list: they can return months
+    // later under a fresh form, and nobody has to have remembered.
+    if (await warnIfBlacklisted(intakeId)) return;
+
     const result = await askPaymentForIntakes([intakeId]);
     if (!result.ok) {
       console.error("[payment] submit ask refused:", result.error);
@@ -293,6 +351,113 @@ export async function askPaymentOnSubmit(intakeId: string): Promise<void> {
       err instanceof Error ? err.message : String(err),
     );
   }
+}
+
+/**
+ * Sends the blacklist warning if this intake belongs to a listed person.
+ *
+ * Returns true when a warning went out, so the caller knows not to ask about
+ * payment as well. The warning is sent unconditionally rather than once per
+ * person: a returning candidate is exactly the moment the editors need to see
+ * it, however many times it happens.
+ */
+export async function warnIfBlacklisted(intakeId: string): Promise<boolean> {
+  const db = createSupabaseAdminClient();
+  const { data: intake } = await db
+    .from("candidate_intakes")
+    .select("id, full_name, phone_e164, telegram_username")
+    .eq("id", intakeId)
+    .maybeSingle();
+  if (!intake) return false;
+
+  const entry = await isBlacklisted(intake.full_name as string);
+  if (!entry) return false;
+
+  const text = buildBlacklistWarningText({
+    fullName: intake.full_name as string,
+    phone: (intake.phone_e164 as string | null) ?? null,
+    telegramUsername: (intake.telegram_username as string | null) ?? null,
+    reason: entry.reason,
+    listedAt: entry.createdAt,
+  });
+
+  for (const chatId of await resolveAskRecipients()) {
+    try {
+      await sendTelegramMessage(chatId, text);
+    } catch (err) {
+      console.error("[blacklist] warning send failed", err instanceof Error ? err.message : err);
+    }
+  }
+
+  await logAudit({
+    actorId: null,
+    action: "intake.blacklist_warning",
+    entityType: "candidate_intake",
+    entityId: intakeId,
+    severity: "warning",
+    metadata: { fullName: intake.full_name, reason: entry.reason },
+  });
+  return true;
+}
+
+/* ------------------------------------------------------------------ *
+ * Blacklist button
+ * ------------------------------------------------------------------ */
+
+/**
+ * "Bu kishi bilan shartnoma buzuldi".
+ *
+ * Records the person by name, closes every open question about them, and takes
+ * them out of the publish queue. Payment is set to `unpaid` rather than left
+ * alone so no other path can mistake them for cleared to publish.
+ */
+export async function handleBlacklistCallback(input: {
+  intakeId: string;
+  chatId: number | null;
+  messageId: number | null;
+  fromUserId: number | null;
+  callbackQueryId: string;
+}): Promise<PaymentCallbackOutcome> {
+  const db = createSupabaseAdminClient();
+  await safeAnswer(input.callbackQueryId, "🚫 Qora ro‘yxatga olindi");
+
+  const { data: intake } = await db
+    .from("candidate_intakes")
+    .select("id, full_name")
+    .eq("id", input.intakeId)
+    .maybeSingle();
+  if (!intake) return "not_found";
+
+  const fullName = intake.full_name as string;
+  const added = await addToBlacklist({
+    fullName,
+    intakeId: input.intakeId,
+    chatId: input.chatId,
+  });
+  if (!added.ok) return "error";
+
+  await db
+    .from("candidate_intakes")
+    .update({
+      payment_status: "unpaid",
+      payment_confirmed_at: null,
+      payment_confirmed_by_chat_id: null,
+      post_pipeline_status: "skipped",
+      post_pipeline_error: "Shartnoma buzildi — qora ro‘yxat",
+    })
+    .eq("id", input.intakeId);
+
+  const answerText = buildBlacklistedText(fullName);
+  await closeOpenRequests(
+    input.intakeId,
+    false,
+    input.fromUserId,
+    answerText,
+    input.chatId,
+    input.messageId,
+  );
+
+  return "recorded";
 }
 
 /* ------------------------------------------------------------------ *
