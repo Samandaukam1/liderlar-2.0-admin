@@ -185,6 +185,7 @@ export function IntakeForm({
   initialContact,
   consentText,
   maxUploadBytes,
+  photoPrompts,
   draftKey,
   transport,
   gender = null,
@@ -200,6 +201,8 @@ export function IntakeForm({
   initialContact: { phone: string | null; telegram: string | null; consent: boolean };
   consentText: string;
   maxUploadBytes: number;
+  /** Copy-paste AI prompts, assembled from the admin panel fragments. */
+  photoPrompts?: Record<Gender, string>;
   draftKey: string;
   transport: IntakeTransport;
   /** Picks which manual photo prompt the candidate is shown. */
@@ -818,6 +821,7 @@ export function IntakeForm({
             photo={photo}
             gender={gender}
             showPromptGuide={mode === "public" && !readOnly}
+            photoPrompts={photoPrompts}
             busy={busy}
             readOnly={readOnly}
             onPick={(f) => doUpload(f, "photo")}
@@ -962,6 +966,7 @@ function PhotoStage({
   photo,
   gender,
   showPromptGuide,
+  photoPrompts,
   busy,
   readOnly,
   onPick,
@@ -971,6 +976,7 @@ function PhotoStage({
   photo: { url: string | null; file_name: string } | null;
   gender: Gender | null;
   showPromptGuide: boolean;
+  photoPrompts?: Record<Gender, string>;
   busy: boolean;
   readOnly: boolean;
   onPick: (f: File) => void;
@@ -1026,7 +1032,7 @@ function PhotoStage({
         </div>
       )}
 
-      {showPromptGuide && <PhotoPromptCard gender={gender} />}
+      {showPromptGuide && <PhotoPromptCard gender={gender} prompts={photoPrompts} />}
     </div>
   );
 }
@@ -1035,13 +1041,21 @@ function PhotoStage({
  * The candidate improves the photo themselves: they copy this prompt into any AI
  * image tool and upload the result. Replaces the old in-form generation button.
  */
-function PhotoPromptCard({ gender }: { gender: Gender | null }) {
+function PhotoPromptCard({
+  gender,
+  prompts,
+}: {
+  gender: Gender | null;
+  prompts?: Record<Gender, string>;
+}) {
   // Gender is nullable on the intake row; without it the candidate picks, so
   // nobody is handed the wrong prompt silently.
   const [promptGender, setPromptGender] = useState<Gender>(gender ?? "male");
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
-  const prompt = MANUAL_PHOTO_PROMPTS[promptGender];
+  // The admin panel is the source; MANUAL_PHOTO_PROMPTS only covers the case
+  // where the fragments could not be loaded at all.
+  const prompt = prompts?.[promptGender]?.trim() || MANUAL_PHOTO_PROMPTS[promptGender];
 
   const copy = async () => {
     try {

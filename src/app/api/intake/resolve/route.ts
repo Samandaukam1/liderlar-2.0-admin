@@ -6,6 +6,7 @@ import {
   getIntakeSettings,
   touchLinkUsage,
 } from "@/lib/intake/data";
+import { buildManualPhotoPrompts } from "@/lib/intake/photo-prompt";
 import { enforceRateLimit } from "@/lib/intake/rate-limit";
 import { clientIpHash, jsonError, noStoreJson, readJsonBody } from "@/lib/intake/http";
 import { loadCandidatePhotoState } from "@/lib/intake/photo-jobs";
@@ -25,10 +26,13 @@ export async function POST(request: NextRequest) {
   if (!resolved) return jsonError(404, "Havola yaroqsiz yoki muddati tugagan");
 
   await touchLinkUsage(resolved.linkId);
-  const [state, settings, photoEdit] = await Promise.all([
+  const [state, settings, photoEdit, photoPrompts] = await Promise.all([
     loadPublicIntakeState(resolved.intakeId),
     getIntakeSettings(),
     loadCandidatePhotoState(resolved.intakeId),
+    // The copy-paste prompt comes from the admin panel, not from a constant,
+    // so editing it there changes what candidates actually receive.
+    buildManualPhotoPrompts(),
   ]);
   if (!state) return jsonError(404, "Anketa topilmadi");
 
@@ -78,6 +82,7 @@ export async function POST(request: NextRequest) {
       consentVersion: settings.consentVersion,
       maxUploadBytes: settings.maxUploadBytes,
     },
+    photoPrompts,
     expiresAt: resolved.expiresAt,
   });
 }

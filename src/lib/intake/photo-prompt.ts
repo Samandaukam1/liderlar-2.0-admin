@@ -1,5 +1,6 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { GENDERS, MANUAL_PHOTO_PROMPTS } from "./constants";
 import type { Gender, ClothingType, PhotoColor } from "./constants";
 
 export interface PromptFragment {
@@ -74,4 +75,51 @@ export async function buildPhotoPrompt(params: {
     return "Ushbu rasmni professional biografik portretga aylantiring: yuz identifikatsiyasi va yoshini aynan saqlang, neytral premium studiya foni, kameraga to‘g‘ri qaragan, rasmiy kiyim, tabiiy teri teksturasi.";
   }
   return parts.join("\n\n");
+}
+
+/**
+ * The prompt the candidate copies into their own AI image tool, per gender.
+ *
+ * Assembled from the SAME `photo_prompt_fragments` the admin edits under
+ * "Nomzod link rasm yaratish promtlari". It used to be a constant compiled into
+ * the form, so anything set in that panel changed the in-app generation while
+ * the text every candidate actually copied stayed frozen at whatever had been
+ * hardcoded — two prompts drifting apart with nothing saying so.
+ *
+ * `suit` is the clothing fragment used here: the copy-paste card offers no
+ * clothing choice, and a formal portrait is what the poster needs. Colour is
+ * skipped for the same reason — it only qualifies a garment the candidate has
+ * not chosen.
+ *
+ * Falls back to the compiled-in text per gender, so clearing a fragment in the
+ * panel leaves the candidate with a working prompt rather than an empty box.
+ */
+export async function buildManualPhotoPrompts(): Promise<Record<Gender, string>> {
+  const admin = createSupabaseAdminClient();
+  const { data, error } = await admin
+    .from("photo_prompt_fragments")
+    .select("*")
+    .eq("is_active", true);
+
+  if (error) {
+    console.error("[photo-prompt] fragment load failed", error.message);
+    return { ...MANUAL_PHOTO_PROMPTS };
+  }
+
+  const fragments = (data ?? []).map((r) => normalize(r as Record<string, unknown>));
+  const prompts = {} as Record<Gender, string>;
+
+  for (const gender of GENDERS) {
+    const base = fragments.find((f) => f.fragment_type === "base_scene" && f.gender === gender);
+    const clothing = fragments.find(
+      (f) => f.fragment_type === "clothing" && f.gender === gender && f.clothing_type === "suit",
+    );
+    const assembled = [base?.prompt_text, clothing?.prompt_text]
+      .map((p) => p?.trim())
+      .filter(Boolean)
+      .join("\n\n");
+    prompts[gender] = assembled || MANUAL_PHOTO_PROMPTS[gender];
+  }
+
+  return prompts;
 }

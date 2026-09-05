@@ -22,6 +22,7 @@ interface ResolvedState {
   photoEdit: CandidatePhotoStateView;
   feedback: { question_no: number | null; feedback_text: string; feedback_type: string }[];
   settings: { consentText: string; consentVersion: string; maxUploadBytes: number };
+  photoPrompts: Record<Gender, string>;
 }
 
 function useDraftKey(): string {
@@ -283,6 +284,7 @@ export function PublicIntake({ token }: { token: string }) {
         initialContact={state.contact}
         consentText={state.settings.consentText}
         maxUploadBytes={state.settings.maxUploadBytes}
+        photoPrompts={state.photoPrompts}
         draftKey={draftKey}
         transport={transport}
         gender={state.gender === "male" || state.gender === "female" ? (state.gender as Gender) : null}

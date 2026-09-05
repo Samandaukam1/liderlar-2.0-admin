@@ -1036,3 +1036,26 @@ test("the seeded blacklist keys match what the code computes", () => {
   }
   assert.match(seed, /on conflict \(name_slug\) do nothing/);
 });
+
+test("the copy-paste photo prompt comes from the admin panel, not a constant", () => {
+  // "Nomzod link rasm yaratish promtlari" edits photo_prompt_fragments. The
+  // candidate card used to render a compiled-in constant, so anything set there
+  // changed the in-app generation while the text candidates actually copied
+  // stayed frozen — two prompts drifting apart with nothing saying so.
+  const promptLib = fs.readFileSync("src/lib/intake/photo-prompt.ts", "utf8");
+  assert.match(promptLib, /export async function buildManualPhotoPrompts/);
+  assert.match(promptLib, /\.from\("photo_prompt_fragments"\)/);
+  assert.match(promptLib, /\.eq\("is_active", true\)/);
+  // Clearing a fragment must leave a working prompt, not an empty box.
+  assert.match(promptLib, /MANUAL_PHOTO_PROMPTS\[gender\]/);
+
+  // It reaches the candidate through the resolve payload...
+  const resolve = fs.readFileSync("src/app/api/intake/resolve/route.ts", "utf8");
+  assert.match(resolve, /buildManualPhotoPrompts\(\)/);
+  assert.match(resolve, /photoPrompts,/);
+
+  // ...and the card prefers it over the constant.
+  const form = fs.readFileSync("src/components/intake/intake-form.tsx", "utf8");
+  assert.match(form, /prompts\?\.\[promptGender\]\?\.trim\(\) \|\| MANUAL_PHOTO_PROMPTS\[promptGender\]/);
+  assert.match(form, /<PhotoPromptCard gender=\{gender\} prompts=\{photoPrompts\} \/>/);
+});
