@@ -83,16 +83,34 @@ export async function generateCertificatePdf(request: CertificateRequest): Promi
   const baselineY = page.height - (blockTopY + capHeight);
 
   const { r, g, b } = hexToUnitRgb(candidateName.color);
+  /**
+   * Drawn one character at a time, not one run at a time.
+   *
+   * Handing pdf-lib a whole string with a font embedded unsubsetted
+   * (`subset: false`, which fonts.ts explains) lays it out through fontkit's
+   * shaper, and the advances that reach the PDF do not match the widths
+   * written for those glyphs — Great Vibes renders "Boboqulov" as
+   * "Bob oqu lov", gaps torn open mid-word. Verified by rendering all four
+   * combinations: the fault needs both the full embed and the multi-character
+   * call, and drawing per character fixes it while leaving the deliberate
+   * unsubsetted embed alone.
+   *
+   * A script face like this connects through its glyph shapes and side
+   * bearings rather than through kerning pairs, so advancing per glyph costs
+   * nothing visible.
+   */
   let cursorX = candidateName.box.centerX - totalWidth / 2;
   for (const run of runs) {
-    pdfPage.drawText(run.text, {
-      x: cursorX,
-      y: baselineY,
-      size,
-      font: run.font.embedded,
-      color: rgb(r, g, b),
-    });
-    cursorX += run.font.embedded.widthOfTextAtSize(run.text, size);
+    for (const ch of Array.from(run.text)) {
+      pdfPage.drawText(ch, {
+        x: cursorX,
+        y: baselineY,
+        size,
+        font: run.font.embedded,
+        color: rgb(r, g, b),
+      });
+      cursorX += run.font.embedded.widthOfTextAtSize(ch, size);
+    }
   }
 
   // ---- QR code

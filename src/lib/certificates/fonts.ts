@@ -98,8 +98,24 @@ export function splitIntoFontRuns(text: string, fonts: LoadedFont[]): FontRun[] 
   return runs;
 }
 
+/**
+ * Advance width of one run, summed one character at a time.
+ *
+ * Deliberately NOT `widthOfTextAtSize(run.text)`. The name is drawn glyph by
+ * glyph (see drawFontRuns), so measuring the whole string in one call would
+ * put the centring a hair off what is actually painted. Summing the same way
+ * the drawing advances keeps the two exactly in step.
+ */
+export function measureRunWidth(run: FontRun, size: number): number {
+  let width = 0;
+  for (const ch of Array.from(run.text)) {
+    width += run.font.embedded.widthOfTextAtSize(ch, size);
+  }
+  return width;
+}
+
 export function measureRunsWidth(runs: FontRun[], size: number): number {
-  return runs.reduce((sum, run) => sum + run.font.embedded.widthOfTextAtSize(run.text, size), 0);
+  return runs.reduce((sum, run) => sum + measureRunWidth(run, size), 0);
 }
 
 /**
