@@ -29,6 +29,7 @@ import {
   Settings,
   Scale,
   ArrowDownUp,
+  History,
   type LucideIcon,
 } from "lucide-react";
 
@@ -62,6 +63,9 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Yuborilgan yangilanishlar", href: "/monthly-updates", icon: Inbox, permission: "updates.view", keywords: "oylik submission" },
       { label: "Biografik maqolalar", href: "/articles", icon: FileText, permission: "articles.view", keywords: "maqola editor" },
       { label: "Arizalar", href: "/applications", icon: ClipboardList, permission: "applications.view" },
+      // Liderlar 1.0 arxivi — 2.0 nomzodlaridan ATAYLAB alohida yozuv turi
+      // (legacy_posts jadvali), shuning uchun alohida bo'lim.
+      { label: "Liderlar 1.0 postlari", href: "/liderlar-1-0", icon: History, permission: "candidates.view", keywords: "legacy arxiv eski sayt tilda nomzodlar import 1.0" },
     ],
   },
   {
