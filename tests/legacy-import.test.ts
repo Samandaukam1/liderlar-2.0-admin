@@ -93,6 +93,26 @@ test("uzbek apostrophes are dropped rather than turned into separators", () => {
   assert.equal(slugifyLegacyTitle("АSTANOVA KAMOLA"), "astanova-kamola");
 });
 
+test("the slug rule also reproduces a 1.0 URL supplied from outside the file", () => {
+  // Given independently of the export as a real old link. Post ID lp3txctvv1 is
+  // in the dataset (BAXTIYOROVA NOZIMAXON SHAROFJON QIZI, published), and the
+  // rule derived from the two in-file links reproduces this one exactly — a
+  // third confirmation from a source that could not have been fitted to.
+  assert.equal(
+    buildLegacyPath(buildLegacySlug("lp3txctvv1", "BAXTIYOROVA NOZIMAXON SHAROFJON QIZI")),
+    "/nomzodlar/lp3txctvv1-baxtiyorova-nozimaxon-sharofjon-qizi",
+  );
+});
+
+test("a record with no image is still importable and carries no invented URL", () => {
+  // Exactly one of the 1991 records has no image (b596x0tfs1). It must map
+  // cleanly rather than acquire a placeholder URL that would then 404.
+  const mapped = mapLegacyRow({ ...ROW, "Post ID": "b596x0tfs1", Media: "", "Thumb Image": "" });
+  assert.ok(mapped.ok);
+  assert.equal(mapped.record.cover_image_url, null);
+  assert.ok(mapped.warnings.includes("missing_image"));
+});
+
 test("an explicit Tilda alias wins, and the post id prefix stays recoverable", () => {
   assert.equal(buildLegacySlug("jh8j2kasx1", "XASANOV SANJAR", "xasanov-sanjar"), "xasanov-sanjar");
   assert.equal(extractLegacyPostId("9bidsfxtk1-asomiddinov"), "9bidsfxtk1");
