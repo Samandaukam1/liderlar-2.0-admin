@@ -16,6 +16,8 @@ import { cn, formatDate, daysUntil, timeAgo } from "@/lib/utils";
 import type { Candidate } from "@/lib/types";
 import { getCandidateEditorRecord, getCandidatePrompt } from "@/lib/candidates/repository";
 import { resolveCertificateTargetUrl } from "@/lib/certificates/target-url";
+import { candidateArticlePath } from "@/lib/public-site";
+import { getSiteUrl } from "@/lib/site-url";
 
 export const dynamic = "force-dynamic";
 
@@ -87,7 +89,7 @@ export default async function CandidateDetailPage(props: {
       : { data: null };
 
   const dueDays = daysUntil(candidate.next_update_due_at);
-  const publicUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "https://liderlar.uz"}/liderlar/${candidate.slug}`;
+  const publicUrl = `${getSiteUrl()}${candidateArticlePath(candidate.slug)}`;
   const certificateTarget = await resolveCertificateTargetUrl(candidate).catch(
     (err): Awaited<ReturnType<typeof resolveCertificateTargetUrl>> => {
       console.error("CERTIFICATE_TARGET_RESOLUTION_FAILED", err instanceof Error ? err.message : err);

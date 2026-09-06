@@ -121,7 +121,12 @@ export interface IntakeTransport {
     lock_version: number;
   }): Promise<AutosaveResp>;
   upload(file: File, opts: { purpose: "photo" | "attachment"; question_no?: number }): Promise<UploadResp>;
-  submit(c: { phone: string; telegram: string; consent: boolean }): Promise<{ ok: boolean; errors?: string[] }>;
+  submit(c: {
+    phone: string;
+    telegram: string;
+    instagram: string;
+    consent: boolean;
+  }): Promise<{ ok: boolean; errors?: string[] }>;
   heartbeat(): Promise<void>;
   /**
    * Candidates no longer start photo jobs — they bring a portrait they made
@@ -198,7 +203,12 @@ export function IntakeForm({
   initialPhoto: { url: string | null; file_name: string } | null;
   initialPhotoEdit?: CandidatePhotoStateView | null;
   initialAttachments?: IntakeAttachmentView[];
-  initialContact: { phone: string | null; telegram: string | null; consent: boolean };
+  initialContact: {
+    phone: string | null;
+    telegram: string | null;
+    instagram: string | null;
+    consent: boolean;
+  };
   consentText: string;
   maxUploadBytes: number;
   /** Copy-paste AI prompts, assembled from the admin panel fragments. */
@@ -227,6 +237,7 @@ export function IntakeForm({
   const [contact, setContact] = useState({
     phone: initialContact.phone ?? "",
     telegram: initialContact.telegram ?? "",
+    instagram: initialContact.instagram ?? "",
     consent: initialContact.consent ?? false,
   });
   const [submitErrors, setSubmitErrors] = useState<string[]>([]);
@@ -1139,7 +1150,7 @@ function FinalConfirmationStage({
 }: {
   photo: { url: string | null; file_name: string } | null;
   photoEdit: CandidatePhotoStateView | null;
-  contact: { phone: string; telegram: string; consent: boolean };
+  contact: { phone: string; telegram: string; instagram: string; consent: boolean };
   answeredCount: number;
   total: number;
   missingRequiredCount: number;
@@ -1459,7 +1470,7 @@ function ContactStage({
   onSubmit,
   showSubmit = true,
 }: {
-  contact: { phone: string; telegram: string; consent: boolean };
+  contact: { phone: string; telegram: string; instagram: string; consent: boolean };
   consentText: string;
   errors: string[];
   readOnly: boolean;
@@ -1467,7 +1478,7 @@ function ContactStage({
   total: number;
   hasPhoto: boolean;
   busy: boolean;
-  onChange: (c: { phone: string; telegram: string; consent: boolean }) => void;
+  onChange: (c: { phone: string; telegram: string; instagram: string; consent: boolean }) => void;
   onSubmit: () => void;
   showSubmit?: boolean;
 }) {
@@ -1513,6 +1524,23 @@ function ContactStage({
             onChange={(e) => onChange({ ...contact, telegram: e.target.value })}
           />
         </div>
+      </div>
+
+      {/* Optional on purpose: a missing Instagram handle only means there will
+          be no collaboration post — it never blocks the submission. */}
+      <div>
+        <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.08em] text-ink-soft">
+          Instagram username <span className="font-semibold normal-case tracking-normal text-ink-soft/70">(ixtiyoriy)</span>
+        </label>
+        <Input
+          value={contact.instagram}
+          disabled={readOnly}
+          placeholder="@username"
+          onChange={(e) => onChange({ ...contact, instagram: e.target.value })}
+        />
+        <p className="mt-1.5 text-xs leading-relaxed text-ink-soft">
+          Postingiz e’lon qilingach, Instagram’dagi collaboration post uchun ushbu username’dan foydalanamiz.
+        </p>
       </div>
 
       <label className="flex cursor-pointer items-start gap-3 rounded-field border border-line bg-surface/40 p-4">

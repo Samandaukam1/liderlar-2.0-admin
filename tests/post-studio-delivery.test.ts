@@ -22,6 +22,7 @@ import { renderPostImage, toDataUri } from "../src/lib/post-studio/render.ts";
 import { splitNameIntoLines } from "../src/lib/post-studio/name-lines.ts";
 import { buildOverlaySvgBody } from "../src/lib/post-studio/svg.ts";
 import { POST_OUTPUT_SIZE, POST_TEMPLATE_IDS } from "../src/lib/post-studio/types.ts";
+import { CANONICAL_PUBLIC_SITE_URL } from "../src/lib/public-site.ts";
 import {
   CANONICAL_POST_QUOTE_HELP_TEXT,
   CANONICAL_POST_QUOTE_KEY,
@@ -646,8 +647,9 @@ test("a database failure never silences the bot", () => {
   assert.match(startBlock, /try \{[\s\S]*await upsertSubscriber\([\s\S]*\} catch/);
   assert.match(startBlock, /\} catch[\s\S]*await sendTelegramMessage\(chatId, START_REPLY/);
 
-  // Any unknown text still gets an answer.
-  assert.match(telegram, /await sendTelegramMessage\(chatId, HELP_REPLY/);
+  // Any unknown text still gets an answer — the editorial variant only adds the
+  // staff commands, so an ordinary subscriber still sees HELP_REPLY.
+  assert.match(telegram, /editorial \? EDITORIAL_HELP_REPLY : HELP_REPLY/);
 });
 
 test("machine callers are exempt from the admin session redirect", () => {
@@ -742,9 +744,16 @@ test("the application link points at the real form on the public site", () => {
   // inspects it.
   const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
   const DEFAULT_APPLICATION_URL = "https://liderlar.uz/ariza_qoldirish";
+  // The path is fixed here; the origin comes from the one place the domain is
+  // written down, so it is never spelled out a second time.
   assert.match(
     telegram,
-    /export const DEFAULT_APPLICATION_URL = "https:\/\/liderlar\.uz\/ariza_qoldirish"/,
+    /export const DEFAULT_APPLICATION_URL = `\$\{CANONICAL_PUBLIC_SITE_URL\}\/ariza_qoldirish`/,
+  );
+  assert.equal(
+    `${CANONICAL_PUBLIC_SITE_URL}/ariza_qoldirish`,
+    DEFAULT_APPLICATION_URL,
+    "the constant still resolves to the real form",
   );
   // The form lives at a fixed address; it is no longer derived from whichever
   // origin the poster happens to be served from.
@@ -843,19 +852,31 @@ test("the public site origin is never guessed as liderlar.uz", async () => {
   }
 });
 
-test("an unconfigured public site holds the post at needs_review instead of linking the old domain", () => {
+test("an unconfigured public site now resolves to liderlar.uz instead of blocking", () => {
+  // liderlar.uz used to serve the OLD site, so an unset `public_web.base_url`
+  // parked every post at needs_review rather than link there. Liderlar 2.0 owns
+  // the domain now, so the resolver ends at the canonical constant and the
+  // "unconfigured" gate is gone.
+  const origin = fs.readFileSync("src/lib/post-studio/site-origin.ts", "utf8");
+  assert.match(origin, /CANONICAL_PUBLIC_SITE_URL;/, "the chain ends at the canonical domain");
+  assert.match(origin, /Promise<string>/, "the origin is no longer nullable");
+
   const service = fs.readFileSync("src/lib/post-studio/service.ts", "utf8");
-  assert.match(service, /code: "article_url_unconfigured"/);
-  // An admin-confirmed URL is the way forward while the domain is in flux.
+  assert.ok(
+    !service.includes('code: "article_url_unconfigured"'),
+    "an unset setting no longer parks a post",
+  );
+  // An admin-confirmed URL is still honoured ahead of everything else.
   assert.match(service, /post\.articleUrl\?\.trim\(\) \|\| source\.articleUrl/);
-  // refreshPostCaption parks the post when no caption could be built.
+  // An article that genuinely is not published still parks the post.
+  assert.match(service, /code: "article_unpublished"/);
   assert.match(service, /status: "needs_review",\s*\n\s*error: warning\?\.message/);
 
-  const repository = fs.readFileSync("src/lib/post-studio/repository.ts", "utf8");
-  assert.ok(!repository.includes("getSiteUrl"), "article links no longer use the old fallback");
-
-  const telegram = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
-  assert.ok(!telegram.includes("getSiteUrl"), "caption links no longer use the old fallback");
+  // Neither module spells a domain out for itself.
+  for (const file of ["src/lib/post-studio/repository.ts", "src/lib/post-studio/telegram.ts"]) {
+    const source = fs.readFileSync(file, "utf8");
+    assert.ok(!/"https:\/\/liderlar\.uz/.test(source), `${file} hardcodes no public domain`);
+  }
 });
 
 test("a hand-confirmed article URL also settles where the public site lives", async () => {
@@ -874,10 +895,13 @@ test("a hand-confirmed article URL also settles where the public site lives", as
 
   // And the caption actually falls back to it, so confirming the link by hand
   // is a real escape hatch rather than one that still fails the next gate.
+  // A pasted link is an explicit statement about where this post's site lives,
+  // so it wins over the resolved origin rather than merely filling in for it.
   const service = fs.readFileSync("src/lib/post-studio/service.ts", "utf8");
-  assert.match(service, /const confirmedOrigin = originOfConfirmedUrl\(post\.articleUrl\)/);
-  assert.match(service, /const siteUrl = settings\.siteUrl \?\? confirmedOrigin/);
-  assert.match(service, /settings\.applicationUrl \?\? \(siteUrl \? `\$\{siteUrl\}\/ariza` : null\)/);
+  assert.match(
+    service,
+    /const siteUrl = originOfConfirmedUrl\(post\.articleUrl\) \?\? settings\.siteUrl/,
+  );
 });
 
 test("a working caption lifts the review flag it previously raised", () => {
@@ -916,13 +940,14 @@ test("the studio names which of the two causes left the profile link empty", () 
   const fn = client.slice(client.indexOf("function describeProfileState"));
 
   assert.match(fn, /Nomzod sahifasi hali nashr qilinmagan \(holati: \$\{label\}\)/);
-  assert.match(fn, /public sayt manzili sozlanmagan/);
-  // The old blanket message is gone.
+  // The old blanket message is gone...
   assert.ok(!client.includes('"Maqola hali nashr qilinmagan"'));
+  // ...and so is the "public sayt manzili sozlanmagan" branch: with a canonical
+  // domain there is no longer an unconfigured state to report.
+  assert.ok(!client.includes("public sayt manzili sozlanmagan"));
 
   const page = fs.readFileSync("src/app/(admin)/postlar/[postId]/page.tsx", "utf8");
   assert.match(page, /candidateStatus: source\?\.candidateStatus \?\? null/);
-  assert.match(page, /publicWebConfigured: source\?\.publicWebConfigured \?\? false/);
 });
 
 test("a hand-confirmed article URL must be a real http(s) link", () => {

@@ -65,6 +65,7 @@ const BLACKLIST = fs.readFileSync("src/lib/intake/blacklist.ts", "utf8");
 const PIPELINE = fs.readFileSync("src/lib/post-studio/pipeline.ts", "utf8");
 const TELEGRAM = fs.readFileSync("src/lib/post-studio/telegram.ts", "utf8");
 const ROUTER = fs.readFileSync("src/lib/post-studio/bot-router.ts", "utf8");
+const CRM_LISTS = fs.readFileSync("src/lib/intake/crm-list-messages.ts", "utf8");
 
 /* ------------------------------------------------------------------ *
  * "Bugun" — Asia/Tashkent
@@ -687,12 +688,20 @@ test("editorial actions are refused outside the configured chats", () => {
     const block = ROUTER.slice(at, at + 400);
     assert.match(block, /if \(!editorial\) return deny\(/, `${branch} checks membership`);
   }
-  // Both callback kinds re-check it as well.
+  // The CRM list buttons are editorial-only too, both as typed commands and as
+  // keyboard labels — candidate data must never reach an ordinary subscriber.
+  for (const branch of ["/chopetilganlar", "/kutayotganlar", "/toldirayotganlar"]) {
+    assert.ok(ROUTER.includes(branch) || CRM_LISTS.includes(branch), `${branch} exists`);
+  }
+  const listBranch = ROUTER.slice(ROUTER.indexOf("const listKind ="));
+  assert.match(listBranch, /if \(!editorial\) return deny\(/, "the CRM lists check membership");
+
+  // Every callback kind re-checks it as well.
   const callbacks = ROUTER.match(/async function handleCallbackQuery[\s\S]*?\n}/)?.[0] ?? "";
   assert.equal(
     (callbacks.match(/await isEditorialChat\(chatId\)/g) ?? []).length,
-    3,
-    "blacklist, undo and payment callbacks are each guarded",
+    4,
+    "CRM pagination, blacklist, undo and payment callbacks are each guarded",
   );
 });
 

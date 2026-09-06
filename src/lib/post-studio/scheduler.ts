@@ -3,6 +3,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 import { getPost, updatePost } from "./repository.ts";
 import { downloadPostAsset } from "./storage.ts";
+import { sendInstagramFollowUp } from "./instagram-followup.ts";
 import { deliverPostToSubscribers, isTelegramConfigured } from "./telegram.ts";
 
 /**
@@ -76,6 +77,9 @@ export async function sendDueScheduledPosts(
         telegram_failed_count: delivery.failed,
         error: delivery.sent > 0 ? null : "Hech bir obunachiga yuborilmadi.",
       });
+      // Same follow-up the automatic pipeline sends, and guarded the same way:
+      // a scheduled post is delivered automatically too.
+      await sendInstagramFollowUp(postId, post.candidateId);
       results.push({ postId, ok: true, sent: delivery.sent, failed: delivery.failed });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

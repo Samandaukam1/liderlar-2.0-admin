@@ -66,7 +66,6 @@ export default async function PostStudioPage({
           // one it is instead of always blaming the article.
           candidateStatus: source?.candidateStatus ?? null,
           articleStatus: source?.article?.status ?? null,
-          publicWebConfigured: source?.publicWebConfigured ?? false,
         }}
         delivery={delivery}
         subscribers={subscribers}

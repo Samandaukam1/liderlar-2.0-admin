@@ -15,7 +15,12 @@ interface ResolvedState {
   full_name: string;
   gender: string | null;
   status: string;
-  contact: { phone: string | null; telegram: string | null; consent: boolean };
+  contact: {
+    phone: string | null;
+    telegram: string | null;
+    instagram: string | null;
+    consent: boolean;
+  };
   template: IntakeTemplateView;
   answers: IntakeAnswerView[];
   photo: { file_name: string; url: string | null } | null;

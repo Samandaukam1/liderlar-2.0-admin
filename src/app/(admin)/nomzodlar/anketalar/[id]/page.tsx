@@ -161,6 +161,7 @@ export default async function IntakeDetailPage({
           <Info label="Yuborilgan" value={intake.submitted_at ? formatDate(intake.submitted_at as string) : "—"} />
           <Info label="Oxirgi saqlash" value={intake.last_autosave_at ? timeAgo(intake.last_autosave_at as string) : "—"} />
           <Info label="Telefon / TG" value={`${intake.phone_e164 ?? "—"} · ${intake.telegram_username ?? "—"}`} />
+          <Info label="Instagram" value={intake.instagram_username ? `@${intake.instagram_username}` : "—"} />
         </div>
         {(intake.candidate_id || intake.article_id) && (
           <div className="mt-3 flex flex-wrap gap-3 border-t border-line pt-3 text-sm">
@@ -196,7 +197,12 @@ export default async function IntakeDetailPage({
           answers={initialAnswers}
           photo={primaryPhoto}
           attachments={attachmentViews}
-          contact={{ phone: intake.phone_e164 as string | null, telegram: intake.telegram_username as string | null, consent: intake.consent_given as boolean }}
+          contact={{
+            phone: intake.phone_e164 as string | null,
+            telegram: intake.telegram_username as string | null,
+            instagram: intake.instagram_username as string | null,
+            consent: intake.consent_given as boolean,
+          }}
           consentText={settings.consentText}
           maxUploadBytes={settings.maxUploadBytes}
         />

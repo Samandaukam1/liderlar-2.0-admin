@@ -26,6 +26,16 @@ import {
   undoPaymentConfirmation,
 } from "@/lib/intake/payment.ts";
 import { runBotBatchButton } from "@/lib/intake/publish-batch.ts";
+import {
+  buildCrmListPage,
+  CRM_LIST_BY_BUTTON,
+  CRM_LIST_BY_COMMAND,
+  FILLING_BUTTON_LABEL,
+  parseCrmListCallback,
+  PUBLISHED_BUTTON_LABEL,
+  WAITING_BUTTON_LABEL,
+  type CrmListKind,
+} from "@/lib/intake/crm-lists.ts";
 
 /**
  * Botning KIRUVCHI qatlami — suhbat, tugmalar, callbacklar.
@@ -54,6 +64,23 @@ export const HELP_REPLY = [
   "Botdan foydalanish uchun:",
   "/start — postlarni olish",
   "/stop — postlarni to‘xtatish",
+].join("\n");
+
+/**
+ * The same help plus the editorial actions.
+ *
+ * An ordinary subscriber must not even learn that the CRM lists exist, so the
+ * two texts are separate rather than one text with a conditional tail.
+ */
+export const EDITORIAL_HELP_REPLY = [
+  HELP_REPLY,
+  "",
+  "Tahririyat uchun:",
+  "/hisobot — hozirgi hisobot",
+  "/chop — chop etishga tayyorlarni ishga tushirish",
+  "/chopetilganlar — chop etilganlar ro‘yxati",
+  "/kutayotganlar — kutayotganlar ro‘yxati",
+  "/toldirayotganlar — to‘ldirayotganlar ro‘yxati",
 ].join("\n");
 
 export const NOT_AUTHORIZED_REPLY =
@@ -88,7 +115,24 @@ async function isEditorialChat(chatId: number): Promise<boolean> {
 /** Editors get the working keyboard; ordinary subscribers just receive posts. */
 function keyboardFor(editorial: boolean): string[][] | undefined {
   if (!editorial) return undefined;
-  return [[REPORT_BUTTON_LABEL], [BATCH_BUTTON_LABEL], [UNDO_BUTTON_LABEL]];
+  return [
+    [REPORT_BUTTON_LABEL],
+    [BATCH_BUTTON_LABEL],
+    [UNDO_BUTTON_LABEL],
+    // The three CRM lists read candidate data, so they are shown — and, below,
+    // re-checked — only for editorial chats.
+    [PUBLISHED_BUTTON_LABEL],
+    [WAITING_BUTTON_LABEL, FILLING_BUTTON_LABEL],
+  ];
+}
+
+/** Sends page 1 of a list; later pages replace this message in place. */
+async function sendCrmList(chatId: number, kind: CrmListKind): Promise<void> {
+  const page = await buildCrmListPage(kind, 1);
+  await sendTelegramMessage(chatId, page.text, {
+    inlineKeyboard: page.keyboard.length > 0 ? page.keyboard : undefined,
+  });
+  console.log(`[telegram-webhook] sendMessage success command=crm:${kind} total=${page.total}`);
 }
 
 /**
@@ -183,8 +227,20 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
     return;
   }
 
+  // The CRM lists: one entry per list, reachable as a keyboard button or as a
+  // typed command. Both are re-checked against the editorial chat list — a
+  // label is just text, and anyone can type it.
+  const listKind = CRM_LIST_BY_BUTTON[text] ?? CRM_LIST_BY_COMMAND[command];
+  if (listKind) {
+    if (!editorial) return deny(chatId, keyboard);
+    await sendCrmList(chatId, listKind);
+    return;
+  }
+
   // Never leave a message unanswered.
-  await sendTelegramMessage(chatId, HELP_REPLY, { replyKeyboard: keyboard });
+  await sendTelegramMessage(chatId, editorial ? EDITORIAL_HELP_REPLY : HELP_REPLY, {
+    replyKeyboard: keyboard,
+  });
   console.log("[telegram-webhook] sendMessage success command=help");
 }
 
@@ -204,6 +260,31 @@ async function handleCallbackQuery(
   query: NonNullable<TelegramUpdate["callback_query"]>,
 ): Promise<void> {
   const chatId = query.message?.chat?.id ?? null;
+
+  const listPage = parseCrmListCallback(query.data);
+  if (listPage) {
+    if (chatId == null || !(await isEditorialChat(chatId))) {
+      await safeAnswerCallback(query.id, "Ruxsat yo‘q");
+      return;
+    }
+    await safeAnswerCallback(query.id);
+    const messageId = query.message?.message_id ?? null;
+    // Live data on every tap: the page is re-queried, never paged from a cached
+    // snapshot, so a candidate published a minute ago is already in the list.
+    const page = await buildCrmListPage(listPage.kind, listPage.page);
+    if (messageId == null) {
+      await sendTelegramMessage(chatId, page.text, {
+        inlineKeyboard: page.keyboard.length > 0 ? page.keyboard : undefined,
+      });
+    } else {
+      // Editing keeps one message per list instead of a new one per tap.
+      await editTelegramMessageText(chatId, messageId, page.text, {
+        inlineKeyboard: page.keyboard,
+      });
+    }
+    console.log(`[telegram-webhook] crm list ${listPage.kind} page=${page.page}/${page.pageCount}`);
+    return;
+  }
 
   const blacklistId = parseBlacklistCallback(query.data);
   if (blacklistId) {

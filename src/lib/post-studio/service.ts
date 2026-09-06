@@ -459,39 +459,19 @@ export async function buildCaptionForPost(
   if (!articleUrl) {
     return {
       caption: null,
-      warning: source.publicWebConfigured
-        ? {
-            code: "article_unpublished",
-            message: "Nomzodning maqolasi hali nashr qilinmagan — caption havolasi yo‘q.",
-          }
-        : {
-            code: "article_url_unconfigured",
-            message:
-              "Public sayt manzili sozlanmagan (site_settings → public_web.base_url). " +
-              "Eski liderlar.uz havolasi yaratilmadi; maqola URL'ini qo‘lda tasdiqlang.",
-          },
+      warning: {
+        code: "article_unpublished",
+        message: "Nomzodning maqolasi hali nashr qilinmagan — caption havolasi yo‘q.",
+      },
     };
   }
 
   const settings = await getTelegramSettings();
-  // An admin-confirmed article URL also settles where the public site lives,
-  // so the caption's own site and application links can be derived from it
-  // when public_web.base_url has not been filled in yet.
-  const confirmedOrigin = originOfConfirmedUrl(post.articleUrl);
-  const siteUrl = settings.siteUrl ?? confirmedOrigin;
-  const applicationUrl = settings.applicationUrl ?? (siteUrl ? `${siteUrl}/ariza` : null);
-
-  if (!siteUrl || !applicationUrl) {
-    return {
-      caption: null,
-      warning: {
-        code: "article_url_unconfigured",
-        message:
-          "Caption'dagi sayt va ariza havolalari uchun public_web.base_url sozlanmagan. " +
-          "Maqola havolasini qo'lda tasdiqlasangiz, sayt manzili o'sha havoladan olinadi.",
-      },
-    };
-  }
+  // An admin-confirmed article URL settles where the public site lives for this
+  // one post, so it still wins over the resolved origin: pasting a link is an
+  // explicit statement, and a preview/staging post must keep linking to itself.
+  const siteUrl = originOfConfirmedUrl(post.articleUrl) ?? settings.siteUrl;
+  const applicationUrl = settings.applicationUrl;
 
   return {
     caption: buildTelegramCaption({

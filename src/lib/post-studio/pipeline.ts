@@ -10,6 +10,7 @@ import { findPublishedNamesake, NAMESAKE_SKIP_MESSAGE } from "@/lib/intake/names
 import { isBlacklisted } from "@/lib/intake/blacklist";
 import { createPostDraft, getPost, updatePost } from "./repository.ts";
 import { preparePortrait, refreshPostCaption, renderAndStorePost } from "./service.ts";
+import { sendInstagramFollowUp } from "./instagram-followup.ts";
 import { downloadPostAsset } from "./storage.ts";
 import {
   deliverPostToSubscribers,
@@ -407,6 +408,10 @@ async function deliverFinishedPost(
         telegram_failed_count: result.failed,
       });
     }
+    // The Instagram note follows the poster, never precedes it, and only when
+    // the candidate gave a handle. It is sent at most once per post regardless
+    // of how many times this path is retried.
+    await sendInstagramFollowUp(postId, candidateId);
     return { sent: result.sent, failed: result.failed, skipped: result.skipped };
   } catch (err) {
     console.error("[pipeline] telegram delivery failed", err instanceof Error ? err.message : err);

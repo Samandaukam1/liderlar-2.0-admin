@@ -1,6 +1,7 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
+import { CANONICAL_PUBLIC_SITE_URL } from "@/lib/public-site";
 import { resolvePublicWebUrl } from "./site-origin.ts";
 import { buildTelegramCaption, captionExceedsLimit } from "./telegram-markdown.ts";
 import {
@@ -25,10 +26,11 @@ import { POST_DELIVERY_CHAT_IDS_KEY } from "./delivery-recipients.ts";
 
 /**
  * Where "ariza qoldiring" in every caption points when nothing overrides it.
- * The application form lives on the public site at this fixed path; it is not
- * derived from the poster's own origin, which may be a preview deployment.
+ * The application form lives on the public site at this fixed path; the origin
+ * comes from the canonical constant, never from the poster's own request host,
+ * which may be a preview deployment.
  */
-export const DEFAULT_APPLICATION_URL = "https://liderlar.uz/ariza_qoldirish";
+export const DEFAULT_APPLICATION_URL = `${CANONICAL_PUBLIC_SITE_URL}/ariza_qoldirish`;
 
 export const TELEGRAM_SETTINGS_KEYS = {
   applicationUrl: "telegram_bot.application_url",
@@ -38,9 +40,9 @@ export const TELEGRAM_SETTINGS_KEYS = {
 } as const;
 
 export interface TelegramSettings {
-  /** Null until public_web.base_url (or its env override) is configured. */
-  siteUrl: string | null;
-  applicationUrl: string | null;
+  /** site_settings -> env -> canonical domain; never empty. */
+  siteUrl: string;
+  applicationUrl: string;
   instagramUrl: string;
   username: string;
 }
@@ -50,9 +52,8 @@ export interface TelegramSettings {
  * and never from the request's own host, so a Vercel preview URL cannot leak
  * into a caption that thousands of subscribers receive.
  *
- * `siteUrl` resolves through public-web-url.ts, which has no domain fallback:
- * liderlar.uz still serves the OLD site, so guessing it would link every
- * subscriber to the wrong page. Unconfigured means "no caption yet".
+ * `siteUrl` resolves through lib/public-site.ts, the one place the public
+ * domain is written down.
  */
 export async function getTelegramSettings(): Promise<TelegramSettings> {
   const db = createSupabaseAdminClient();
@@ -74,7 +75,7 @@ export async function getTelegramSettings(): Promise<TelegramSettings> {
 
   return {
     siteUrl,
-    applicationUrl: applicationUrl || null,
+    applicationUrl: applicationUrl || DEFAULT_APPLICATION_URL,
     instagramUrl: pick(
       TELEGRAM_SETTINGS_KEYS.instagramUrl,
       process.env.NEXT_PUBLIC_INSTAGRAM_URL,

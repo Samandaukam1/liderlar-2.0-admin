@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  instagramProfileUrl,
+  normalizeInstagram,
   normalizePhoneE164,
   normalizeTelegram,
   validateContact,
@@ -72,4 +74,75 @@ test("TipTap JSON dan plain text ajratish", () => {
   assert.ok(text.includes("Salom"));
   assert.ok(text.includes("dunyo"));
   assert.equal(tiptapToPlainText(null), "");
+});
+
+
+/* ------------------------------ Instagram ------------------------------ */
+
+test("instagram: @username, username va to'liq havola bir xil kanonik shaklga keladi", () => {
+  assert.equal(normalizeInstagram("liderlar_uz"), "liderlar_uz");
+  assert.equal(normalizeInstagram("@liderlar_uz"), "liderlar_uz");
+  assert.equal(normalizeInstagram("  @liderlar_uz  "), "liderlar_uz");
+  assert.equal(normalizeInstagram("https://instagram.com/liderlar_uz"), "liderlar_uz");
+  assert.equal(normalizeInstagram("http://www.instagram.com/liderlar_uz/"), "liderlar_uz");
+  assert.equal(normalizeInstagram("instagram.com/liderlar_uz"), "liderlar_uz");
+  assert.equal(normalizeInstagram("www.instagram.com/liderlar_uz?igsh=abc123"), "liderlar_uz");
+  assert.equal(normalizeInstagram("instagr.am/liderlar_uz"), "liderlar_uz");
+});
+
+test("instagram: kanonik shakl kichik harfda va nuqtali username saqlanadi", () => {
+  assert.equal(normalizeInstagram("Liderlar.UZ"), "liderlar.uz");
+  assert.equal(normalizeInstagram("https://instagram.com/Liderlar.UZ/"), "liderlar.uz");
+  assert.equal(instagramProfileUrl("liderlar.uz"), "https://instagram.com/liderlar.uz");
+});
+
+test("instagram: yaroqsiz qiymat username sifatida saqlanmaydi", () => {
+  assert.equal(normalizeInstagram(""), null);
+  assert.equal(normalizeInstagram("   "), null);
+  assert.equal(normalizeInstagram(null), null);
+  assert.equal(normalizeInstagram("https://facebook.com/liderlar"), null, "boshqa tarmoq");
+  assert.equal(normalizeInstagram("https://t.me/liderlar"), null);
+  assert.equal(normalizeInstagram("bir ikki"), null, "bo'sh joy");
+  assert.equal(normalizeInstagram("..."), null, "faqat nuqtalar username emas");
+  assert.equal(normalizeInstagram("a".repeat(31)), null, "30 belgidan uzun");
+  assert.equal(normalizeInstagram("a".repeat(30)), "a".repeat(30));
+});
+
+test("kontakt: instagram IXTIYORIY — bo'sh bo'lsa hech narsani bloklamaydi", () => {
+  const withoutField = validateContact({
+    phone: "901234567",
+    telegram: "@liderlar",
+    consent: true,
+  });
+  assert.ok(withoutField.ok);
+  assert.equal(withoutField.instagram, null);
+
+  const emptyString = validateContact({
+    phone: "901234567",
+    telegram: "@liderlar",
+    instagram: "   ",
+    consent: true,
+  });
+  assert.ok(emptyString.ok);
+  assert.equal(emptyString.instagram, null);
+});
+
+test("kontakt: instagram to'ldirilsa kanonik saqlanadi, xato bo'lsa aytiladi", () => {
+  const good = validateContact({
+    phone: "901234567",
+    telegram: "@liderlar",
+    instagram: "https://instagram.com/Liderlar_UZ/",
+    consent: true,
+  });
+  assert.ok(good.ok);
+  assert.equal(good.instagram, "liderlar_uz");
+
+  const bad = validateContact({
+    phone: "901234567",
+    telegram: "@liderlar",
+    instagram: "https://facebook.com/liderlar",
+    consent: true,
+  });
+  assert.ok(!bad.ok);
+  assert.ok(bad.errors.some((e) => e.includes("Instagram")));
 });

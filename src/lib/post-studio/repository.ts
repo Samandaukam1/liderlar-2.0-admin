@@ -47,8 +47,6 @@ export interface CandidateSourceData {
   articleUrl: string | null;
   /** candidates.status — what actually decides whether the profile is live. */
   candidateStatus: string | null;
-  /** False when public_web.base_url is unset — the admin must confirm a URL. */
-  publicWebConfigured: boolean;
   portraitSourceUrl: string | null;
   canonicalQuote: CanonicalIntakeQuote | null;
 }
@@ -392,13 +390,12 @@ export async function loadCandidateSourceData(
       : null;
 
   const sourceIntakeId = (candidate.source_intake_id as string | null) ?? null;
-  const [canonicalQuote, portraitSource, publicWebConfigured] = await Promise.all([
+  const [canonicalQuote, portraitSource] = await Promise.all([
     loadCanonicalIntakeQuote(candidate.id as string, sourceIntakeId),
     resolveCandidatePortraitSource(candidate.id as string, {
       sourceIntakeId,
       avatarUrl: (candidate.avatar_url as string | null) ?? null,
     }),
-    buildCandidateArticleUrl("probe").then((url) => url !== null),
   ]);
 
   const quotes: QuoteCandidate[] = canonicalQuote?.text
@@ -432,7 +429,6 @@ export async function loadCandidateSourceData(
       : null,
     articleUrl,
     candidateStatus,
-    publicWebConfigured,
     portraitSourceUrl: portraitSourceReference(portraitSource),
     canonicalQuote,
   };

@@ -1,4 +1,7 @@
 import { createHash, randomBytes } from "crypto";
+// Relative, not "@/": this module runs under the raw node:test runner, which
+// resolves no tsconfig path aliases.
+import { publicSiteUrlFromEnv } from "./public-site.ts";
 
 /** 32 random bytes, base64url — shown to the admin exactly once. */
 export function generateRawToken(): string {
@@ -11,8 +14,7 @@ export function hashToken(raw: string): string {
 }
 
 export function buildUpdateLink(rawToken: string): string {
-  const base = process.env.NEXT_PUBLIC_SITE_URL ?? "https://liderlar.uz";
-  return `${base.replace(/\/$/, "")}/yangilash/${rawToken}`;
+  return `${publicSiteUrlFromEnv(process.env.NEXT_PUBLIC_SITE_URL)}/yangilash/${rawToken}`;
 }
 
 export function buildTelegramMessage(candidateName: string, link: string): string {

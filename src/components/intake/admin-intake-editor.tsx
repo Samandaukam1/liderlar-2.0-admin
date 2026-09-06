@@ -26,7 +26,12 @@ export function AdminIntakeEditor({
   answers: IntakeAnswerView[];
   photo: { url: string | null; file_name: string } | null;
   attachments: IntakeAttachmentView[];
-  contact: { phone: string | null; telegram: string | null; consent: boolean };
+  contact: {
+    phone: string | null;
+    telegram: string | null;
+    instagram: string | null;
+    consent: boolean;
+  };
   consentText: string;
   maxUploadBytes: number;
 }) {

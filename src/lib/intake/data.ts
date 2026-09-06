@@ -174,6 +174,7 @@ export interface PublicIntakeState {
     last_completed_question_no: number;
     phone_e164: string | null;
     telegram_username: string | null;
+    instagram_username: string | null;
     consent_given: boolean;
   };
   template: IntakeTemplate;
@@ -194,7 +195,7 @@ export async function loadPublicIntakeState(intakeId: string): Promise<PublicInt
   const { data: intake } = await admin
     .from("candidate_intakes")
     .select(
-      "id, status, full_name, gender, template_id, current_question_no, last_completed_question_no, phone_e164, telegram_username, consent_given",
+      "id, status, full_name, gender, template_id, current_question_no, last_completed_question_no, phone_e164, telegram_username, instagram_username, consent_given",
     )
     .eq("id", intakeId)
     .maybeSingle();

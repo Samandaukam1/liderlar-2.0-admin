@@ -78,8 +78,6 @@ interface StudioProps {
     candidateStatus: string | null;
     /** The candidate's article row status, or null when there is no article. */
     articleStatus: string | null;
-    /** Whether site_settings → public_web.base_url resolves to an origin. */
-    publicWebConfigured: boolean;
   };
   delivery: { sent: number; failed: number; lastSentAt: string | null };
   subscribers: { total: number; active: number; stopped: number; lastSentAt: string | null };
@@ -106,15 +104,11 @@ const STATUS_LABELS: Record<string, string> = {
 function describeProfileState(candidate: {
   articleUrl: string | null;
   candidateStatus: string | null;
-  publicWebConfigured: boolean;
 }): string {
   if (candidate.articleUrl) return "Nashr qilingan sahifa";
   if (candidate.candidateStatus !== "published") {
     const label = STATUS_LABELS[candidate.candidateStatus ?? ""] ?? candidate.candidateStatus ?? "noma’lum";
     return `Nomzod sahifasi hali nashr qilinmagan (holati: ${label})`;
-  }
-  if (!candidate.publicWebConfigured) {
-    return "Sahifa nashr qilingan, lekin public sayt manzili sozlanmagan — havolani qo‘lda tasdiqlang";
   }
   return "Sahifa havolasi aniqlanmadi";
 }

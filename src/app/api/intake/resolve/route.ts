@@ -49,6 +49,7 @@ export async function POST(request: NextRequest) {
     contact: {
       phone: state.intake.phone_e164,
       telegram: state.intake.telegram_username,
+      instagram: state.intake.instagram_username,
       consent: state.intake.consent_given,
     },
     template: {

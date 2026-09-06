@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
   const contact = validateContact({
     phone: String(body.phone ?? ""),
     telegram: String(body.telegram ?? ""),
+    instagram: String(body.instagram ?? ""),
     consent: body.consent === true,
   });
   if (!contact.ok) return noStoreJson({ ok: false, errors: contact.errors }, 422);
@@ -104,6 +105,7 @@ export async function POST(request: NextRequest) {
     .update({
       phone_e164: contact.phone,
       telegram_username: contact.telegram,
+      instagram_username: contact.instagram,
       consent_given: true,
       consent_text_version: settings.consentVersion,
       consent_at: new Date().toISOString(),

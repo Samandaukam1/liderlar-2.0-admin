@@ -6,6 +6,7 @@ import { composeArticleSections } from "@/lib/candidates/article-quality";
 import { serializeCandidateData } from "@/lib/candidates/serializer";
 import { saveCandidateProfile, updateCandidateAiMetadata } from "@/lib/candidates/repository";
 import { copyFinalPhotoToAvatar } from "@/lib/intake/promote";
+import { syncCandidateInstagramLink } from "@/lib/intake/instagram-link";
 import { getCandidatePublicationReadiness } from "@/lib/candidates/publication-service";
 import { slugify } from "@/lib/utils";
 
@@ -30,7 +31,7 @@ export async function promoteIntakeToDraft(intakeId: string, actorId: string | n
 
   const { data: intake } = await admin
     .from("candidate_intakes")
-    .select("full_name, status, short_bio, biography_draft, template_id")
+    .select("full_name, status, short_bio, biography_draft, template_id, instagram_username")
     .eq("id", intakeId)
     .maybeSingle();
   if (!intake) return { ok: false, error: "Anketa topilmadi" };
@@ -92,6 +93,13 @@ export async function promoteIntakeToDraft(intakeId: string, actorId: string | n
   });
   if (error) return { ok: false, error: error.message };
   const res = data as { candidate_id: string; article_id: string; candidate_slug: string };
+
+  // The optional Instagram handle travels with the candidate: liderlar-web
+  // renders every social_links row, so this is all the public profile needs.
+  await syncCandidateInstagramLink(
+    res.candidate_id,
+    intake.instagram_username as string | null,
+  );
 
   const structured = {
     ...normalized.data,

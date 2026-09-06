@@ -339,7 +339,7 @@ export async function saveFinalAnswerAction(
 /** Admin "finish manual entry": save contact/consent then run the submit RPC. */
 export async function submitManualIntakeAction(
   intakeId: string,
-  contact: { phone: string; telegram: string; consent: boolean },
+  contact: { phone: string; telegram: string; instagram?: string; consent: boolean },
 ): Promise<IntakeActionResult> {
   const ctx = await requirePermission("intakes.edit");
   const check = validateContact(contact);
@@ -352,6 +352,7 @@ export async function submitManualIntakeAction(
     .update({
       phone_e164: check.phone,
       telegram_username: check.telegram,
+      instagram_username: check.instagram,
       consent_given: contact.consent === true,
       consent_text_version: settings.consentVersion,
       consent_at: new Date().toISOString(),

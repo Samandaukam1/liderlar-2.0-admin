@@ -152,22 +152,25 @@ export async function sendTelegramMessage(
 }
 
 /**
- * Replaces an answered question's text and drops its buttons.
+ * Rewrites a message in place.
  *
- * The same question goes to several chats at once; once anyone answers, the
- * copies still showing live buttons are stale. Rewriting them is what stops a
- * second editor from answering a question that is already decided.
+ * With no keyboard given the buttons are DROPPED, which is the answered-question
+ * case: the same question goes to several chats at once, and once anyone
+ * answers, the copies still showing live buttons are stale. Passing a keyboard
+ * replaces them instead — that is how a paged list moves to the next page
+ * without adding a new message to the chat for every tap.
  */
 export async function editTelegramMessageText(
   chatId: number,
   messageId: number,
   text: string,
+  options: { inlineKeyboard?: InlineButton[][] } = {},
 ): Promise<void> {
   await callTelegram("editMessageText", {
     chat_id: chatId,
     message_id: messageId,
     text,
-    reply_markup: { inline_keyboard: [] },
+    reply_markup: { inline_keyboard: options.inlineKeyboard ?? [] },
   });
 }
 
