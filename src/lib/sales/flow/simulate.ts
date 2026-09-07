@@ -98,14 +98,13 @@ export function simulateStep(
   const transition = resolveTransition(state.stage, intent);
 
   if (!transition) {
-    if (intent === "question" || intent === "need_info") {
-      // Real oqimda bu yerda tasdiqlangan bilim ishlatiladi. Simulyator
-      // AI'ni chaqirmaydi — u ssenariy qadamlarini tekshirish uchun.
-      notes.push("bilim bazasidan javob (simulyatsiyada matn yaratilmaydi)");
-    } else if (TERMINAL_STAGES.includes(state.stage)) {
+    if (TERMINAL_STAGES.includes(state.stage)) {
       notes.push("ssenariy tugagan bosqich — javob berilmadi");
     } else {
-      notes.push(`${state.stage} bosqichida "${intent}" uchun qadam yo‘q`);
+      // Dvigateldagi bilan bir xil qoida: ssenariyda qadam bo'lmasa
+      // bilim bazasiga boriladi (e'tiroz ham shu yerga tushadi).
+      // Simulyator AI'ni chaqirmaydi — u qadamlarni tekshirish uchun.
+      notes.push(`bilim bazasidan javob (niyat: ${intent})`);
     }
     return { state: { ...state, pendingFollowups }, step };
   }

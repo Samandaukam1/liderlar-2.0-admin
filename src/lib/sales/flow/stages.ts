@@ -164,6 +164,20 @@ export const STAGE_TRANSITIONS: readonly StageTransition[] = [
     to: "article_decision",
     templates: ["article_decision"],
   },
+  // Mijoz "hali tanishmadim" ni QAYTA yozsa.
+  //
+  // NEGA KERAK: har kiruvchi xabar kutilayotgan follow-up'ni bekor
+  // qiladi. Bu qadam bo'lmasa, bekor qilingan 5 daqiqalik eslatma
+  // o'rniga hech narsa rejalashtirilmasdi va suhbat SHU YERDA ABADIY
+  // to'xtab qolardi. O'z-o'ziga qaytish bosqichni surmaydi, faqat
+  // taymerni qaytadan qo'yadi.
+  {
+    from: "waiting_offer_review",
+    intent: "not_reviewed",
+    to: "waiting_offer_review",
+    templates: [],
+    followup: { type: "article_decision", delayMinutes: 5 },
+  },
 
   // 9–11. Maqola yozamizmi?
   {
@@ -187,6 +201,15 @@ export const STAGE_TRANSITIONS: readonly StageTransition[] = [
     templates: ["request_full_name"],
   },
   { from: "followup_later", intent: "no", to: "declined", templates: ["declined"] },
+  // "Keyinroq" ni qayta aytsa — taymer qaytadan qo'yiladi (yuqoridagi
+  // bilan bir xil sabab: bekor qilingan eslatma o'rnini bosish kerak).
+  {
+    from: "followup_later",
+    intent: "later",
+    to: "followup_later",
+    templates: [],
+    followup: { type: "article_decision_later", delayMinutes: 60 },
+  },
 
   // 12–14. F.I.Sh. -> anketa havolasi.
   {

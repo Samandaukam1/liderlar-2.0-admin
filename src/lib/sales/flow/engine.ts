@@ -379,8 +379,14 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
   const transition = resolveTransition(conversation.stage, intent);
 
   if (!transition) {
-    // Ssenariyda javobi yo'q — savol bo'lsa bilim bazasidan javob beramiz.
-    if (intent === "question" || intent === "need_info") {
+    // Ssenariyda javobi yo'q — bilim bazasidan javob beramiz.
+    //
+    // `other` HAM shu yerga tushadi, ataylab: e'tiroz ("qimmat ekan")
+    // savol belgisisiz yoziladi va `question` deb tasniflanmaydi. Uni
+    // chetlab o'tsak, mijoz e'tiroz bildirganda JIM QOLARDIK — sotuv
+    // suhbatida eng yomon javob shu. Bilim topilmasa baribir jim
+    // qolamiz, lekin bu endi "bilmayman" qarori, "qaramadim" emas.
+    if (!TERMINAL_STAGES.includes(conversation.stage)) {
       await answerFromKnowledge(context, input.text ?? "");
     } else if (TERMINAL_STAGES.includes(conversation.stage)) {
       result.notes.push("ssenariy tugagan bosqich — javob berilmadi");

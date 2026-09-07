@@ -28,6 +28,7 @@ import {
 } from "../src/lib/sales/flow/simulate.ts";
 import { normalizeForIntent } from "../src/lib/sales/text-normalize.ts";
 import {
+  findUnsupportedNumbers,
   MIN_KNOWLEDGE_SCORE,
   scoreKnowledge,
   selectKnowledge,
@@ -473,6 +474,99 @@ test("moslik bali ustuvorlikdan ALOHIDA hisoblanadi", () => {
   assert.ok(scoredManual.score > scoredAi.score);
   assert.ok(scoredManual.score > scoredManual.relevance);
   assert.equal(scoredAi.score, scoredAi.relevance);
+});
+
+/* ============ 7b. SSENARIY BOSHI BERK KO‘CHAGA KIRMAYDI ================ */
+
+test("“tanishmadim” qayta yozilsa eslatma QAYTA rejalashtiriladi", () => {
+  // Har kiruvchi xabar kutilayotgan follow-up'ni bekor qiladi. Bu qadam
+  // bo'lmasa, bekor qilingan eslatma o'rniga hech narsa qo'yilmasdi va
+  // suhbat shu yerda abadiy to'xtab qolardi.
+  const result = simulateStep(
+    { stage: "waiting_offer_review", fullName: null, pendingFollowups: ["article_decision"] },
+    { text: "hali tanishmadim" },
+  );
+  assert.deepEqual(result.step.cancelledFollowups, ["article_decision"]);
+  assert.deepEqual(result.step.scheduledFollowups, ["article_decision (5 daqiqa)"]);
+  assert.equal(result.step.stageAfter, "waiting_offer_review");
+});
+
+test("“keyinroq” qayta yozilsa 1 soatlik eslatma QAYTA qo‘yiladi", () => {
+  const result = simulateStep(
+    { stage: "followup_later", fullName: null, pendingFollowups: ["article_decision_later"] },
+    { text: "keyinroq yozaman" },
+  );
+  assert.deepEqual(result.step.scheduledFollowups, ["article_decision_later (60 daqiqa)"]);
+  assert.equal(result.step.stageAfter, "followup_later");
+});
+
+test("e’tiroz ham bilim qidiruviga boradi — jim qolinmaydi", () => {
+  // "qimmat ekan" savol belgisisiz yoziladi va `question` emas. Uni
+  // chetlab o'tsak, mijoz e'tiroz bildirganda javobsiz qolardi.
+  const result = simulateStep(
+    { stage: "offer_sent", fullName: null, pendingFollowups: [] },
+    { text: "qimmat ekan" },
+  );
+  assert.equal(result.step.intent, "other");
+  assert.ok(result.step.notes.some((n) => n.includes("bilim bazasidan javob")));
+});
+
+test("ssenariy tugagan bosqichda bot o‘zidan gapirmaydi", () => {
+  const result = simulateStep(
+    { stage: "paid", fullName: null, pendingFollowups: [] },
+    { text: "rahmat" },
+  );
+  assert.equal(result.step.sent.length, 0);
+  assert.ok(result.step.notes.some((n) => n.includes("ssenariy tugagan")));
+});
+
+/* ============ 7c. CHEGIRMADAGI NARX BILIMI (6-band) ==================== */
+
+const PRICE_MIGRATION = readFileSync(
+  join(ROOT, "supabase/migrations/20260907210000_sales_price_knowledge.sql"),
+  "utf8",
+);
+
+const discountKnowledge: RetrievableKnowledge = {
+  id: "k-discount",
+  category: "price",
+  sourceType: "manual",
+  priority: 100,
+  confidence: 1,
+  question:
+    "Hammasi 38 mingmi? 38 ming to‘laymanmi? 38 ming yetadimi? Narxi qancha? Boshqa to‘lov bormi?",
+  answer:
+    "Hozirda chegirmadagi narx 38 000 so‘m (38 ming). Bu chegirma taklifi faqat bugun amal qiladi.",
+  tags: ["narx", "chegirma", "to‘lov"],
+};
+
+test("chegirma savolining barcha shakli bilimga ulanadi", () => {
+  for (const question of [
+    "hammasi 38 mingmi?",
+    "38 ming to‘laymanmi?",
+    "38 ming yetadimi?",
+    "narxi qancha?",
+  ]) {
+    const selection = selectKnowledge([discountKnowledge], { query: question, intentKey: null });
+    assert.equal(selection.empty, false, question);
+  }
+});
+
+test("bilim ikkala son shaklini ham qamraydi", () => {
+  // Faqat "38 000" yozilsa, model tabiiy ravishda "38 ming" deganda son
+  // manbada topilmay qolardi va JAVOB YUBORILMASDI.
+  const allowed = [`${discountKnowledge.question} ${discountKnowledge.answer}`];
+  assert.deepEqual(findUnsupportedNumbers("Hozirda chegirmadagi narx 38 000 so‘m.", allowed), []);
+  assert.deepEqual(findUnsupportedNumbers("Ha, 38 ming so‘m.", allowed), []);
+  // O'ylab topilgan narx esa baribir ushlanadi.
+  assert.deepEqual(findUnsupportedNumbers("Narxi 45 ming so‘m.", allowed), ["45"]);
+});
+
+test("chegirma bilimi seed qilingan va bugungi cheklov aytilgan", () => {
+  assert.ok(PRICE_MIGRATION.includes("manual:price:discount-38k"));
+  assert.ok(PRICE_MIGRATION.includes("38 000 so‘m (38 ming)"));
+  assert.ok(PRICE_MIGRATION.includes("faqat bugun amal qiladi"));
+  assert.ok(PRICE_MIGRATION.includes("'approved'"));
 });
 
 /* ================= 8. MIGRATSIYA VA SEED KAFOLATLARI =================== */
