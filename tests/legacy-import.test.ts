@@ -325,9 +325,27 @@ test("the fingerprint changes with the source and not with our code", () => {
   assert.equal(a, legacyRowFingerprint({ ...ROW, Title: `${ROW.Title}  ` }));
 });
 
-test("the importer upserts on the source id, so a second run cannot duplicate", () => {
+test("a second run updates rather than duplicating", () => {
   const script = fs.readFileSync("scripts/import-legacy-feed.ts", "utf8");
-  assert.match(script, /onConflict: "legacy_source_id"/);
+  const flush = script.slice(script.indexOf("async function flush"), script.indexOf("async function run"));
+
+  // Existing rows are looked up by source id, then UPDATED through the primary
+  // key; only genuinely new rows are inserted.
+  assert.match(flush, /\.select\("id, legacy_source_id, import_checksum"\)/);
+  assert.match(flush, /\.in\("legacy_source_id", sourceIds\)/);
+  assert.match(flush, /!existing\.has\(item\.record\.legacy_source_id\)[\s\S]*?\.map\(payload\)/);
+  assert.match(flush, /\.upsert\(updates, \{ onConflict: "id" \}\)/);
+
+  // NOT onConflict on legacy_source_id: its unique index is partial
+  // (`where deleted_at is null`) and Postgres refuses ON CONFLICT against a
+  // partial index without a matching WHERE, which PostgREST cannot send.
+  // Production answered exactly that: "there is no unique or exclusion
+  // constraint matching the ON CONFLICT specification".
+  assert.ok(
+    !/\.upsert\([\s\S]*?onConflict: "legacy_source_id"/.test(flush),
+    "the source id is never used as an ON CONFLICT target",
+  );
+
   // A repeat of the same id inside one file is skipped rather than racing.
   assert.match(script, /report\.duplicates \+= 1/);
 

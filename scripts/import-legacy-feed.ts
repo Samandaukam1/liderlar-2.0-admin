@@ -119,6 +119,8 @@ interface Report {
   draft: number;
   raggedRows: number;
   written: number;
+  inserted: number;
+  updated: number;
   skippedUnchanged: number;
   invalidExamples: { line: number; postId: string; title: string; issues: string[] }[];
   duplicateExamples: { postId: string; title: string; firstLine: number; line: number }[];
@@ -144,6 +146,8 @@ function emptyReport(options: Options): Report {
     draft: 0,
     raggedRows: 0,
     written: 0,
+    inserted: 0,
+    updated: 0,
     skippedUnchanged: 0,
     invalidExamples: [],
     duplicateExamples: [],
@@ -179,41 +183,74 @@ interface Pending {
 /**
  * Bir to'plamni yozadi.
  *
- * `--resume` da avval shu to'plamdagi `legacy_source_id` lar bo'yicha mavjud
- * checksum'lar o'qiladi va o'zgarmaganlari tashlab yuboriladi — bu qayta
- * yugurtirishni deyarli tekin qiladi.
+ * IDEMPOTENTLIK QANDAY ISHLAYDI. Avval shu to'plamdagi `legacy_source_id` lar
+ * bo'yicha mavjud qatorlar o'qiladi; topilganlari YANGILANADI (o'z `id` si
+ * bo'yicha), topilmaganlari QO'SHILADI. Shuning uchun bitta CSV ikki marta
+ * ishlatilsa ham ikkinchi nusxa yaratilmaydi.
+ *
+ * Nega `upsert(..., { onConflict: "legacy_source_id" })` emas: jadvaldagi
+ * unique indeks QISMAN (`where deleted_at is null`), Postgres esa qisman
+ * indeksni `ON CONFLICT (ustun)` bilan ishlata olmaydi — u indeksga mos
+ * `WHERE` bandini talab qiladi, PostgREST esa uni yubormaydi. Production'da
+ * aynan shu xato chiqdi: "there is no unique or exclusion constraint matching
+ * the ON CONFLICT specification". Birlamchi kalit (`id`) bo'yicha upsert esa
+ * to'liq unique, shuning uchun yangilash o'sha yo'l bilan ketadi.
+ *
+ * Qisman indeks baribir himoya bo'lib qoladi: ikkita parallel yugurish bir
+ * xil `legacy_source_id` ni qo'shmoqchi bo'lsa, ikkinchisini baza rad etadi.
+ *
+ * `--resume` da checksum o'zgarmagan qator umuman yozilmaydi.
  */
 async function flush(db: Client, batch: Pending[], report: Report, resume: boolean): Promise<void> {
   if (batch.length === 0) return;
 
+  const sourceIds = batch.map((item) => item.record.legacy_source_id);
+  const { data: existingRows, error: readError } = await db
+    .from("legacy_posts")
+    .select("id, legacy_source_id, import_checksum")
+    .in("legacy_source_id", sourceIds);
+  if (readError) throw new Error(`mavjud qatorlarni o'qishda xato: ${readError.message}`);
+
+  const existing = new Map(
+    (existingRows ?? []).map((row) => [
+      row.legacy_source_id as string,
+      { id: row.id as string, checksum: (row.import_checksum as string | null) ?? null },
+    ]),
+  );
+
   let toWrite = batch;
   if (resume) {
-    const ids = batch.map((item) => item.record.legacy_source_id);
-    const { data, error } = await db
-      .from("legacy_posts")
-      .select("legacy_source_id, import_checksum")
-      .in("legacy_source_id", ids);
-    if (error) throw new Error(`resume o'qishda xato: ${error.message}`);
-    const known = new Map(
-      (data ?? []).map((row) => [row.legacy_source_id as string, row.import_checksum as string | null]),
+    toWrite = batch.filter(
+      (item) => existing.get(item.record.legacy_source_id)?.checksum !== item.checksum,
     );
-    toWrite = batch.filter((item) => known.get(item.record.legacy_source_id) !== item.checksum);
     report.skippedUnchanged += batch.length - toWrite.length;
   }
   if (toWrite.length === 0) return;
 
-  const { error } = await db.from("legacy_posts").upsert(
-    toWrite.map((item) => ({
-      ...item.record,
-      source_version: "1.0",
-      import_checksum: item.checksum,
-      imported_at: new Date().toISOString(),
-    })),
-    // Idempotentlikning kaliti: konflikt `legacy_source_id` bo'yicha hal
-    // qilinadi, shuning uchun ikkinchi yugurish yangi qator yaratmaydi.
-    { onConflict: "legacy_source_id" },
-  );
-  if (error) throw new Error(`yozishda xato: ${error.message}`);
+  const payload = (item: Pending) => ({
+    ...item.record,
+    source_version: "1.0",
+    import_checksum: item.checksum,
+    imported_at: new Date().toISOString(),
+  });
+
+  const inserts = toWrite
+    .filter((item) => !existing.has(item.record.legacy_source_id))
+    .map(payload);
+  const updates = toWrite
+    .filter((item) => existing.has(item.record.legacy_source_id))
+    .map((item) => ({ id: existing.get(item.record.legacy_source_id)!.id, ...payload(item) }));
+
+  if (inserts.length > 0) {
+    const { error } = await db.from("legacy_posts").insert(inserts);
+    if (error) throw new Error(`qo'shishda xato: ${error.message}`);
+    report.inserted += inserts.length;
+  }
+  if (updates.length > 0) {
+    const { error } = await db.from("legacy_posts").upsert(updates, { onConflict: "id" });
+    if (error) throw new Error(`yangilashda xato: ${error.message}`);
+    report.updated += updates.length;
+  }
   report.written += toWrite.length;
 }
 
@@ -375,6 +412,8 @@ function printReport(report: Report): void {
   if (report.mode === "apply") {
     console.log("");
     line("written", report.written);
+    line("  · inserted", report.inserted);
+    line("  · updated", report.updated);
     line("skipped (unchanged)", report.skippedUnchanged);
   } else {
     console.log("");
