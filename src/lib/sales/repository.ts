@@ -1058,3 +1058,57 @@ export async function getDeepLearningCoverage(): Promise<DeepLearningCoverage> {
 
   return { totalConversations: total, deepLearned: learned, deepLearnedMessages };
 }
+
+/* ======================================================================== *
+ * TEST CHAT — faqat TASDIQLANGAN material
+ *
+ * Sinov oynasi qoralama bilimni ko'rmasligi kerak: 0.1 dagi va'da
+ * "admin tasdiqlamaguncha hech qayerda ishlatilmaydi" edi va sinov ham
+ * "hech qayer" ichida. Shuning uchun bu ikki funksiya status bo'yicha
+ * qattiq filtrlaydi va boshqa joyda ishlatilmaydi.
+ * ======================================================================== */
+
+export async function listApprovedKnowledge(limit = 500): Promise<KnowledgeListItem[]> {
+  const admin = createSupabaseAdminClient();
+  const { data } = await admin
+    .from("sales_knowledge")
+    .select(
+      "id, category, question, answer, status, confidence, tags, source_conversation_id, source_message_id, source_excerpt, created_at, reviewed_at",
+    )
+    .eq("status", "approved")
+    .order("confidence", { ascending: false })
+    .limit(limit);
+
+  return (data ?? []).map((row) => ({
+    id: row.id as string,
+    category: row.category as KnowledgeCategory,
+    question: (row.question as string | null) ?? null,
+    answer: row.answer as string,
+    status: row.status as KnowledgeStatus,
+    confidence: Number(row.confidence ?? 0),
+    tags: (row.tags as string[]) ?? [],
+    sourceConversationId: row.source_conversation_id as string,
+    sourceMessageId: (row.source_message_id as string | null) ?? null,
+    sourceExcerpt: (row.source_excerpt as string | null) ?? null,
+    createdAt: row.created_at as string,
+    reviewedAt: (row.reviewed_at as string | null) ?? null,
+  }));
+}
+
+export async function listApprovedPatterns(limit = 500): Promise<ResponsePatternRow[]> {
+  return listResponsePatterns({ status: "approved", limit });
+}
+
+/** Sinov sahifasi uchun: tasdiqlangan material umuman bormi. */
+export async function getTestChatReadiness(): Promise<{
+  approvedKnowledge: number;
+  approvedPatterns: number;
+  hasStyleProfile: boolean;
+}> {
+  const [approvedKnowledge, approvedPatterns, style] = await Promise.all([
+    countRows("sales_knowledge", [["eq", "status", "approved"]]),
+    countRows("sales_response_patterns", [["eq", "status", "approved"]]),
+    getActiveStyleProfile(),
+  ]);
+  return { approvedKnowledge, approvedPatterns, hasStyleProfile: style != null };
+}

@@ -11,6 +11,7 @@ import {
   startDeepLearning,
   type DeepLearningSnapshot,
 } from "@/lib/sales/deep-learning";
+import { generateTestReply, type TestChatResult } from "@/lib/sales/test-chat";
 import { saveSalesSetting } from "@/lib/sales/settings";
 import { parseRecencyBuckets } from "@/lib/sales/recency";
 import { redactPii, isRedacted } from "@/lib/sales/redact";
@@ -35,6 +36,7 @@ const SALES_PATHS = [
   "/ai-sotuv/suhbatlar",
   "/ai-sotuv/organish",
   "/ai-sotuv/javoblar",
+  "/ai-sotuv/sinov",
   "/ai-sotuv/knowledge",
   "/ai-sotuv/uslub",
   "/ai-sotuv/sozlamalar",
@@ -364,4 +366,60 @@ export async function reviewResponsePatternAction(
 
   revalidateSales();
   return { ok: true };
+}
+
+/* ======================================================================== *
+ * SINOV CHAT
+ *
+ * Bu action HECH QANDAY outbound chaqiruv qilmaydi: javob faqat admin
+ * brauzeriga qaytadi. Telegram transporti import ham qilinmagan.
+ *
+ * Ruxsat `sales.learn` — chunki har xabar pullik AI chaqiruvi qiladi.
+ * Ko'rish (`sales.view`) buning uchun yetarli emas.
+ * ======================================================================== */
+
+const testChatTurnSchema = z.object({
+  role: z.enum(["customer", "assistant"]),
+  text: z.string().min(1).max(2000),
+});
+
+const testChatSchema = z.object({
+  message: z.string().trim().min(1, "Xabar bo‘sh bo‘lmasin").max(2000),
+  history: z.array(testChatTurnSchema).max(20),
+});
+
+export interface TestChatActionResult extends SalesActionResult {
+  result?: TestChatResult;
+}
+
+export async function sendTestChatMessageAction(
+  formData: FormData,
+): Promise<TestChatActionResult> {
+  const ctx = await requirePermission("sales.learn");
+
+  let history: unknown = [];
+  try {
+    history = JSON.parse(String(formData.get("history") ?? "[]"));
+  } catch {
+    return { ok: false, error: "Suhbat konteksti o‘qib bo‘lmadi." };
+  }
+
+  const parsed = testChatSchema.safeParse({
+    message: formData.get("message"),
+    history,
+  });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Forma xatosi" };
+  }
+
+  try {
+    const result = await generateTestReply({
+      message: parsed.data.message,
+      history: parsed.data.history,
+      actorId: ctx.userId,
+    });
+    return { ok: true, result };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Kutilmagan xato." };
+  }
 }
