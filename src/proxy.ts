@@ -19,8 +19,13 @@ const PUBLIC_PATHS = ["/login", "/api/auth", "/api/public"];
  * Redirect" until this existed, and Vercel Cron would have hit the same wall.
  * Each authenticates itself inside its route — X-Telegram-Bot-Api-Secret-Token
  * and CRON_SECRET respectively.
+ *
+ * /api/telegram-sales is the AI sales bot's own webhook (a second, separate
+ * bot with its own token and secret). It is listed explicitly rather than left
+ * to the "/api/telegram" prefix happening to cover it: a rename of either path
+ * must not silently drop one of them back behind the session gate.
  */
-const MACHINE_PATHS = ["/api/telegram", "/api/cron"];
+const MACHINE_PATHS = ["/api/telegram", "/api/telegram-sales", "/api/cron"];
 
 // Candidate secure-link intake is public by design (token-gated at the route
 // layer). Only these paths are exempt from the admin session requirement.

@@ -62,6 +62,11 @@ export const PERMISSIONS = [
   "posts.view",
   "posts.manage",
   "posts.publish",
+  // AI Sotuv (Telegram Business sotuv boti). `sales.learn` alohida:
+  // o'rganish yugurishi pullik AI chaqiruvi qiladi, ko'rish esa qilmaydi.
+  "sales.view",
+  "sales.manage",
+  "sales.learn",
   "notifications.view",
   "notifications.manage",
   "admins.manage",
@@ -122,6 +127,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "media.upload",
     "notifications.view",
     "posts.view",
+    "sales.view",
   ],
   analyst: [
     "dashboard.view",
@@ -133,6 +139,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "applications.view",
     "intakes.view",
     "posts.view",
+    "sales.view",
     "export.run",
   ],
   viewer: VIEW_ONLY,

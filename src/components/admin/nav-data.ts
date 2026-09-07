@@ -22,6 +22,7 @@ import {
   Bot,
   MonitorPlay,
   Megaphone,
+  Handshake,
   Wand2,
   Bell,
   ShieldCheck,
@@ -77,6 +78,22 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: Megaphone,
         permission: "posts.view",
         keywords: "post studio telegram bot iqtibos shablon 1080 ijtimoiy tarmoq",
+      },
+    ],
+  },
+  {
+    // Sotuv boti — POST botidan butunlay alohida tizim (boshqa token,
+    // boshqa webhook, boshqa jadvallar). Shuning uchun "Postlar" guruhiga
+    // qo'shilmadi.
+    label: "AI Sotuv",
+    items: [
+      {
+        label: "AI Sotuv",
+        href: "/ai-sotuv",
+        icon: Handshake,
+        permission: "sales.view",
+        keywords:
+          "sotuv bot telegram business suhbat chat mijoz o'rganish learning knowledge bilim baza uslub style sozlama",
       },
     ],
   },
