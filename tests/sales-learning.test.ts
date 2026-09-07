@@ -6,6 +6,7 @@ import {
   DEFAULT_RECENCY_BUCKETS,
   ageInDays,
   bucketLabel,
+  LEGACY_V01_RECENCY_BUCKETS,
   parseRecencyBuckets,
   recencyWeight,
   weightForDate,
@@ -31,16 +32,23 @@ const daysAgo = (n: number) => new Date(NOW.getTime() - n * 24 * 60 * 60 * 1000)
 /* =========================== RECENCY OG‘IRLIKLARI ========================= */
 
 test("og‘irliklar texnik topshiriqdagi jadvalga aynan mos", () => {
+  // Chuqur o‘rganish bilan birga jadval yetti pog‘onaga o‘tdi: uslub
+  // namunalari ko‘payganda yaqin oraliqni mayda bo‘lish oxirgi haftani
+  // aniq ajratib ko‘rsatadi.
   const cases: Array<[number, number]> = [
     [0, 1.0],
-    [7, 1.0],
-    [8, 0.8],
-    [30, 0.8],
-    [31, 0.5],
-    [90, 0.5],
-    [91, 0.3],
-    [180, 0.3],
-    [181, 0.15],
+    [3, 1.0],
+    [4, 0.95],
+    [7, 0.95],
+    [8, 0.85],
+    [14, 0.85],
+    [15, 0.7],
+    [30, 0.7],
+    [31, 0.45],
+    [60, 0.45],
+    [61, 0.3],
+    [90, 0.3],
+    [91, 0.15],
     [3650, 0.15],
   ];
   for (const [age, expected] of cases) {
@@ -48,9 +56,22 @@ test("og‘irliklar texnik topshiriqdagi jadvalga aynan mos", () => {
   }
 });
 
+test("0.1 jadvali migratsiya solishtiruvi uchun saqlanib qolgan", () => {
+  // Migratsiya sozlamani FAQAT shu qiymatga teng bo‘lsa yangilaydi —
+  // ya‘ni admin o‘zgartirgan jadval ustidan yozilmaydi.
+  assert.deepEqual(LEGACY_V01_RECENCY_BUCKETS, [
+    { maxAgeDays: 7, weight: 1.0 },
+    { maxAgeDays: 30, weight: 0.8 },
+    { maxAgeDays: 90, weight: 0.5 },
+    { maxAgeDays: 180, weight: 0.3 },
+    { maxAgeDays: null, weight: 0.15 },
+  ]);
+  assert.notDeepEqual(LEGACY_V01_RECENCY_BUCKETS, DEFAULT_RECENCY_BUCKETS);
+});
+
 test("sana bo‘yicha og‘irlik hisoblanadi", () => {
   assert.equal(weightForDate(daysAgo(2), NOW), 1.0);
-  assert.equal(weightForDate(daysAgo(45), NOW), 0.5);
+  assert.equal(weightForDate(daysAgo(45), NOW), 0.45);
   assert.equal(weightForDate(daysAgo(400), NOW), 0.15);
   // Kelajakdagi sana 0 yosh beradi, minus emas.
   assert.equal(ageInDays(new Date(NOW.getTime() + 86_400_000), NOW), 0);
@@ -83,7 +104,15 @@ test("nosoz konfiguratsiya standart jadvalga qaytadi", () => {
 
 test("bucket yorlig‘i oraliqni to‘g‘ri ko‘rsatadi", () => {
   const labels = DEFAULT_RECENCY_BUCKETS.map((b) => bucketLabel(b));
-  assert.deepEqual(labels, ["0–7 kun", "8–30 kun", "31–90 kun", "91–180 kun", "181+ kun"]);
+  assert.deepEqual(labels, [
+    "0–3 kun",
+    "4–7 kun",
+    "8–14 kun",
+    "15–30 kun",
+    "31–60 kun",
+    "61–90 kun",
+    "91+ kun",
+  ]);
 });
 
 /* =========================== O‘RGANISH PROGRESSI ========================== */
@@ -502,7 +531,10 @@ test("xom yozishma uchun public RLS policy YO‘Q", () => {
   assert.ok(/'sales_messages'/.test(MIGRATION));
 });
 
-test("standart og‘irliklar migratsiyada ham bir xil", () => {
+test("0.1 migratsiyasi o‘sha davrdagi og‘irliklarni saqlab turadi", () => {
+  // Bu fayl TARIXIY: u qo‘llanган bazalarda o‘sha qiymatlar turgan va
+  // ikkinchi migratsiya ularni shu asosda taniydi. Shuning uchun u
+  // yangi jadvalga moslab tahrirlanmaydi.
   for (const weight of ["1.00", "0.80", "0.50", "0.30", "0.15"]) {
     assert.ok(MIGRATION.includes(weight), weight);
   }

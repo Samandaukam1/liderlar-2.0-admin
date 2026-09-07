@@ -778,3 +778,283 @@ export async function listStyleProfiles(limit = 10): Promise<StyleProfileRow[]> 
     computedAt: row.computed_at as string,
   }));
 }
+
+/* ======================================================================== *
+ * CHUQUR O'RGANISH — niyatlar, javob kutubxonasi, natijalar
+ * ======================================================================== */
+
+import type { SalesOutcome } from "./outcome.ts";
+import type { IntentKind } from "./intents.ts";
+
+export interface IntentRow {
+  id: string;
+  key: string;
+  label: string;
+  kind: IntentKind;
+  isKnown: boolean;
+  occurrences: number;
+  conversationCount: number;
+  share: number;
+  examples: string[];
+  status: KnowledgeStatus;
+  lastSeenAt: string | null;
+}
+
+export async function listIntents(options: {
+  kind?: IntentKind | null;
+  limit?: number;
+} = {}): Promise<IntentRow[]> {
+  const admin = createSupabaseAdminClient();
+  let query = admin
+    .from("sales_intents")
+    .select(
+      "id, intent_key, label, kind, is_known, occurrences, conversation_count, share, examples, status, last_seen_at",
+    )
+    .order("occurrences", { ascending: false })
+    .limit(options.limit ?? 50);
+
+  if (options.kind) query = query.eq("kind", options.kind);
+
+  const { data } = await query;
+  return (data ?? []).map((row) => ({
+    id: row.id as string,
+    key: row.intent_key as string,
+    label: row.label as string,
+    kind: row.kind as IntentKind,
+    isKnown: Boolean(row.is_known),
+    occurrences: (row.occurrences as number) ?? 0,
+    conversationCount: (row.conversation_count as number) ?? 0,
+    share: Number(row.share ?? 0),
+    examples: (row.examples as string[]) ?? [],
+    status: row.status as KnowledgeStatus,
+    lastSeenAt: (row.last_seen_at as string | null) ?? null,
+  }));
+}
+
+export interface ResponsePatternRow {
+  id: string;
+  intentKey: string;
+  intentLabel: string;
+  intentKind: IntentKind;
+  customerExample: string;
+  responseExample: string;
+  frequency: number;
+  successCount: number;
+  unknownCount: number;
+  /** null — barcha natija noma'lum. 0 dan farqli: 0 "ishlamadi". */
+  successRate: number | null;
+  lastSeenAt: string | null;
+  recencyWeight: number;
+  conversationIds: string[];
+  status: KnowledgeStatus;
+}
+
+function mapPattern(row: Record<string, unknown>): ResponsePatternRow {
+  return {
+    id: row.id as string,
+    intentKey: row.intent_key as string,
+    intentLabel: row.intent_label as string,
+    intentKind: (row.intent_kind as IntentKind) ?? "question",
+    customerExample: (row.customer_example as string) ?? "",
+    responseExample: (row.response_example as string) ?? "",
+    frequency: (row.frequency as number) ?? 0,
+    successCount: (row.success_count as number) ?? 0,
+    unknownCount: (row.unknown_count as number) ?? 0,
+    successRate: row.success_rate == null ? null : Number(row.success_rate),
+    lastSeenAt: (row.last_seen_at as string | null) ?? null,
+    recencyWeight: Number(row.recency_weight ?? 0),
+    conversationIds: (row.conversation_ids as string[]) ?? [],
+    status: row.status as KnowledgeStatus,
+  };
+}
+
+const PATTERN_SELECT =
+  "id, intent_key, intent_label, intent_kind, customer_example, response_example, frequency, success_count, unknown_count, success_rate, last_seen_at, recency_weight, conversation_ids, status";
+
+export async function listResponsePatterns(options: {
+  intentKey?: string | null;
+  status?: KnowledgeStatus | null;
+  limit?: number;
+} = {}): Promise<ResponsePatternRow[]> {
+  const admin = createSupabaseAdminClient();
+  let query = admin
+    .from("sales_response_patterns")
+    .select(PATTERN_SELECT)
+    .order("frequency", { ascending: false })
+    .limit(options.limit ?? 200);
+
+  if (options.intentKey) query = query.eq("intent_key", options.intentKey);
+  if (options.status) query = query.eq("status", options.status);
+
+  const { data } = await query;
+  return (data ?? []).map((row) => mapPattern(row as Record<string, unknown>));
+}
+
+export interface ResponseLibraryGroup {
+  intent: IntentRow;
+  patterns: ResponsePatternRow[];
+}
+
+/**
+ * "Qaysi xabarga qanday javob" ko'rinishi: niyat -> variantlar.
+ * Variantlar chastota bo'yicha keladi; sahifa ularni natija bo'yicha ham
+ * saralab ko'rsatadi.
+ */
+export async function getResponseLibrary(limit = 25): Promise<ResponseLibraryGroup[]> {
+  const intents = await listIntents({ limit });
+  if (intents.length === 0) return [];
+
+  const admin = createSupabaseAdminClient();
+  const { data } = await admin
+    .from("sales_response_patterns")
+    .select(PATTERN_SELECT)
+    .in(
+      "intent_key",
+      intents.map((intent) => intent.key),
+    )
+    .order("frequency", { ascending: false })
+    .limit(500);
+
+  const byIntent = new Map<string, ResponsePatternRow[]>();
+  for (const row of data ?? []) {
+    const pattern = mapPattern(row as Record<string, unknown>);
+    const list = byIntent.get(pattern.intentKey);
+    if (list) list.push(pattern);
+    else byIntent.set(pattern.intentKey, [pattern]);
+  }
+
+  return intents.map((intent) => ({
+    intent,
+    patterns: byIntent.get(intent.key) ?? [],
+  }));
+}
+
+export async function countOutcomes(): Promise<Record<SalesOutcome, number>> {
+  const admin = createSupabaseAdminClient();
+  const { data } = await admin.from("sales_conversations").select("outcome");
+  const out: Record<SalesOutcome, number> = {
+    unknown: 0,
+    dropped: 0,
+    continued: 0,
+    application_sent: 0,
+    payment_requested: 0,
+    paid: 0,
+    completed: 0,
+  };
+  for (const row of data ?? []) {
+    const outcome = row.outcome as SalesOutcome;
+    if (outcome in out) out[outcome] += 1;
+  }
+  return out;
+}
+
+export interface DeepJobRow {
+  id: string;
+  status: string;
+  stage: string;
+  progressPercent: number;
+  targetConversations: number;
+  processedConversations: number;
+  processedMessages: number;
+  totalMessages: number;
+  knowledgeCreated: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number | null;
+  model: string | null;
+  error: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  aggregate: Record<string, unknown>;
+}
+
+const DEEP_JOB_SELECT =
+  "id, status, stage, progress_percent, target_conversations, processed_conversations, processed_messages, total_messages, knowledge_created, prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd, model, error, started_at, finished_at, aggregate";
+
+function mapDeepJob(row: Record<string, unknown>): DeepJobRow {
+  return {
+    id: row.id as string,
+    status: row.status as string,
+    stage: (row.stage as string) ?? "queued",
+    progressPercent: Number(row.progress_percent ?? 0),
+    targetConversations: (row.target_conversations as number) ?? 0,
+    processedConversations: (row.processed_conversations as number) ?? 0,
+    processedMessages: (row.processed_messages as number) ?? 0,
+    totalMessages: (row.total_messages as number) ?? 0,
+    knowledgeCreated: (row.knowledge_created as number) ?? 0,
+    promptTokens: (row.prompt_tokens as number) ?? 0,
+    completionTokens: (row.completion_tokens as number) ?? 0,
+    totalTokens: (row.total_tokens as number) ?? 0,
+    estimatedCostUsd: row.estimated_cost_usd == null ? null : Number(row.estimated_cost_usd),
+    model: (row.model as string | null) ?? null,
+    error: (row.error as string | null) ?? null,
+    startedAt: (row.started_at as string | null) ?? null,
+    finishedAt: (row.finished_at as string | null) ?? null,
+    aggregate: (row.aggregate as Record<string, unknown>) ?? {},
+  };
+}
+
+export async function getDeepJob(jobId: string): Promise<DeepJobRow | null> {
+  const admin = createSupabaseAdminClient();
+  const { data } = await admin
+    .from("sales_learning_jobs")
+    .select(DEEP_JOB_SELECT)
+    .eq("id", jobId)
+    .maybeSingle();
+  return data ? mapDeepJob(data as Record<string, unknown>) : null;
+}
+
+export async function getLatestDeepJob(): Promise<DeepJobRow | null> {
+  const admin = createSupabaseAdminClient();
+  const { data } = await admin
+    .from("sales_learning_jobs")
+    .select(DEEP_JOB_SELECT)
+    .eq("kind", "deep")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data ? mapDeepJob(data as Record<string, unknown>) : null;
+}
+
+/** Uzilib qolgan yugurish — davom ettirish tugmasi shunga qaraydi. */
+export async function findResumableDeepJob(): Promise<DeepJobRow | null> {
+  const admin = createSupabaseAdminClient();
+  const { data } = await admin
+    .from("sales_learning_jobs")
+    .select(DEEP_JOB_SELECT)
+    .eq("kind", "deep")
+    .eq("status", "running")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data ? mapDeepJob(data as Record<string, unknown>) : null;
+}
+
+export interface DeepLearningCoverage {
+  /** Bazadagi jami suhbat. */
+  totalConversations: number;
+  /** Chuqur o'rganilgan suhbatlar. */
+  deepLearned: number;
+  /** Chuqur o'rganilgan suhbatlardagi xabarlar. */
+  deepLearnedMessages: number;
+}
+
+export async function getDeepLearningCoverage(): Promise<DeepLearningCoverage> {
+  const admin = createSupabaseAdminClient();
+  const [total, learned, messageRows] = await Promise.all([
+    countRows("sales_conversations"),
+    countRows("sales_conversations", [["eq", "deep_learning_status", "learned"]]),
+    admin
+      .from("sales_conversations")
+      .select("deep_learned_message_count")
+      .eq("deep_learning_status", "learned"),
+  ]);
+
+  const deepLearnedMessages = (messageRows.data ?? []).reduce(
+    (sum, row) => sum + ((row.deep_learned_message_count as number) ?? 0),
+    0,
+  );
+
+  return { totalConversations: total, deepLearned: learned, deepLearnedMessages };
+}

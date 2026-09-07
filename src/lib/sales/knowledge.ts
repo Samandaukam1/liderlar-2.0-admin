@@ -288,3 +288,358 @@ export function parseModelJson(content: string | null | undefined): unknown {
     }
   }
 }
+
+/* ======================================================================== *
+ * BATCH REJIMI — bir chaqiruvda 10–25 suhbat
+ *
+ * 500 ta suhbatni bitta promptga solish mumkin emas (kontekst ham,
+ * sifat ham yiqiladi). Shuning uchun suhbatlar batch'larga bo'linadi va
+ * har batch o'z transkripti bilan alohida yuboriladi.
+ *
+ * SATR MANZILI `[suhbat.xabar]` shaklida: `[2.7]` — batchdagi 2-suhbatning
+ * 7-satri. Shu manzil tufayli model qaytargan har bir element aniq
+ * xabarga bog'lanadi va "qaysi savolga qaysi javob" juftligi tekshiriladi.
+ * ======================================================================== */
+
+import type { IntentObservation } from "./intents.ts";
+import { resolveIntent, guessIntentFromText } from "./intents.ts";
+import type { PatternObservation } from "./aggregate.ts";
+import type { SalesOutcome } from "./outcome.ts";
+
+export interface BatchConversationInput {
+  conversationId: string;
+  messages: readonly TranscriptMessage[];
+}
+
+export interface BatchLine {
+  messageId: string;
+  /** REDAKSIYA QILINGAN matn — modelga ketgan va patternga yoziladigan shakl. */
+  text: string;
+  sentAt: string;
+  direction: "incoming" | "outgoing";
+}
+
+export interface BatchConversationRef {
+  conversationId: string;
+  lines: Map<number, BatchLine>;
+  lastMessageAt: string;
+}
+
+export interface BuiltBatchTranscript {
+  text: string;
+  conversations: Map<number, BatchConversationRef>;
+  redactedKinds: string[];
+  messageCount: number;
+  lineCount: number;
+}
+
+export function buildBatchTranscript(
+  items: readonly BatchConversationInput[],
+): BuiltBatchTranscript {
+  const blocks: string[] = [];
+  const conversations = new Map<number, BatchConversationRef>();
+  const kinds = new Set<string>();
+  let messageCount = 0;
+  let lineCount = 0;
+
+  items.forEach((item, conversationIndex) => {
+    const lines = new Map<number, BatchLine>();
+    const rendered: string[] = [`### SUHBAT ${conversationIndex}`];
+    let lastMessageAt = "";
+
+    item.messages.forEach((message, messageIndex) => {
+      messageCount += 1;
+      if (message.sentAt > lastMessageAt) lastMessageAt = message.sentAt;
+
+      const speaker = message.direction === "incoming" ? "MIJOZ" : "BIZ";
+      const address = `${conversationIndex}.${messageIndex}`;
+      const raw = message.text?.trim() ?? "";
+
+      if (raw === "") {
+        rendered.push(`[${address}] ${speaker}: (${message.messageType})`);
+        return;
+      }
+
+      const { text, kinds: found } = redactPii(raw);
+      for (const kind of found) kinds.add(kind);
+      rendered.push(`[${address}] ${speaker}: ${text}`);
+      lines.set(messageIndex, {
+        messageId: message.id,
+        text,
+        sentAt: message.sentAt,
+        direction: message.direction,
+      });
+      lineCount += 1;
+    });
+
+    blocks.push(rendered.join("\n"));
+    conversations.set(conversationIndex, {
+      conversationId: item.conversationId,
+      lines,
+      lastMessageAt: lastMessageAt || new Date().toISOString(),
+    });
+  });
+
+  return {
+    text: blocks.join("\n\n"),
+    conversations,
+    redactedKinds: [...kinds],
+    messageCount,
+    lineCount,
+  };
+}
+
+export const BATCH_EXTRACTION_SYSTEM_PROMPT = `Sen Liderlar.uz sotuv bo'limining tahlilchisisan.
+Senga bir nechta Telegram yozishmasi beriladi. Har biri "### SUHBAT N" bilan
+boshlanadi, har satr esa [N.M] manzili bilan raqamlangan.
+
+VAZIFANG IKKITA:
+
+A) NIYAT (intent) — mijoz nima so'ragani. Bir xil ma'nodagi savollar
+   ("narxi qancha?", "qancha turadi?", "nech pul?") BITTA kalit ostida
+   birlashsin. Iloji boricha quyidagi kalitlardan foydalan:
+   PRICE_QUESTION, SERVICE_BENEFIT, WHERE_PUBLISHED, ARTICLE_PRICE,
+   TRUST_QUESTION, TIMELINE_QUESTION, PAYMENT_METHOD, APPLICATION_PROCESS,
+   ELIGIBILITY, AGE_LIMIT, CERTIFICATE, POST_QUESTION, INSTAGRAM, TELEGRAM,
+   WEBSITE, ARTICLE_DEADLINE, EDIT_REQUEST, REFUND,
+   OBJECTION_TOO_EXPENSIVE, OBJECTION_TRUST, OBJECTION_LATER,
+   OBJECTION_THINKING, OBJECTION_NO_MONEY, DOUBT.
+   Ro'yxatdagi hech biriga to'g'ri kelmasa — O'ZING yangi kalit ber
+   (KATTA_HARF_VA_PASTKI_CHIZIQ shaklida), lekin faqat matnda HAQIQATAN
+   bor savol uchun.
+
+B) BILIM (knowledge) — qayta ishlatsa bo'ladigan fakt.
+   Turkumlar: ${KNOWLEDGE_CATEGORIES.join(", ")}.
+
+QAT'IY QOIDALAR:
+1. Faqat yozishmada HAQIQATAN bor narsani yoz. Fakt yoki savol to'qima.
+2. "customerIndex" — MIJOZ satrining M raqami, "responseIndex" — o'sha
+   savolga BIZ bergan javob satrining M raqami. Javob bo'lmasa null.
+3. Manzillar shu suhbatning o'z satrlariga tegishli bo'lsin.
+4. Transkriptdagi [telefon], [karta raqami], [maxfiy] kabi maskalarni
+   TIKLAMA va o'rniga hech narsa o'ylab topma.
+5. Uslub, ohang yoki emoji haqida BAHO BERMA — bu boshqa tizimning ishi.
+6. Sotuv natijasi (to'landimi, ariza yuborildimi) haqida XULOSA CHIQARMA —
+   uni tizim o'zi aniqlaydi.
+7. Hech narsa topilmasa bo'sh ro'yxat qaytar. Bo'sh javob — to'g'ri javob.
+8. Matn o'zbek tilida bo'lsin.
+
+Javobni FAQAT quyidagi JSON shaklida qaytar:
+{"conversations": [{
+  "conversationIndex": 0,
+  "intents": [{"key": "PRICE_QUESTION", "label": "Narx qancha",
+               "customerIndex": 0, "responseIndex": 1, "confidence": 0.0-1.0}],
+  "knowledge": [{"category": "price", "question": "..." yoki null,
+                 "answer": "...", "sourceIndex": 1,
+                 "confidence": 0.0-1.0, "tags": ["..."]}]
+}]}`;
+
+export function buildBatchPrompt(transcript: string): string {
+  return [
+    "Quyidagi yozishmalarni tahlil qil:",
+    "---",
+    transcript,
+    "---",
+    "JSON qaytar.",
+  ].join("\n");
+}
+
+/**
+ * Model javobining SHAKLINI tekshiradi (mazmunini emas).
+ *
+ * Orkestrator shu bayroqqa qarab qayta uradi: JSON kelgan-u, kutilgan
+ * shaklda bo'lmasa, ikkinchi urinish ko'pincha to'g'ri javob beradi.
+ * Shakli to'g'ri bo'lsa-yu bo'sh bo'lsa — bu haqiqiy natija, qayta
+ * urilmaydi.
+ */
+export function isBatchShapeValid(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object") return false;
+  const list = (raw as { conversations?: unknown }).conversations;
+  if (!Array.isArray(list)) return false;
+  return list.every(
+    (entry) =>
+      entry != null &&
+      typeof entry === "object" &&
+      typeof (entry as { conversationIndex?: unknown }).conversationIndex === "number",
+  );
+}
+
+export interface BatchNormalizeResult {
+  intents: IntentObservation[];
+  patterns: PatternObservation[];
+  knowledge: KnowledgeDraft[];
+  rejected: Array<{ reason: string; detail?: string }>;
+}
+
+/**
+ * Model javobini haqiqiy xabarlarga bog'laydi.
+ *
+ * MUHIM: `customerExample` va `responseExample` MODELDAN OLINMAYDI —
+ * ular transkriptdagi asl (redaksiya qilingan) satrdan olinadi. Model
+ * faqat manzilni ko'rsatadi. Shu sababli response library'da model
+ * qayta yozgan emas, biz haqiqatan yozgan javob turadi.
+ */
+export function normalizeBatchExtraction(
+  raw: unknown,
+  transcript: BuiltBatchTranscript,
+  outcomeByConversation: ReadonlyMap<string, SalesOutcome>,
+): BatchNormalizeResult {
+  const intents: IntentObservation[] = [];
+  const patterns: PatternObservation[] = [];
+  const knowledge: KnowledgeDraft[] = [];
+  const rejected: BatchNormalizeResult["rejected"] = [];
+  const seenKnowledge = new Set<string>();
+
+  if (!isBatchShapeValid(raw)) {
+    return { intents, patterns, knowledge, rejected: [{ reason: "javob shakli noto‘g‘ri" }] };
+  }
+
+  for (const entry of (raw as { conversations: unknown[] }).conversations) {
+    const item = entry as Record<string, unknown>;
+    const conversationIndex = item.conversationIndex as number;
+    const ref = transcript.conversations.get(conversationIndex);
+    if (!ref) {
+      rejected.push({ reason: "noma’lum suhbat indeksi", detail: String(conversationIndex) });
+      continue;
+    }
+    const outcome = outcomeByConversation.get(ref.conversationId) ?? "unknown";
+
+    /* --------------------------- niyatlar --------------------------- */
+    const rawIntents = Array.isArray(item.intents) ? item.intents : [];
+    for (const rawIntent of rawIntents) {
+      if (!rawIntent || typeof rawIntent !== "object") {
+        rejected.push({ reason: "intent obyekt emas" });
+        continue;
+      }
+      const intentItem = rawIntent as Record<string, unknown>;
+
+      const customerIndex =
+        typeof intentItem.customerIndex === "number" ? intentItem.customerIndex : null;
+      const customerLine = customerIndex != null ? ref.lines.get(customerIndex) : undefined;
+
+      // Savol satri MIJOZNIKI bo'lishi shart: o'z xabarimizni "mijoz
+      // savoli" deb yozib qo'yish butun statistikani buzardi.
+      if (!customerLine || customerLine.direction !== "incoming") {
+        rejected.push({ reason: "intent mijoz satriga bog‘lanmadi" });
+        continue;
+      }
+
+      const resolved =
+        resolveIntent(String(intentItem.key ?? ""), (intentItem.label as string) ?? null) ??
+        guessIntentFromText(customerLine.text);
+      if (!resolved) {
+        rejected.push({ reason: "intent kaliti aniqlanmadi" });
+        continue;
+      }
+
+      intents.push({
+        key: resolved.key,
+        label: resolved.label,
+        kind: resolved.kind,
+        known: resolved.known,
+        conversationId: ref.conversationId,
+        customerExample: customerLine.text.slice(0, 300),
+        customerMessageId: customerLine.messageId,
+      });
+
+      /* ------------------------ response pattern ------------------------ */
+      const responseIndex =
+        typeof intentItem.responseIndex === "number" ? intentItem.responseIndex : null;
+      const responseLine = responseIndex != null ? ref.lines.get(responseIndex) : undefined;
+      if (!responseLine) continue;
+
+      // Javob BIZNIKI bo'lishi va savoldan KEYIN kelishi shart.
+      if (responseLine.direction !== "outgoing") {
+        rejected.push({ reason: "javob bizning satrimiz emas" });
+        continue;
+      }
+      if (responseIndex != null && customerIndex != null && responseIndex <= customerIndex) {
+        rejected.push({ reason: "javob savoldan oldin turibdi" });
+        continue;
+      }
+
+      patterns.push({
+        intentKey: resolved.key,
+        intentLabel: resolved.label,
+        intentKind: resolved.kind,
+        conversationId: ref.conversationId,
+        customerExample: customerLine.text.slice(0, 300),
+        responseExample: responseLine.text.slice(0, 1200),
+        customerMessageId: customerLine.messageId,
+        responseMessageId: responseLine.messageId,
+        outcome,
+        observedAt: responseLine.sentAt,
+      });
+    }
+
+    /* ---------------------------- bilim ----------------------------- */
+    const rawKnowledge = Array.isArray(item.knowledge) ? item.knowledge : [];
+    for (const rawItem of rawKnowledge) {
+      if (!rawItem || typeof rawItem !== "object") {
+        rejected.push({ reason: "bilim obyekt emas" });
+        continue;
+      }
+      const knowledgeItem = rawItem as Record<string, unknown>;
+
+      if (!isKnowledgeCategory(knowledgeItem.category)) {
+        rejected.push({ reason: "noma’lum turkum", detail: String(knowledgeItem.category) });
+        continue;
+      }
+      const rawAnswer = typeof knowledgeItem.answer === "string" ? knowledgeItem.answer.trim() : "";
+      if (rawAnswer === "") {
+        rejected.push({ reason: "javob bo‘sh" });
+        continue;
+      }
+
+      const sourceIndex =
+        typeof knowledgeItem.sourceIndex === "number" ? knowledgeItem.sourceIndex : null;
+      const sourceLine = sourceIndex != null ? ref.lines.get(sourceIndex) : undefined;
+      if (!sourceLine) {
+        rejected.push({ reason: "manba xabari topilmadi (sourceIndex)" });
+        continue;
+      }
+
+      const answer = redactPii(rawAnswer).text.slice(0, MAX_ANSWER);
+      const rawQuestion =
+        typeof knowledgeItem.question === "string" ? knowledgeItem.question.trim() : "";
+      const question = rawQuestion ? redactPii(rawQuestion).text.slice(0, MAX_QUESTION) : null;
+
+      if (!isRedacted(answer) || (question != null && !isRedacted(question))) {
+        rejected.push({ reason: "redaksiyadan keyin ham PII qoldi" });
+        continue;
+      }
+
+      const dedupeKey = knowledgeDedupeKey(knowledgeItem.category, question, answer);
+      if (seenKnowledge.has(dedupeKey)) {
+        rejected.push({ reason: "shu batchda takrorlandi" });
+        continue;
+      }
+      seenKnowledge.add(dedupeKey);
+
+      const confidence =
+        typeof knowledgeItem.confidence === "number" && Number.isFinite(knowledgeItem.confidence)
+          ? Math.min(1, Math.max(0, Math.round(knowledgeItem.confidence * 100) / 100))
+          : 0.5;
+
+      knowledge.push({
+        category: knowledgeItem.category,
+        question,
+        answer,
+        confidence,
+        tags: Array.isArray(knowledgeItem.tags)
+          ? knowledgeItem.tags
+              .filter((t): t is string => typeof t === "string")
+              .map((t) => redactPii(t).text.trim().slice(0, 40))
+              .filter((t) => t !== "")
+              .slice(0, 8)
+          : [],
+        sourceConversationId: ref.conversationId,
+        sourceMessageId: sourceLine.messageId,
+        sourceExcerpt: answer.slice(0, 240),
+        dedupeKey,
+      });
+    }
+  }
+
+  return { intents, patterns, knowledge, rejected };
+}

@@ -12,6 +12,7 @@ export const SALES_TABS = [
   { key: "dashboard", label: "Dashboard", href: "/ai-sotuv" },
   { key: "conversations", label: "Suhbatlar", href: "/ai-sotuv/suhbatlar" },
   { key: "learning", label: "O‘rganish", href: "/ai-sotuv/organish" },
+  { key: "responses", label: "Javoblar", href: "/ai-sotuv/javoblar" },
   { key: "knowledge", label: "Knowledge Base", href: "/ai-sotuv/knowledge" },
   { key: "style", label: "Uslub", href: "/ai-sotuv/uslub" },
   { key: "settings", label: "Sozlamalar", href: "/ai-sotuv/sozlamalar" },

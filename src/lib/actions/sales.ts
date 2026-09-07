@@ -6,6 +6,11 @@ import { requirePermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 import { runLearning } from "@/lib/sales/learning";
+import {
+  advanceDeepLearning,
+  startDeepLearning,
+  type DeepLearningSnapshot,
+} from "@/lib/sales/deep-learning";
 import { saveSalesSetting } from "@/lib/sales/settings";
 import { parseRecencyBuckets } from "@/lib/sales/recency";
 import { redactPii, isRedacted } from "@/lib/sales/redact";
@@ -29,6 +34,7 @@ const SALES_PATHS = [
   "/ai-sotuv",
   "/ai-sotuv/suhbatlar",
   "/ai-sotuv/organish",
+  "/ai-sotuv/javoblar",
   "/ai-sotuv/knowledge",
   "/ai-sotuv/uslub",
   "/ai-sotuv/sozlamalar",
@@ -255,4 +261,107 @@ export async function saveLearningSettingsAction(
 
   revalidateSales();
   return { ok: true, message: "Sozlamalar saqlandi." };
+}
+
+/* ======================================================================== *
+ * CHUQUR O'RGANISH
+ *
+ * Ikki bosqichli: `start` yugurishni ochadi va batch rejasini yozadi,
+ * `advance` esa vaqt byudjeti doirasida batch'larni ishlaydi. Klient
+ * tugagunicha `advance` ni qayta chaqiradi — shu sababli 500 ta suhbat
+ * bitta serverless chaqiruviga sig'ishi shart emas va uzilish yugurishni
+ * yo'qotmaydi.
+ * ======================================================================== */
+
+export interface DeepLearningActionResult extends SalesActionResult {
+  snapshot?: DeepLearningSnapshot;
+  jobId?: string;
+}
+
+export async function startDeepLearningAction(
+  formData: FormData,
+): Promise<DeepLearningActionResult> {
+  const ctx = await requirePermission("sales.learn");
+
+  const targetRaw = Number(formData.get("target") ?? 0);
+  const target = Number.isFinite(targetRaw) && targetRaw > 0 ? Math.min(2000, targetRaw) : undefined;
+  const batchRaw = Number(formData.get("batchSize") ?? 0);
+  const batchSize = Number.isFinite(batchRaw) && batchRaw > 0 ? Math.min(25, batchRaw) : undefined;
+
+  try {
+    const started = await startDeepLearning({ actorId: ctx.userId, target, batchSize });
+
+    if (started.targetConversations === 0) {
+      return {
+        ok: false,
+        error:
+          "Bazada o‘rganiladigan suhbat yo‘q. Bot Telegram Business akkauntga " +
+          "ulanib, yozishmalar yig‘ilgandan keyin qayta urinib ko‘ring.",
+      };
+    }
+
+    const snapshot = await advanceDeepLearning({ jobId: started.jobId, actorId: ctx.userId });
+    revalidateSales();
+    return { ok: true, jobId: started.jobId, snapshot };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Kutilmagan xato." };
+  }
+}
+
+export async function advanceDeepLearningAction(
+  formData: FormData,
+): Promise<DeepLearningActionResult> {
+  const ctx = await requirePermission("sales.learn");
+
+  const jobId = String(formData.get("jobId") ?? "");
+  if (!z.string().uuid().safeParse(jobId).success) {
+    return { ok: false, error: "Yugurish identifikatori noto‘g‘ri." };
+  }
+
+  try {
+    const snapshot = await advanceDeepLearning({ jobId, actorId: ctx.userId });
+    if (snapshot.finished) revalidateSales();
+    return { ok: true, jobId, snapshot };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Kutilmagan xato." };
+  }
+}
+
+/** Javob shablonini tasdiqlash / rad etish. */
+export async function reviewResponsePatternAction(
+  formData: FormData,
+): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  const parsed = reviewSchema.safeParse({
+    id: formData.get("id"),
+    status: formData.get("status"),
+    note: "",
+  });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Forma xatosi" };
+  }
+
+  const admin = createSupabaseAdminClient();
+  const { error } = await admin
+    .from("sales_response_patterns")
+    .update({
+      status: parsed.data.status,
+      reviewed_by: ctx.userId,
+      reviewed_at: new Date().toISOString(),
+    })
+    .eq("id", parsed.data.id);
+
+  if (error) return { ok: false, error: error.message };
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: `sales.response_pattern.${parsed.data.status}`,
+    entityType: "sales_response_patterns",
+    entityId: parsed.data.id,
+    newValue: { status: parsed.data.status },
+  });
+
+  revalidateSales();
+  return { ok: true };
 }

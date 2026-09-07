@@ -19,6 +19,7 @@
  */
 
 import { DEFAULT_RECENCY_BUCKETS, weightForDate, type RecencyBucket } from "./recency.ts";
+import { normalizeForMatch } from "./text-normalize.ts";
 import type { SalesDirection } from "./types.ts";
 
 /* ------------------------------- lug'atlar ------------------------------ */
@@ -62,6 +63,20 @@ const CTA_PHRASES = [
   "keling",
 ];
 
+/** Follow-up — javobsiz qolgan mijozga qayta yozish iboralari. */
+const FOLLOW_UP_PHRASES = [
+  "eslatib o‘taman",
+  "eslatib otaman",
+  "yozgan edim",
+  "javobingizni kutyapmiz",
+  "javobingizni kutmoqdamiz",
+  "hali ham qiziqasizmi",
+  "qaroringizni",
+  "fikringizni bildirsangiz",
+  "hurmat bilan eslatma",
+  "yana bir bor",
+];
+
 /** E'tirozga javob berishda ishlatiladigan yumshatuvchi ochqichlar. */
 const OBJECTION_OPENERS = [
   "tushunaman",
@@ -96,6 +111,14 @@ export interface StyleSample {
   sentAt: string;
   direction: SalesDirection;
   conversationId?: string;
+  /**
+   * Shu javob QAYSI mijoz xabariga berilgani haqidagi kontekst.
+   * `dialog.ts` dagi juftlashdan keladi va "mijoz qisqa yozsa biz qanday
+   * javob beramiz" degan savolga javob berishga imkon beradi. Juftlik
+   * ma'lum bo'lmasa qoldiriladi — taxmin qilinmaydi.
+   */
+  incomingWords?: number;
+  incomingQuestionCount?: number;
 }
 
 export interface WeightedPhrase {
@@ -135,6 +158,30 @@ export interface StyleProfile {
     cyrillicShare: number;
     dominant: "lotin" | "kirill" | "aralash" | "noaniq";
   };
+  /** Xabar qisqami yoki batafsilmi. */
+  length: {
+    shortShare: number;
+    detailedShare: number;
+    averageWordsPerMessage: number;
+  };
+  /** Javob strukturasi: ro'yxatmi yoki oqim matnmi. */
+  structure: {
+    listShare: number;
+    /** Mijoz bir nechta savol bergan holatlarda ro'yxat ishlatish ulushi. */
+    multiQuestionListShare: number;
+    multiQuestionSamples: number;
+  };
+  /**
+   * Mijoz qisqa yozganda biz qanday javob beramiz.
+   * `samples` — juftligi ma'lum bo'lgan namunalar soni; 0 bo'lsa
+   * ulushlar ham 0 va ular xulosa uchun ishlatilmasligi kerak.
+   */
+  reciprocity: {
+    samples: number;
+    shortInShortOutRate: number;
+    shortInLongOutRate: number;
+  };
+  followUp: { usageRate: number; top: WeightedPhrase[] };
 }
 
 export interface StyleAnalysis {
@@ -177,9 +224,12 @@ function countMatches(text: string, pattern: RegExp): number {
   return (text.match(re) ?? []).length;
 }
 
-/** Lug'atdagi qaysi iboralar matnda uchraganini qaytaradi. */
+/**
+ * Lug'atdagi qaysi iboralar matnda uchraganini qaytaradi.
+ * Lug'at iboralari ham normallashtiriladi — ular ham qo'lda yozilgan.
+ */
 function matchedPhrases(lowerText: string, dictionary: readonly string[]): string[] {
-  return dictionary.filter((phrase) => lowerText.includes(phrase));
+  return dictionary.filter((phrase) => lowerText.includes(normalizeForMatch(phrase)));
 }
 
 function topPhrases(
@@ -213,7 +263,17 @@ const EMPTY_PROFILE: StyleProfile = {
     averageMarksPerMessage: 0,
   },
   script: { latinShare: 0, cyrillicShare: 0, dominant: "noaniq" },
+  length: { shortShare: 0, detailedShare: 0, averageWordsPerMessage: 0 },
+  structure: { listShare: 0, multiQuestionListShare: 0, multiQuestionSamples: 0 },
+  reciprocity: { samples: 0, shortInShortOutRate: 0, shortInLongOutRate: 0 },
+  followUp: { usageRate: 0, top: [] },
 };
+
+/** Shundan qisqa xabar "qisqa", uzunrog'i "batafsil" deb hisoblanadi. */
+const SHORT_MESSAGE_WORDS = 12;
+
+/** Ro'yxat belgisi: "1." / "-" / "•" satr boshida. */
+const LIST_MARKER = /^\s*(?:[-–—•*]|\d+[.)])\s+/m;
 
 /* -------------------------------- tahlil -------------------------------- */
 
@@ -262,17 +322,34 @@ export function analyzeStyle(
   let latinWeight = 0;
   let cyrillicWeight = 0;
   let informalWeight = 0;
+  let shortWeight = 0;
+  let detailedWeight = 0;
+  let wordsPerMessageWeight = 0;
+  let listWeight = 0;
+  let followUpWeight = 0;
+  // Juftligi ma'lum namunalar alohida sanaladi: ulush faqat shular
+  // ustidan hisoblanadi, aks holda juftsiz xabarlar natijani pastga
+  // tortib, "biz qisqa javob bermaymiz" degan yolg'on xulosa berardi.
+  let pairedWeight = 0;
+  let shortInShortOutWeight = 0;
+  let shortInLongOutWeight = 0;
+  let multiQuestionWeight = 0;
+  let multiQuestionListWeight = 0;
+  let multiQuestionSamples = 0;
 
   const greetingTally = new Map<string, number>();
   const ctaTally = new Map<string, number>();
   const objectionTally = new Map<string, number>();
   const emojiTally = new Map<string, number>();
   const priceTemplates = new Map<string, number>();
+  const followUpTally = new Map<string, number>();
   const conversations = new Set<string>();
 
   for (const sample of usable) {
     const text = (sample.text ?? "").trim();
-    const lower = text.toLowerCase();
+    // Lug'atlar bilan solishtirish uchun apostroflar bir shaklda bo'lishi
+    // shart: "ro'yxatdan o'ting" ni uch xil apostrof bilan yozish mumkin.
+    const lower = normalizeForMatch(text);
     const weight = weightForDate(sample.sentAt, now, buckets);
     if (weight <= 0) continue;
 
@@ -342,6 +419,39 @@ export function analyzeStyle(
     if (text.includes("!")) exclamationWeight += weight;
     if (/\.{3}|…/.test(text)) ellipsisWeight += weight;
     marksWeight += weight * countMatches(text, /[.,!?;:—–…]/g);
+
+    // --- uzunlik: qisqa javobmi yoki batafsilmi ---
+    wordsPerMessageWeight += weight * words.length;
+    const isShortOut = words.length <= SHORT_MESSAGE_WORDS;
+    if (isShortOut) shortWeight += weight;
+    else detailedWeight += weight;
+
+    // --- struktura: ro'yxatmi ---
+    const isList = LIST_MARKER.test(text);
+    if (isList) listWeight += weight;
+
+    // --- mijoz nima yozganiga qarab javob shakli ---
+    if (typeof sample.incomingWords === "number") {
+      pairedWeight += weight;
+      if (sample.incomingWords <= SHORT_MESSAGE_WORDS) {
+        if (isShortOut) shortInShortOutWeight += weight;
+        else shortInLongOutWeight += weight;
+      }
+    }
+    if ((sample.incomingQuestionCount ?? 0) >= 2) {
+      multiQuestionSamples += 1;
+      multiQuestionWeight += weight;
+      if (isList) multiQuestionListWeight += weight;
+    }
+
+    // --- follow-up ---
+    const followUps = matchedPhrases(lower, FOLLOW_UP_PHRASES);
+    if (followUps.length > 0) {
+      followUpWeight += weight;
+      for (const phrase of followUps) {
+        followUpTally.set(phrase, (followUpTally.get(phrase) ?? 0) + weight);
+      }
+    }
 
     // --- yozuv ---
     const latin = countMatches(text, /[A-Za-z]/g);
@@ -447,6 +557,25 @@ export function analyzeStyle(
       averageMarksPerMessage: round(marksWeight / totalWeight, 1),
     },
     script: { latinShare, cyrillicShare, dominant },
+    length: {
+      shortShare: rate(shortWeight),
+      detailedShare: rate(detailedWeight),
+      averageWordsPerMessage: round(wordsPerMessageWeight / totalWeight, 1),
+    },
+    structure: {
+      listShare: rate(listWeight),
+      // Maxraj — faqat KO'P SAVOLLI namunalar. Umumiy og'irlikka
+      // bo'linsa, ko'rsatkich "ro'yxat kam ishlatiladi" deb chiqardi.
+      multiQuestionListShare:
+        multiQuestionWeight > 0 ? round(multiQuestionListWeight / multiQuestionWeight) : 0,
+      multiQuestionSamples,
+    },
+    reciprocity: {
+      samples: pairedWeight > 0 ? Math.round(pairedWeight * 100) / 100 : 0,
+      shortInShortOutRate: pairedWeight > 0 ? round(shortInShortOutWeight / pairedWeight) : 0,
+      shortInLongOutRate: pairedWeight > 0 ? round(shortInLongOutWeight / pairedWeight) : 0,
+    },
+    followUp: { usageRate: rate(followUpWeight), top: topPhrases(followUpTally, totalWeight) },
   };
 
   return {

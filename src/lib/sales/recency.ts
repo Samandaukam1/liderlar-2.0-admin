@@ -6,12 +6,20 @@
  * eskirgan uslubga tortiladi. Shuning uchun har bir namuna yoshiga qarab
  * og'irlik oladi va o'rtacha OG'IRLANGAN o'rtacha bo'ladi.
  *
- * Standart jadval (texnik topshiriqdan):
- *   0–7 kun    1.00
- *   8–30 kun   0.80
- *   31–90 kun  0.50
- *   91–180 kun 0.30
- *   180+ kun   0.15
+ * Standart jadval:
+ *   0–3 kun    1.00
+ *   4–7 kun    0.95
+ *   8–14 kun   0.85
+ *   15–30 kun  0.70
+ *   31–60 kun  0.45
+ *   61–90 kun  0.30
+ *   90+ kun    0.15
+ *
+ * Bu jadval 0.1 dagi besh pog'onali variantning o'rniga keldi: chuqur
+ * o'rganishda uslub namunalari ancha ko'p bo'lgani uchun yaqin oralig'i
+ * mayda bo'linadi va oxirgi bir hafta ichidagi yozuv boshqalardan aniq
+ * ajralib turadi. Fakt (knowledge) bunga BOG'LIQ EMAS — eski fakt
+ * og'irlik pasaygani uchun o'chmaydi, u alohida jadvalda yashaydi.
  *
  * Qiymatlar KODDA QOTIB QOLMAGAN: `sales_settings.recency_buckets` dagi
  * JSON ustun keladi, bu yerdagisi faqat zaxira. Sozlamalar sahifasi shu
@@ -25,6 +33,21 @@ export interface RecencyBucket {
 }
 
 export const DEFAULT_RECENCY_BUCKETS: readonly RecencyBucket[] = [
+  { maxAgeDays: 3, weight: 1.0 },
+  { maxAgeDays: 7, weight: 0.95 },
+  { maxAgeDays: 14, weight: 0.85 },
+  { maxAgeDays: 30, weight: 0.7 },
+  { maxAgeDays: 60, weight: 0.45 },
+  { maxAgeDays: 90, weight: 0.3 },
+  { maxAgeDays: null, weight: 0.15 },
+];
+
+/**
+ * 0.1 da ishlatilgan jadval. Migratsiya `sales_settings` dagi qiymat
+ * AYNAN shu bo'lsagina uni yangisiga ko'chiradi — admin qo'lda
+ * o'zgartirgan sozlama ustidan yozilmasligi uchun.
+ */
+export const LEGACY_V01_RECENCY_BUCKETS: readonly RecencyBucket[] = [
   { maxAgeDays: 7, weight: 1.0 },
   { maxAgeDays: 30, weight: 0.8 },
   { maxAgeDays: 90, weight: 0.5 },

@@ -22,15 +22,58 @@ export interface SalesLearningSettings {
   minMessagesPerConversation: number;
 }
 
+/** Chuqur o'rganish (oxirgi N suhbatning barcha xabarlari) parametrlari. */
+export interface SalesDeepLearningSettings {
+  /** Nechta eng so'nggi suhbat olinadi. */
+  targetConversations: number;
+  /** Bitta AI chaqiruviga nechta suhbat kiradi. */
+  batchSize: number;
+  /** Bitta suhbatdan olinadigan eng ko'p xabar (kontekst chegarasi). */
+  maxMessagesPerConversation: number;
+}
+
 export interface SalesSettings {
   recencyBuckets: readonly RecencyBucket[];
   learning: SalesLearningSettings;
+  deepLearning: SalesDeepLearningSettings;
 }
 
 export const DEFAULT_LEARNING_SETTINGS: SalesLearningSettings = {
   batchSize: 25,
   minMessagesPerConversation: 4,
 };
+
+export const DEFAULT_DEEP_LEARNING_SETTINGS: SalesDeepLearningSettings = {
+  targetConversations: 500,
+  // 10–25 oralig'i: kattaroq batch kontekstni to'ldirib, sifatni
+  // tushiradi; kichigi esa chaqiruvlar sonini oshiradi.
+  batchSize: 15,
+  maxMessagesPerConversation: 400,
+};
+
+function parseDeepLearning(value: unknown): SalesDeepLearningSettings {
+  if (!value || typeof value !== "object") return DEFAULT_DEEP_LEARNING_SETTINGS;
+  const raw = value as Record<string, unknown>;
+  const int = (input: unknown, fallback: number, min: number, max: number) => {
+    const n = typeof input === "number" ? Math.round(input) : Number.NaN;
+    return Number.isFinite(n) && n >= min && n <= max ? n : fallback;
+  };
+  return {
+    targetConversations: int(
+      raw.targetConversations,
+      DEFAULT_DEEP_LEARNING_SETTINGS.targetConversations,
+      1,
+      2000,
+    ),
+    batchSize: int(raw.batchSize, DEFAULT_DEEP_LEARNING_SETTINGS.batchSize, 1, 25),
+    maxMessagesPerConversation: int(
+      raw.maxMessagesPerConversation,
+      DEFAULT_DEEP_LEARNING_SETTINGS.maxMessagesPerConversation,
+      10,
+      2000,
+    ),
+  };
+}
 
 function parseLearning(value: unknown): SalesLearningSettings {
   if (!value || typeof value !== "object") return DEFAULT_LEARNING_SETTINGS;
@@ -56,15 +99,20 @@ export async function getSalesSettings(): Promise<SalesSettings> {
     const { data } = await admin
       .from("sales_settings")
       .select("key, value")
-      .in("key", ["recency_buckets", "learning"]);
+      .in("key", ["recency_buckets", "learning", "deep_learning"]);
 
     const map = new Map((data ?? []).map((row) => [row.key as string, row.value]));
     return {
       recencyBuckets: parseRecencyBuckets(map.get("recency_buckets")),
       learning: parseLearning(map.get("learning")),
+      deepLearning: parseDeepLearning(map.get("deep_learning")),
     };
   } catch {
-    return { recencyBuckets: DEFAULT_RECENCY_BUCKETS, learning: DEFAULT_LEARNING_SETTINGS };
+    return {
+      recencyBuckets: DEFAULT_RECENCY_BUCKETS,
+      learning: DEFAULT_LEARNING_SETTINGS,
+      deepLearning: DEFAULT_DEEP_LEARNING_SETTINGS,
+    };
   }
 }
 
