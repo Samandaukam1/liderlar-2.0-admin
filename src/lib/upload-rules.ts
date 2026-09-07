@@ -13,6 +13,15 @@ export interface BucketRule {
 }
 
 export const BUCKET_RULES: Record<string, BucketRule> = {
+  // Panel logotipi va undan hosil qilingan ikonkalar. OCHIQ: favicon
+  // brauzer tomonidan sessiyasiz so'raladi va imzolangan havola bilan
+  // berilishi mumkin emas. Yuklashni brending xizmati service_role
+  // bilan qiladi; bu qoida mediadagi umumiy yo'l uchun ham amal qilsin.
+  branding: {
+    maxBytes: 5 * 1024 * 1024,
+    mime: ["image/jpeg", "image/png", "image/webp", "image/svg+xml"],
+    isPublic: true,
+  },
   "candidate-avatars": {
     maxBytes: 4 * 1024 * 1024,
     mime: ["image/jpeg", "image/png", "image/webp"],

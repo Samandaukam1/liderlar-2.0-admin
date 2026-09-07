@@ -21,6 +21,8 @@ interface SidebarProps {
   avatarUrl: string | null;
   roles: string[];
   permissions: string[];
+  /** Admin paneldan yuklangan logotip. `null` — standart "L" belgisi. */
+  logoUrl: string | null;
   signOutAction: () => Promise<void>;
 }
 
@@ -130,12 +132,24 @@ function Profile({
   );
 }
 
-function Logo({ collapsed }: { collapsed: boolean }) {
+function Logo({ collapsed, logoUrl }: { collapsed: boolean; logoUrl: string | null }) {
   return (
     <Link href="/" className="flex items-center gap-2.5 px-5 py-5">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-cyan to-electric font-display text-lg font-bold text-white shadow-[0_6px_20px_rgba(0,199,232,0.4)]">
-        L
-      </span>
+      {logoUrl ? (
+        // Oddiy <img>: manba Supabase Storage'da va loyihada next/image
+        // uchun remotePatterns sozlanmagan (media kutubxonasi ham
+        // shunday ishlaydi).
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={logoUrl}
+          alt=""
+          className="h-9 w-9 shrink-0 rounded-xl bg-white/10 object-contain p-0.5"
+        />
+      ) : (
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-cyan to-electric font-display text-lg font-bold text-white shadow-[0_6px_20px_rgba(0,199,232,0.4)]">
+          L
+        </span>
+      )}
       {!collapsed && (
         <span className="min-w-0">
           <span className="block font-display text-[15px] font-semibold uppercase tracking-[0.12em] text-white">
@@ -172,7 +186,7 @@ export function AdminSidebar(props: SidebarProps) {
         className="sticky top-0 z-40 hidden h-screen shrink-0 flex-col bg-navy-sidebar lg:flex"
       >
         <div className="flex items-center justify-between pr-3">
-          <Logo collapsed={collapsed} />
+          <Logo collapsed={collapsed} logoUrl={props.logoUrl} />
           <button
             onClick={() => setCollapsed((v) => !v)}
             aria-label={collapsed ? "Menyuni kengaytirish" : "Menyuni yig‘ish"}
@@ -209,7 +223,7 @@ export function AdminSidebar(props: SidebarProps) {
               className="flex h-full w-[280px] flex-col bg-navy-sidebar"
             >
               <div className="flex items-center justify-between pr-3">
-                <Logo collapsed={false} />
+                <Logo collapsed={false} logoUrl={props.logoUrl} />
                 <button
                   onClick={() => setMobileOpen(false)}
                   aria-label="Yopish"

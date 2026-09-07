@@ -3,6 +3,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { AdminSidebar } from "@/components/admin/sidebar";
 import { AdminTopbar } from "@/components/admin/topbar";
 import { signOutAction } from "@/lib/actions/auth";
+import { getBranding } from "@/lib/branding/service";
 
 export default async function AdminLayout({
   children,
@@ -25,6 +26,8 @@ export default async function AdminLayout({
   }
 
   const permissions = Array.from(ctx.permissions);
+  // Xatoni o'zi yutadi — logo bezak, u tufayli panel ochilmay qolmaydi.
+  const branding = await getBranding();
 
   return (
     <div className="flex min-h-screen">
@@ -34,6 +37,7 @@ export default async function AdminLayout({
         avatarUrl={ctx.avatarUrl}
         roles={ctx.roles}
         permissions={permissions}
+        logoUrl={branding.logoUrl}
         signOutAction={signOutAction}
       />
       <div className="flex min-w-0 flex-1 flex-col">
