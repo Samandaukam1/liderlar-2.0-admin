@@ -4,7 +4,10 @@ import { ArrowLeft, ShieldAlert } from "lucide-react";
 import { requirePermission } from "@/lib/auth";
 import { PageHeader } from "@/components/admin/page-header";
 import { Badge } from "@/components/admin/badges";
-import { getConversationDetail } from "@/lib/sales/repository";
+import { getConversationDetail, getConversationFlowState } from "@/lib/sales/repository";
+import { SALES_STAGE_LABELS, isSalesStage } from "@/lib/sales/flow/stages";
+import { hasPermission } from "@/lib/permissions";
+import { FlowControls } from "./flow-controls";
 import { LEARNING_STATUS_LABELS } from "@/lib/sales/types";
 import { formatDate, cn } from "@/lib/utils";
 
@@ -24,10 +27,14 @@ export default async function SalesConversationPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requirePermission("sales.view");
+  const ctx = await requirePermission("sales.view");
+  const canManage = hasPermission(ctx.roles, "sales.manage");
   const { id } = await params;
 
-  const conversation = await getConversationDetail(id);
+  const [conversation, flow] = await Promise.all([
+    getConversationDetail(id),
+    getConversationFlowState(id),
+  ]);
   if (!conversation) notFound();
 
   return (
@@ -53,6 +60,69 @@ export default async function SalesConversationPage({
           </Link>
         }
       />
+
+      {/* ------------------- 0.2 SOTUV OQIMI ------------------- */}
+      {flow ? (
+        <section className="mb-4 rounded-card border border-line bg-card p-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <Badge accent="brand">
+              {isSalesStage(flow.stage) ? SALES_STAGE_LABELS[flow.stage] : flow.stage}
+            </Badge>
+            {!flow.aiEnabled ? (
+              <Badge accent="peach">inson nazoratida — AI jim</Badge>
+            ) : (
+              <Badge accent="mint">AI faol</Badge>
+            )}
+            {flow.paymentStatus !== "none" ? (
+              <Badge accent={flow.paymentStatus === "paid" ? "mint" : "sky"}>
+                to‘lov: {flow.paymentStatus}
+              </Badge>
+            ) : null}
+            {flow.customerFullName ? (
+              <span className="text-sm text-ink-soft">F.I.Sh.: {flow.customerFullName}</span>
+            ) : null}
+
+            {canManage ? (
+              <span className="ml-auto">
+                <FlowControls
+                  conversationId={conversation.id}
+                  aiEnabled={flow.aiEnabled}
+                  paymentStatus={flow.paymentStatus}
+                  hasEvidence={flow.evidence.length > 0}
+                />
+              </span>
+            ) : null}
+          </div>
+
+          {flow.intakeId ? (
+            <p className="mt-3 text-xs text-ink-soft">
+              Anketa yaratilgan · havola prefiksi <code>{flow.intakeLinkPrefix ?? "—"}</code>
+              {flow.intakeLinkExpiresAt
+                ? ` · amal qilish muddati ${formatDate(flow.intakeLinkExpiresAt, true)}`
+                : null}
+              {/* Xom havola SAQLANMAYDI — faqat prefiks, anketa tizimidagi kabi. */}
+            </p>
+          ) : null}
+
+          {flow.pendingFollowups.length > 0 ? (
+            <p className="mt-2 text-xs text-ink-soft">
+              Kutilayotgan follow-up:{" "}
+              {flow.pendingFollowups
+                .map((f) => `${f.followupType} (${formatDate(f.scheduledAt, true)})`)
+                .join(", ")}
+            </p>
+          ) : null}
+
+          {flow.evidence.length > 0 ? (
+            <p className="mt-2 text-xs text-ink-soft">
+              To‘lov cheki: {flow.evidence.length} ta ·{" "}
+              {flow.evidence[0].confirmedAt
+                ? `tasdiqlangan ${formatDate(flow.evidence[0].confirmedAt, true)}`
+                : "tasdiqlanmagan"}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="mb-4 flex flex-wrap items-center gap-3 rounded-card border border-line bg-card p-4">
         <Badge accent="cyan">{LEARNING_STATUS_LABELS[conversation.learningStatus]}</Badge>
@@ -82,6 +152,33 @@ export default async function SalesConversationPage({
           rekviziti va shaxsiy hujjat raqamlari avtomatik maskalanadi.
         </span>
       </p>
+
+      {/* Botdan chiqqan xabarlar jurnali — "bot nima dedi" savoliga yozuv. */}
+      {flow && flow.outbound.length > 0 ? (
+        <details className="mb-4 rounded-card border border-line bg-card p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-ink">
+            Botdan yuborilgan xabarlar ({flow.outbound.length})
+          </summary>
+          <ul className="mt-3 space-y-2">
+            {flow.outbound.map((entry) => (
+              <li key={entry.id} className="rounded-[10px] bg-surface px-3 py-2">
+                <p className="flex flex-wrap items-center gap-2 text-[11px] text-ink-soft">
+                  <Badge accent={entry.error ? "coral" : "sky"}>{entry.kind}</Badge>
+                  {entry.templateKey ? <code>{entry.templateKey}</code> : null}
+                  {entry.simulated ? <Badge accent="lavender">sinov</Badge> : null}
+                  <span>{formatDate(entry.createdAt, true)}</span>
+                </p>
+                <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-xs text-ink">
+                  {entry.body}
+                </p>
+                {entry.error ? (
+                  <p className="mt-1 text-xs text-coral">{entry.error}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
 
       <section className="space-y-2.5">
         {conversation.messages.length === 0 ? (

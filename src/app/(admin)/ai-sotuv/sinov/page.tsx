@@ -7,6 +7,7 @@ import { Badge } from "@/components/admin/badges";
 import { getTestChatReadiness } from "@/lib/sales/repository";
 import { SalesTabs, NoAutoReplyNotice } from "../sales-tabs";
 import { TestChat } from "./test-chat";
+import { FlowSimulation } from "./flow-simulation";
 
 export const metadata = { title: "AI Sotuv — Sinov" };
 export const dynamic = "force-dynamic";
@@ -90,6 +91,10 @@ export default async function SalesSandboxPage() {
       ) : null}
 
       <TestChat canRun={canRun} />
+
+      <div className="mt-6">
+        <FlowSimulation />
+      </div>
 
       <p className="mt-4 flex items-start gap-2 text-xs text-ink-soft">
         <FlaskConical className="mt-0.5 h-3.5 w-3.5 shrink-0" />

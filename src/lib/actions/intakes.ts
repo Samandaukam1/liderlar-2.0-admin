@@ -11,12 +11,10 @@ import {
 import { logAudit } from "@/lib/audit";
 import { validateContact } from "@/lib/intake/schemas";
 import {
-  generateRawIntakeToken,
-  hashIntakeToken,
-  tokenPrefix,
-  buildIntakeLink,
-} from "@/lib/intake/tokens";
-import { getActiveTemplate, getIntakeSettings } from "@/lib/intake/data";
+  createIntakeLink,
+  createIntakeRecord,
+} from "@/lib/intake/intake-link-service";
+import { getIntakeSettings } from "@/lib/intake/data";
 import { askPaymentOnSubmit } from "@/lib/intake/payment";
 import { saveIntakeAnswer } from "@/lib/intake/answers";
 import type { AnswerState } from "@/lib/intake/constants";
@@ -60,29 +58,24 @@ async function resolveIntakeBaseUrl(): Promise<string | undefined> {
   }
 }
 
+/**
+ * Thin wrapper over the shared intake-link service. The link logic itself
+ * lives in lib/intake/intake-link-service.ts so the AI sales bot — which
+ * runs in a webhook with no admin session and therefore cannot call a
+ * server action — creates links through the exact same code path. A second
+ * generator would drift: two token lifetimes, two link shapes, two bugs.
+ */
 async function createLinkFor(intakeId: string, actorId: string, ttlDays: number) {
-  const admin = createSupabaseAdminClient();
-  // Retire any existing active link first.
-  await admin
-    .from("candidate_intake_links")
-    .update({ status: "revoked", revoked_at: new Date().toISOString() })
-    .eq("intake_id", intakeId)
-    .eq("status", "active");
-
-  const raw = generateRawIntakeToken();
-  const expiresAt = new Date(Date.now() + ttlDays * 86400000).toISOString();
-  const { error } = await admin.from("candidate_intake_links").insert({
-    intake_id: intakeId,
-    token_hash: hashIntakeToken(raw),
-    token_prefix: tokenPrefix(raw),
-    status: "active",
-    expires_at: expiresAt,
-    created_by: actorId,
-  });
-  if (error) return { ok: false as const, error: error.message };
   // Base derived from the live request → correct URL on every deployment.
   const base = await resolveIntakeBaseUrl();
-  return { ok: true as const, link: buildIntakeLink(raw, base), prefix: tokenPrefix(raw), expiresAt };
+  const result = await createIntakeLink(intakeId, actorId, { ttlDays, baseUrl: base });
+  if (!result.ok) return { ok: false as const, error: result.error ?? "Havola yaratilmadi" };
+  return {
+    ok: true as const,
+    link: result.link!,
+    prefix: result.prefix!,
+    expiresAt: result.expiresAt!,
+  };
 }
 
 /* --------------------------- create --------------------------- */
@@ -98,37 +91,19 @@ async function createIntake(
   if (fullName.length < 3) return { ok: false, error: "Ism familiya kiritilishi shart (kamida 3 belgi)" };
   if (gender !== "male" && gender !== "female") return { ok: false, error: "Jins tanlanishi shart" };
 
-  const template = await getActiveTemplate();
-  if (!template) return { ok: false, error: "Faol anketa shabloni topilmadi (migration/seed?)" };
-
-  const admin = createSupabaseAdminClient();
-  // first_name/last_name/father_name kept at their DB defaults ('') — full_name
-  // is now the single source of truth.
-  const { data, error } = await admin
-    .from("candidate_intakes")
-    .insert({
-      template_id: template.id,
-      intake_method: method,
-      status: "draft",
-      full_name: fullName.slice(0, 200),
-      gender,
-      created_by: ctx.userId,
-      assigned_admin: ctx.userId,
-    })
-    .select("id")
-    .single();
-  if (error || !data) return { ok: false, error: error?.message ?? "Yaratib bo‘lmadi" };
-
-  await logAudit({
+  // Same service the sales bot uses — see createLinkFor above.
+  const created = await createIntakeRecord({
+    fullName,
+    gender,
+    method,
     actorId: ctx.userId,
-    action: `intake.create.${method}`,
-    entityType: "candidate_intake",
-    entityId: data.id,
-    newValue: { full_name: fullName, gender, method },
   });
+  if (!created.ok || !created.intakeId) {
+    return { ok: false, error: created.error ?? "Yaratib bo‘lmadi" };
+  }
 
   revalidatePath("/nomzodlar/anketalar");
-  return { ok: true, id: data.id as string };
+  return { ok: true, id: created.intakeId };
 }
 
 export async function createManualIntakeAction(formData: FormData): Promise<IntakeActionResult> {

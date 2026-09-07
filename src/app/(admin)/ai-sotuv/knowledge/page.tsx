@@ -14,6 +14,7 @@ import {
 import { SalesTabs, NoAutoReplyNotice } from "../sales-tabs";
 import { KnowledgeFilters } from "./knowledge-filters";
 import { KnowledgeItem } from "./knowledge-item";
+import { AddKnowledgeForm } from "./add-knowledge-form";
 
 export const metadata = { title: "AI Sotuv — Knowledge Base" };
 export const dynamic = "force-dynamic";
@@ -48,6 +49,7 @@ export default async function SalesKnowledgePage({
         title="Knowledge Base"
         description="Suhbatlardan ajratilgan faktlar. Hammasi qoralama holida keladi va admin tasdiqlashini kutadi."
         breadcrumbs={[{ label: "AI Sotuv", href: "/ai-sotuv" }, { label: "Knowledge Base" }]}
+        actions={canManage ? <AddKnowledgeForm /> : null}
       />
       <SalesTabs active="knowledge" />
       <NoAutoReplyNotice />
@@ -92,6 +94,8 @@ export default async function SalesKnowledgePage({
               confidence={item.confidence}
               tags={item.tags}
               sourceConversationId={item.sourceConversationId}
+              sourceType={item.sourceType}
+              priority={item.priority}
               createdAt={item.createdAt}
               canManage={canManage}
             />

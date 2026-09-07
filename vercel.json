@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/intake-publish-batches",
       "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/cron/sales-followups",
+      "schedule": "* * * * *"
     }
   ]
 }

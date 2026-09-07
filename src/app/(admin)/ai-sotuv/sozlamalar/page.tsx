@@ -15,7 +15,7 @@ import {
 } from "@/lib/sales/telegram-sales-api";
 import { formatDate } from "@/lib/utils";
 import { SalesTabs, NoAutoReplyNotice } from "../sales-tabs";
-import { LearningSettingsForm, RecencyBucketsForm } from "./settings-forms";
+import { FlowSettingsForm, LearningSettingsForm, RecencyBucketsForm } from "./settings-forms";
 
 export const metadata = { title: "AI Sotuv — Sozlamalar" };
 export const dynamic = "force-dynamic";
@@ -172,6 +172,14 @@ export default async function SalesSettingsPage() {
 
       {canManage ? (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <div className="lg:col-span-2">
+            <FlowSettingsForm
+              autoReplyEnabled={settings.flow.autoReplyEnabled}
+              followupOfferReviewMinutes={settings.flow.followupOfferReviewMinutes}
+              followupArticleDecisionMinutes={settings.flow.followupArticleDecisionMinutes}
+              followupLaterMinutes={settings.flow.followupLaterMinutes}
+            />
+          </div>
           <RecencyBucketsForm buckets={settings.recencyBuckets} />
           <LearningSettingsForm
             batchSize={settings.learning.batchSize}

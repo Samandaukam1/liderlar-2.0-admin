@@ -2,6 +2,8 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { parseSalesUpdate } from "@/lib/sales/update-parser";
 import { isValidWebhookSecret } from "@/lib/sales/webhook-auth";
+import { handleIncomingMessage } from "@/lib/sales/flow/engine";
+import { recordPaymentEvidence } from "@/lib/sales/flow/payment-evidence";
 import {
   getConnection,
   ingestBusinessMessage,
@@ -22,9 +24,12 @@ export const dynamic = "force-dynamic";
  * o'z sekretida ishlaydi. Bu route FAQAT `SALES_TELEGRAM_*` env'larini
  * o'qiydi; ikkovi bir-birining sozlamasini ko'rmaydi.
  *
- * 0.1 DA JAVOB YO'Q. Bu fayl Telegram transportini import ham qilmaydi —
- * mijozga xabar yuborishning kod yo'li mavjud emas. Bot faqat O'QIYDI,
- * SAQLAYDI va (alohida, admin bosgan tugma orqali) O'RGANADI.
+ * 0.2 DA JAVOB BOR, LEKIN QAT'IY CHEGARADA. Bu fayl Telegram
+ * transportini o'zi import QILMAYDI: u sotuv oqimi dvigatelini
+ * (`flow/engine.ts`) chaqiradi, dvigatel esa har yuborishdan oldin
+ * `outbound-guard.ts` dan muhrlangan ruxsat oladi. Sozlama o'chiq
+ * bo'lsa (standart holat), inson suhbatni qo'lga olgan bo'lsa yoki
+ * bosqich kutilganidan boshqa bo'lsa — hech narsa yuborilmaydi.
  *
  * Route `src/proxy.ts` dagi MACHINE_PATHS ro'yxatida: admin sessiya
  * middleware'i Telegram'ga 307 qaytarsa, Telegram har yetkazishni "Wrong
@@ -93,6 +98,37 @@ async function handleSalesUpdate(update: unknown): Promise<void> {
         `[sales-webhook] xabar: stored=${result.stored} duplicate=${result.duplicate} ` +
           `direction=${parsed.message.direction}`,
       );
+
+      // TAKRORIY UPDATE IKKINCHI JAVOB YUBORMAYDI: oqim faqat YANGI
+      // saqlangan KIRUVCHI xabarda ishga tushadi. Takror kelgan update
+      // `stored: false` beradi va bu yerda to'xtaydi.
+      if (!result.stored || !result.conversationId) return;
+      if (parsed.message.direction !== "incoming") return;
+
+      // Chek (rasm/hujjat) bo'lsa avval saqlanadi — oqim uni ko'rishi
+      // uchun yozuv allaqachon joyida bo'lishi kerak.
+      if (parsed.message.fileId) {
+        const evidence = await recordPaymentEvidence({
+          conversationId: result.conversationId,
+          messageId: result.messageId,
+          fileId: parsed.message.fileId,
+          messageType: parsed.message.messageType,
+        });
+        if (evidence.error) console.warn(`[sales-webhook] chek: ${evidence.error}`);
+      }
+
+      const flow = await handleIncomingMessage({
+        conversationId: result.conversationId,
+        messageId: result.messageId,
+        text: parsed.message.text,
+        messageType: parsed.message.messageType,
+      });
+      if (flow) {
+        console.log(
+          `[sales-webhook] oqim: ${flow.stageBefore} -> ${flow.stageAfter} ` +
+            `intent=${flow.intent} sent=${flow.sent.length} refused=${flow.refusals.join(",")}`,
+        );
+      }
       return;
     }
     case "deleted": {

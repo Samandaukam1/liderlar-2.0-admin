@@ -2,11 +2,15 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import { Check, Pencil, X, ExternalLink } from "lucide-react";
+import { Archive, Check, Pencil, X, ExternalLink } from "lucide-react";
 import { Badge } from "@/components/admin/badges";
 import { Button, Select, Textarea, Input, Label } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
-import { reviewKnowledgeAction, updateKnowledgeAction } from "@/lib/actions/sales";
+import {
+  archiveKnowledgeAction,
+  reviewKnowledgeAction,
+  updateKnowledgeAction,
+} from "@/lib/actions/sales";
 import {
   KNOWLEDGE_CATEGORIES,
   KNOWLEDGE_CATEGORY_LABELS,
@@ -23,7 +27,10 @@ export interface KnowledgeItemProps {
   status: KnowledgeStatus;
   confidence: number;
   tags: string[];
-  sourceConversationId: string;
+  /** Qo'lda kiritilgan bilimda YO'Q — manba adminning o'zi. */
+  sourceConversationId: string | null;
+  sourceType: "manual" | "ai_extracted";
+  priority: number;
   createdAt: string;
   canManage: boolean;
 }
@@ -61,6 +68,17 @@ export function KnowledgeItem(props: KnowledgeItemProps) {
     });
   }
 
+  function archive() {
+    const formData = new FormData();
+    formData.set("id", props.id);
+    startTransition(async () => {
+      const result = await archiveKnowledgeAction(formData);
+      // Arxivlangan yozuv o'chirilmaydi — ro'yxatdan chiqadi, tarixda qoladi.
+      if (result.ok) toast("success", "Arxivlandi");
+      else toast("error", "Saqlanmadi", result.error);
+    });
+  }
+
   function save(formData: FormData) {
     formData.set("id", props.id);
     startTransition(async () => {
@@ -82,12 +100,20 @@ export function KnowledgeItem(props: KnowledgeItemProps) {
         <span className="text-xs text-ink-soft">
           Ishonch: {Math.round(props.confidence * 100)}%
         </span>
-        <Link
-          href={`/ai-sotuv/suhbatlar/${props.sourceConversationId}`}
-          className="ml-auto inline-flex items-center gap-1 text-xs font-semibold text-brand hover:underline"
-        >
-          Manba suhbat <ExternalLink className="h-3 w-3" />
-        </Link>
+        {props.sourceType === "manual" ? (
+          <Badge accent="cyan">qo‘lda · ustuvorlik {props.priority}</Badge>
+        ) : null}
+        {props.sourceConversationId ? (
+          <Link
+            href={`/ai-sotuv/suhbatlar/${props.sourceConversationId}`}
+            className="ml-auto inline-flex items-center gap-1 text-xs font-semibold text-brand hover:underline"
+          >
+            Manba suhbat <ExternalLink className="h-3 w-3" />
+          </Link>
+        ) : (
+          // Qo'lda kiritilgan bilimning manbasi — adminning o'zi.
+          <span className="ml-auto text-xs text-ink-soft">manba: admin</span>
+        )}
       </div>
 
       {editing ? (
@@ -176,6 +202,9 @@ export function KnowledgeItem(props: KnowledgeItemProps) {
               </Button>
               <Button size="sm" variant="secondary" onClick={() => setEditing(true)}>
                 <Pencil className="h-3.5 w-3.5" /> Tahrirlash
+              </Button>
+              <Button size="sm" variant="ghost" onClick={archive} disabled={pending}>
+                <Archive className="h-3.5 w-3.5" /> Arxivlash
               </Button>
             </div>
           ) : null}

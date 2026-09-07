@@ -273,15 +273,20 @@ test("tahrir faqat yangiroq bo‘lsa qo‘llanadi", () => {
 /* --------------------------- AVTO-JAVOB YO‘QLIGI -------------------------- */
 
 test("oq ro‘yxatdagi metodlarning birortasi ham xabar yubormaydi", () => {
+  // 0.2 da `getFile` qo'shildi (chekni yuklab olish uchun) — u ham
+  // O'QISH metodi. Ro'yxatda yuboruvchi metod YO'Q va bo'lmasligi kerak.
   assert.deepEqual([...ALLOWED_SALES_BOT_METHODS], [
     "getMe",
     "getWebhookInfo",
     "setWebhook",
     "deleteWebhook",
+    "getFile",
   ]);
   for (const method of ALLOWED_SALES_BOT_METHODS) {
     assert.doesNotThrow(() => assertAllowedSalesMethod(method));
   }
+  // Ro'yxatdagi hech bir metod nomi "send" bilan boshlanmaydi.
+  assert.ok(ALLOWED_SALES_BOT_METHODS.every((m) => !/^send/i.test(m)));
 });
 
 test("mijozga xabar yuboradigan har qanday metod bloklanadi", () => {
@@ -337,7 +342,25 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
-test("sotuv kodida mijozga xabar yuboradigan chaqiruv YO‘Q", () => {
+/**
+ * 0.2 da mijozga javob yozish paydo bo'ldi. Kafolat kuchsizlanmadi,
+ * SHAKLI o'zgardi: yuborish kodi butun loyihada BITTA faylda —
+ * `telegram-sales-api.ts` da — va u muhrlangan ruxsatsiz ishlamaydi.
+ *
+ * Shuning uchun test endi ikki narsani tekshiradi:
+ *   1. boshqa har qanday sotuv faylida yuborish chaqiruvi YO'Q;
+ *   2. yagona yuboruvchi fayl ruxsatni MAJBURIY tekshiradi.
+ */
+const OUTBOUND_METHODS =
+  "sendMessage|sendPhoto|sendDocument|sendChatAction|copyMessage|forwardMessage|answerCallbackQuery|editMessageText";
+const OUTBOUND_CALL = new RegExp(
+  `(?:\\b(?:${OUTBOUND_METHODS})\\s*\\()|(?:["'\`/](?:${OUTBOUND_METHODS})["'\`])`,
+);
+
+/** Yuborish kodi FAQAT shu faylda bo'lishi mumkin. */
+const OUTBOUND_MODULE = "src/lib/sales/telegram-sales-api.ts";
+
+test("mijozga xabar yuborish kodi FAQAT bitta muhrlangan faylda", () => {
   const targets = [
     ...collectFiles(join(ROOT, "src/lib/sales")),
     ...collectFiles(join(ROOT, "src/app/api/telegram-sales")),
@@ -345,13 +368,29 @@ test("sotuv kodida mijozga xabar yuboradigan chaqiruv YO‘Q", () => {
   ];
   assert.ok(targets.length >= 10, "skanerlanadigan fayllar topilmadi");
 
-  const forbidden = /\b(sendMessage|sendPhoto|sendDocument|sendChatAction|copyMessage|forwardMessage|answerCallbackQuery|editMessageText)\b/;
-
+  const offenders: string[] = [];
   for (const file of targets) {
+    if (file.endsWith(OUTBOUND_MODULE.replace("src/lib/sales/", "sales/"))) continue;
     const code = stripComments(readFileSync(file, "utf8"));
-    const match = code.match(forbidden);
-    assert.equal(match, null, `${file} da ${match?.[0]} uchradi — 0.1 da avto-javob taqiqlangan`);
+    if (OUTBOUND_CALL.test(code)) offenders.push(file);
   }
+  assert.deepEqual(offenders, [], "yuborish chaqiruvi ruxsatsiz faylda uchradi");
+});
+
+test("yagona yuboruvchi funksiya MUHRLANGAN ruxsatni talab qiladi", () => {
+  const source = readFileSync(join(ROOT, OUTBOUND_MODULE), "utf8");
+  const send = source.slice(source.indexOf("export async function sendSalesMessage"));
+
+  // Birinchi ish — ruxsatni tekshirish; ruxsatsiz chaqiruv xato tashlaydi.
+  assert.match(send, /if \(!isOutboundAuthorized\(authorization\)\)/);
+  assert.match(send, /throw new SalesAutoReplyBlockedError/);
+  // Tekshiruv `fetch` dan OLDIN turishi shart.
+  assert.ok(
+    send.indexOf("isOutboundAuthorized") < send.indexOf("fetch("),
+    "ruxsat tekshiruvi yuborishdan keyin qolib ketgan",
+  );
+  // Sinov rejimida tarmoqqa umuman chiqmaydi.
+  assert.ok(send.indexOf("authorization.simulated") < send.indexOf("fetch("));
 });
 
 test("webhook route Telegram transportini umuman import qilmaydi", () => {

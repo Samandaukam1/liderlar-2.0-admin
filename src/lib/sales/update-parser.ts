@@ -34,6 +34,11 @@ interface RawChat {
   last_name?: string;
 }
 
+interface RawPhotoSize {
+  file_id?: string;
+  file_size?: number;
+}
+
 interface RawMessage {
   message_id?: number;
   business_connection_id?: string;
@@ -45,6 +50,8 @@ interface RawMessage {
   caption?: string;
   reply_to_message?: { message_id?: number };
   forward_origin?: unknown;
+  photo?: RawPhotoSize[];
+  document?: { file_id?: string };
   [key: string]: unknown;
 }
 
@@ -106,6 +113,15 @@ export interface ParsedBusinessMessage {
   contact: ParsedContact | null;
   /** Minimal metadata. Fayl id, telefon, token bu yerga TUSHMAYDI. */
   metadata: Record<string, unknown>;
+  /**
+   * Telegram fayl identifikatori — FAQAT rasm/hujjat xabarlarida.
+   *
+   * `metadata` ga ATAYLAB qo'shilmaydi: u xabarning shakli haqidagi
+   * ochiq maydon va u yerga fayl havolasi tushmasligi kerak. Fayl id
+   * bitta joyda kerak — to'lov cheki (`sales_payment_evidence`), va u
+   * shu qiymatni to'g'ridan-to'g'ri oladi.
+   */
+  fileId: string | null;
 }
 
 export interface ParsedDeletion {
@@ -232,6 +248,7 @@ function parseMessage(
   const messageType = resolveMessageType(raw);
 
   return {
+    fileId: extractFileId(raw, messageType),
     businessConnectionId,
     chatId,
     chatTitle: str(chat.title),
@@ -252,6 +269,23 @@ function parseMessage(
       hasCaption: str(raw.caption) != null,
     },
   };
+}
+
+/**
+ * Chek bo'lishi mumkin bo'lgan xabarlardan fayl id'sini oladi.
+ * Rasmda eng katta o'lcham tanlanadi — chek matni o'qilishi kerak.
+ */
+function extractFileId(raw: RawMessage, messageType: SalesMessageType): string | null {
+  if (messageType === "photo") {
+    const sizes = Array.isArray(raw.photo) ? raw.photo : [];
+    const largest = sizes.reduce<RawPhotoSize | null>(
+      (best, size) => ((size.file_size ?? 0) >= (best?.file_size ?? 0) ? size : best),
+      null,
+    );
+    return str(largest?.file_id);
+  }
+  if (messageType === "document") return str(raw.document?.file_id);
+  return null;
 }
 
 /**

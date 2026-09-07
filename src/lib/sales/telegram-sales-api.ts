@@ -12,23 +12,39 @@ import "server-only";
  * NEGA OQ RO'YXAT (allowlist), qora ro'yxat emas:
  *   Qora ro'yxat "sendMessage taqiqlangan" deydi va `copyMessage`,
  *   `sendPhoto`, `answerCallbackQuery` kabi o'nlab boshqa yo'lni ochiq
- *   qoldiradi. Oq ro'yxat esa teskari ishlaydi — 0.1 da ruxsat etilgan
- *   to'rtta metoddan tashqari HAMMASI xato tashlaydi. 0.2 da draft javob
- *   qo'shilganda ro'yxat ATAYLAB kengaytirilishi kerak bo'ladi, ya'ni
- *   avto-javob tasodifan paydo bo'lolmaydi.
+ *   qoldiradi. Oq ro'yxat esa teskari ishlaydi — ruxsat etilgan
+ *   metoddan tashqari HAMMASI xato tashlaydi.
+ *
+ * 0.2 DA NIMA O'ZGARDI: mijozga javob yozish kerak bo'ldi. Lekin
+ * `ALLOWED_SALES_BOT_METHODS` ro'yxatiga `sendMessage` QO'SHILMADI —
+ * u hamon xato tashlaydi. Yuborish butunlay ALOHIDA yo'ldan boradi:
+ * `sendSalesMessage`, va u oddiy parametr emas, `outbound-guard.ts`
+ * dagi MUHRLANGAN ruxsatni talab qiladi. Muhrni faqat o'sha modul
+ * yasay oladi, ya'ni har yuborish uning tekshiruvlaridan o'tgan
+ * bo'ladi: sozlama yoqiqmi, inson qo'lga olmaganmi, bosqich mosmi,
+ * ulanish javob yozishga ruxsat berganmi.
+ *
+ * Natijada "tasodifiy `sendMessage` yordamchisi" degan narsa mavjud
+ * emas: uni chaqirish uchun avval ruxsat olish shart.
  */
+
+import { isOutboundAuthorized } from "./flow/outbound-guard.ts";
 
 const TELEGRAM_API = "https://api.telegram.org";
 
 /**
- * 0.1 da ruxsat etilgan metodlar. Birortasi ham mijozga xabar yubormaydi:
- * uchtasi webhook sozlash, bittasi bot haqida ma'lumot.
+ * Ruxsat etilgan O'QISH metodlari. Birortasi ham mijozga xabar
+ * yubormaydi: uchtasi webhook sozlash, bittasi bot haqida ma'lumot,
+ * bittasi fayl havolasini olish.
  */
 export const ALLOWED_SALES_BOT_METHODS = [
   "getMe",
   "getWebhookInfo",
   "setWebhook",
   "deleteWebhook",
+  // 0.2: to'lov chekini yuklab olish uchun. O'QISH metodi — u orqali
+  // mijozga hech narsa yuborib bo'lmaydi.
+  "getFile",
 ] as const;
 
 export type AllowedSalesBotMethod = (typeof ALLOWED_SALES_BOT_METHODS)[number];
@@ -178,4 +194,77 @@ export async function setSalesWebhook(url: string): Promise<SalesTelegramResult<
     allowed_updates: SALES_ALLOWED_UPDATES,
     drop_pending_updates: false,
   });
+}
+
+
+/* ======================================================================== *
+ * MIJOZGA JAVOB — MUHRLANGAN YO'L
+ * ======================================================================== */
+
+export interface SalesSendResult {
+  ok: boolean;
+  telegramMessageId: number | null;
+  error: string | null;
+}
+
+/**
+ * Business chatga xabar yuboradi.
+ *
+ * BIRINCHI QATOR — muhr tekshiruvi. Ruxsatsiz chaqiruv shu yerda
+ * to'xtaydi va `SalesAutoReplyBlockedError` tashlaydi, ya'ni bu
+ * funksiyani "shunchaki chaqirib" mijozga yozib bo'lmaydi.
+ *
+ * Sinov (simulated) ruxsati bilan chaqirilsa TARMOQQA UMUMAN
+ * chiqmaydi — natija qaytadi, lekin Telegram bu haqda bilmaydi.
+ */
+export async function sendSalesMessage(
+  authorization: unknown,
+  text: string,
+): Promise<SalesSendResult> {
+  if (!isOutboundAuthorized(authorization)) {
+    throw new SalesAutoReplyBlockedError("sendMessage (ruxsatsiz)");
+  }
+
+  if (authorization.simulated) {
+    return { ok: true, telegramMessageId: null, error: null };
+  }
+
+  const response = await fetch(`${TELEGRAM_API}/bot${salesBotToken()}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      // Business chatga yozish uchun ulanish identifikatori majburiy.
+      business_connection_id: authorization.businessConnectionId,
+      chat_id: authorization.chatId,
+      text,
+      disable_web_page_preview: false,
+    }),
+  });
+
+  const raw = await response.text();
+  try {
+    const parsed = JSON.parse(raw) as {
+      ok?: boolean;
+      description?: string;
+      result?: { message_id?: number };
+    };
+    if (!parsed.ok) {
+      return { ok: false, telegramMessageId: null, error: parsed.description ?? "Telegram rad etdi" };
+    }
+    return { ok: true, telegramMessageId: parsed.result?.message_id ?? null, error: null };
+  } catch {
+    return {
+      ok: false,
+      telegramMessageId: null,
+      error: `Telegram javobi JSON emas (HTTP ${response.status})`,
+    };
+  }
+}
+
+
+/** Telegram fayli uchun yuklab olish havolasi. */
+export async function getSalesFileUrl(fileId: string): Promise<string | null> {
+  const res = await callSalesTelegram<{ file_path?: string }>("getFile", { file_id: fileId });
+  if (!res.ok || !res.result?.file_path) return null;
+  return `${TELEGRAM_API}/file/bot${salesBotToken()}/${res.result.file_path}`;
 }

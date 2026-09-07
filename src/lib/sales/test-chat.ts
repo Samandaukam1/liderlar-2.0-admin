@@ -60,6 +60,8 @@ function getOpenAI(): OpenAI {
 export interface TestChatSource {
   id: string;
   kind: "knowledge" | "pattern";
+  /** Bilim manbasi: MANUAL yoki AI. Diagnostikada ko'rsatiladi. */
+  sourceType?: "manual" | "ai_extracted";
   title: string;
   body: string;
   /** Nega tanlangani yoki qanday natija bergani. */
@@ -74,6 +76,12 @@ export interface TestChatDiagnostics {
   knowledgeCount: number;
   patternCount: number;
   styleProfileActive: boolean;
+  /**
+   * Tanlangan bilimlarning manbasi. `manual` — kamida bittasi qo'lda
+   * kiritilgan va u ustun turgan.
+   */
+  knowledgeSource: "manual" | "ai_extracted" | "mixed" | "none";
+  manualKnowledgeCount: number;
   /** 0–1. Retrieval kuchidan, modeldan emas. */
   confidence: number;
   /** Tasdiqlangan material topilmadi — javobda fakt bo‘lmasligi kerak. */
@@ -131,6 +139,9 @@ export async function generateTestReply(options: {
     answer: row.answer,
     tags: row.tags,
     confidence: row.confidence,
+    // Qo'lda kiritilgan bilim mos bilimlar ORASIDA birinchi turadi.
+    sourceType: row.sourceType,
+    priority: row.priority,
   }));
 
   const patternItems: RetrievablePattern[] = patternRows.map((row) => ({
@@ -192,6 +203,8 @@ export async function generateTestReply(options: {
     knowledgeCount: selection.items.length,
     patternCount: patterns.length,
     styleProfileActive: style != null,
+    knowledgeSource: resolveKnowledgeSource(selection.items),
+    manualKnowledgeCount: selection.items.filter((e) => e.item.sourceType === "manual").length,
     confidence: computeConfidence({
       intentResolved: intent != null,
       intentKnown: intent?.known ?? false,
@@ -231,10 +244,21 @@ export async function generateTestReply(options: {
 }
 
 /** "Manbalarni ko'rish" oynasi uchun ro'yxat. */
+/** Tanlangan bilimlar qaysi manbadan — diagnostikaning MANUAL yozuvi. */
+function resolveKnowledgeSource(
+  items: readonly ScoredKnowledge[],
+): "manual" | "ai_extracted" | "mixed" | "none" {
+  if (items.length === 0) return "none";
+  const manual = items.filter((entry) => entry.item.sourceType === "manual").length;
+  if (manual === 0) return "ai_extracted";
+  if (manual === items.length) return "manual";
+  return "mixed";
+}
+
 function buildSources(
   knowledge: readonly ScoredKnowledge[],
   patterns: readonly RetrievablePattern[],
-  knowledgeRows: readonly { id: string; sourceConversationId: string }[],
+  knowledgeRows: readonly { id: string; sourceConversationId: string | null }[],
 ): TestChatSource[] {
   const conversationById = new Map(
     knowledgeRows.map((row) => [row.id, row.sourceConversationId]),
@@ -244,6 +268,7 @@ function buildSources(
     ...knowledge.map<TestChatSource>((entry) => ({
       id: entry.item.id,
       kind: "knowledge",
+      sourceType: entry.item.sourceType ?? "ai_extracted",
       title: entry.item.question ?? entry.item.category,
       body: entry.item.answer,
       meta: entry.reasons.join(", ") || "turkum bo‘yicha",

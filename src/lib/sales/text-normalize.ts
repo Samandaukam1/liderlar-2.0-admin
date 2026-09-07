@@ -24,3 +24,55 @@ export function normalizeApostrophes(text: string): string {
 export function normalizeForMatch(text: string): string {
   return normalizeApostrophes(text).toLowerCase();
 }
+
+/**
+ * Yozishmadagi imlo va yozuv variantlari.
+ *
+ * FAQAT NIYAT ANIQLASH UCHUN. Xom xabar bazada o'zgarmasdan qoladi —
+ * bu yerdagi almashtirish tasnif bosqichida, xotirada bajariladi.
+ *
+ * "хуш" alohida holat: u BILIM EMAS, yozishmadagi xato. Ma'nosi "xo'p".
+ * Uni bilim bazasiga xizmat fakti sifatida kiritish model "хуш degan
+ * xizmat bor" deb o'ylashiga olib kelardi, shuning uchun u shu yerda,
+ * variant sifatida hal qilinadi.
+ */
+export const SALES_WORD_VARIANTS: Readonly<Record<string, string>> = {
+  // tasdiq
+  "хуш": "xo'p",
+  "хўп": "xo'p",
+  "хоп": "xo'p",
+  "xop": "xo'p",
+  "xup": "xo'p",
+  "xa": "ha",
+  "ха": "ha",
+  "хa": "ha",
+  "да": "ha",
+  "ok": "ok",
+  "ок": "ok",
+  "okey": "ok",
+  "хорошо": "ok",
+  // inkor
+  "юк": "yo'q",
+  "йўқ": "yo'q",
+  "йук": "yo'q",
+  "yoq": "yo'q",
+  "yuq": "yo'q",
+  "нет": "yo'q",
+};
+
+/**
+ * Niyat aniqlash uchun tayyor matn: apostrof + kichik harf + variantlar.
+ * So'z bo'yicha almashtiriladi, shuning uchun "ha shunaqa" ham,
+ * "юк" ham to'g'ri tushuniladi.
+ */
+export function normalizeForIntent(text: string): string {
+  return normalizeForMatch(text)
+    .split(/(\s+)/)
+    .map((chunk) => {
+      if (/^\s+$/.test(chunk)) return chunk;
+      const bare = chunk.replace(/[^\p{L}\p{N}']/gu, "");
+      const replacement = SALES_WORD_VARIANTS[bare];
+      return replacement ? chunk.replace(bare, replacement) : chunk;
+    })
+    .join("");
+}

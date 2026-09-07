@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requirePermission } from "@/lib/auth";
@@ -12,6 +13,8 @@ import {
   type DeepLearningSnapshot,
 } from "@/lib/sales/deep-learning";
 import { generateTestReply, type TestChatResult } from "@/lib/sales/test-chat";
+import { confirmPayment, setHumanTakeover } from "@/lib/sales/flow/engine";
+import { simulateConversation, type SimulationRun } from "@/lib/sales/flow/simulate";
 import { saveSalesSetting } from "@/lib/sales/settings";
 import { parseRecencyBuckets } from "@/lib/sales/recency";
 import { redactPii, isRedacted } from "@/lib/sales/redact";
@@ -422,4 +425,211 @@ export async function sendTestChatMessageAction(
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Kutilmagan xato." };
   }
+}
+
+/* ======================================================================== *
+ * QO'LDA BILIM KIRITISH
+ *
+ * Manba suhbat MAJBURIY EMAS: admin o'zi yozgan bilimning manbasi —
+ * adminning o'zi. AI ajratgan bilim uchun esa manba sharti bazada
+ * saqlanib qoladi (CHECK sales_knowledge_source_required).
+ * ======================================================================== */
+
+const manualKnowledgeSchema = z.object({
+  category: z.enum(KNOWLEDGE_CATEGORIES),
+  question: z.string().max(500).optional().or(z.literal("")),
+  answer: z.string().trim().min(1, "Bilim matni bo‘sh bo‘lmasin").max(4000),
+  tags: z.string().max(300).optional().or(z.literal("")),
+  priority: z.coerce.number().int().min(0).max(1000),
+  status: z.enum(["draft", "approved"]),
+});
+
+export async function createManualKnowledgeAction(
+  formData: FormData,
+): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  const parsed = manualKnowledgeSchema.safeParse({
+    category: formData.get("category"),
+    question: formData.get("question") ?? "",
+    answer: formData.get("answer"),
+    tags: formData.get("tags") ?? "",
+    priority: formData.get("priority") ?? 100,
+    status: formData.get("status") ?? "draft",
+  });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Forma xatosi" };
+  }
+
+  // Qo'lda yozilgan matn ham redaksiyadan o'tadi: admin xom
+  // yozishmadan telefon yoki karta raqamini nusxalab qo'yishi mumkin.
+  const answer = redactPii(parsed.data.answer).text;
+  const question = parsed.data.question?.trim() ? redactPii(parsed.data.question).text : null;
+  if (!isRedacted(answer) || (question != null && !isRedacted(question))) {
+    return { ok: false, error: "Matnda shaxsiy ma’lumot qoldi — saqlanmadi." };
+  }
+
+  const tags = (parsed.data.tags ?? "")
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter((tag) => tag !== "")
+    .slice(0, 10);
+
+  const admin = createSupabaseAdminClient();
+  const { error } = await admin.from("sales_knowledge").insert({
+    category: parsed.data.category,
+    question,
+    answer,
+    tags,
+    confidence: 1.0,
+    status: parsed.data.status,
+    source_type: "manual",
+    priority: parsed.data.priority,
+    // Manba suhbat YO'Q — bu ataylab, migratsiyadagi CHECK shunga ruxsat beradi.
+    source_conversation_id: null,
+    dedupe_key: `manual:${randomUUID()}`,
+    created_by: ctx.userId,
+    updated_by: ctx.userId,
+    reviewed_by: parsed.data.status === "approved" ? ctx.userId : null,
+    reviewed_at: parsed.data.status === "approved" ? new Date().toISOString() : null,
+  });
+
+  if (error) return { ok: false, error: error.message };
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.knowledge.manual_create",
+    entityType: "sales_knowledge",
+    newValue: { category: parsed.data.category, status: parsed.data.status },
+  });
+
+  revalidateSales();
+  return { ok: true, message: "Bilim qo‘shildi." };
+}
+
+export async function archiveKnowledgeAction(formData: FormData): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+  const id = String(formData.get("id") ?? "");
+  if (!z.string().uuid().safeParse(id).success) {
+    return { ok: false, error: "Identifikator noto‘g‘ri." };
+  }
+
+  const admin = createSupabaseAdminClient();
+  // O'CHIRILMAYDI, arxivlanadi: bu yozuv qaysi javobga asos bo'lganini
+  // keyin ham tekshirish kerak bo'lishi mumkin.
+  const { error } = await admin
+    .from("sales_knowledge")
+    .update({ archived_at: new Date().toISOString(), updated_by: ctx.userId, status: "rejected" })
+    .eq("id", id);
+  if (error) return { ok: false, error: error.message };
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.knowledge.archive",
+    entityType: "sales_knowledge",
+    entityId: id,
+  });
+
+  revalidateSales();
+  return { ok: true };
+}
+
+/* ======================================================================== *
+ * SOTUV OQIMI (0.2)
+ * ======================================================================== */
+
+export async function confirmPaymentAction(formData: FormData): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+  const conversationId = String(formData.get("conversationId") ?? "");
+  if (!z.string().uuid().safeParse(conversationId).success) {
+    return { ok: false, error: "Suhbat identifikatori noto‘g‘ri." };
+  }
+
+  const result = await confirmPayment({ conversationId, actorId: ctx.userId });
+  if (!result.ok) return { ok: false, error: result.error };
+
+  revalidatePath(`/ai-sotuv/suhbatlar/${conversationId}`);
+  revalidateSales();
+  return { ok: true, message: "To‘lov tasdiqlandi." };
+}
+
+export async function setHumanTakeoverAction(formData: FormData): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+  const conversationId = String(formData.get("conversationId") ?? "");
+  if (!z.string().uuid().safeParse(conversationId).success) {
+    return { ok: false, error: "Suhbat identifikatori noto‘g‘ri." };
+  }
+  const enabled = String(formData.get("enabled") ?? "") === "true";
+
+  const result = await setHumanTakeover({ conversationId, enabled, actorId: ctx.userId });
+  if (!result.ok) return { ok: false, error: result.error };
+
+  revalidatePath(`/ai-sotuv/suhbatlar/${conversationId}`);
+  return {
+    ok: true,
+    message: enabled ? "Suhbat inson nazoratiga o‘tdi." : "AI qayta yoqildi.",
+  };
+}
+
+const flowSettingsSchema = z.object({
+  autoReplyEnabled: z.boolean(),
+  followupOfferReviewMinutes: z.coerce.number().int().min(1).max(1440),
+  followupArticleDecisionMinutes: z.coerce.number().int().min(1).max(1440),
+  followupLaterMinutes: z.coerce.number().int().min(1).max(10080),
+});
+
+export async function saveFlowSettingsAction(formData: FormData): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  const parsed = flowSettingsSchema.safeParse({
+    autoReplyEnabled: formData.get("autoReplyEnabled") === "on",
+    followupOfferReviewMinutes: formData.get("followupOfferReviewMinutes"),
+    followupArticleDecisionMinutes: formData.get("followupArticleDecisionMinutes"),
+    followupLaterMinutes: formData.get("followupLaterMinutes"),
+  });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Forma xatosi" };
+  }
+
+  try {
+    await saveSalesSetting("flow", parsed.data, ctx.userId);
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Saqlanmadi." };
+  }
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.settings.flow",
+    entityType: "sales_settings",
+    entityId: "flow",
+    newValue: parsed.data,
+    // Avto-javobni yoqish — mijozlarga xabar ketishini boshlaydi.
+    severity: parsed.data.autoReplyEnabled ? "warning" : "info",
+  });
+
+  revalidateSales();
+  return { ok: true, message: "Sozlamalar saqlandi." };
+}
+
+/** Sinov: ssenariyni bazasiz va Telegramsiz o‘ynab ko‘rish. */
+export async function simulateSalesFlowAction(
+  formData: FormData,
+): Promise<SalesActionResult & { run?: SimulationRun }> {
+  await requirePermission("sales.view");
+
+  let inputs: unknown;
+  try {
+    inputs = JSON.parse(String(formData.get("inputs") ?? "[]"));
+  } catch {
+    return { ok: false, error: "Ssenariy o‘qib bo‘lmadi." };
+  }
+
+  const parsed = z
+    .array(z.object({ text: z.string().max(500), messageType: z.string().max(30).optional() }))
+    .max(50)
+    .safeParse(inputs);
+  if (!parsed.success) return { ok: false, error: "Ssenariy shakli noto‘g‘ri." };
+
+  // Sof funksiya: na baza, na Telegram, na AI.
+  return { ok: true, run: simulateConversation(parsed.data) };
 }

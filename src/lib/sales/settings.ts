@@ -32,16 +32,64 @@ export interface SalesDeepLearningSettings {
   maxMessagesPerConversation: number;
 }
 
+/** 0.2 sotuv oqimi sozlamalari. */
+export interface SalesFlowSettings {
+  /**
+   * Mijozga avtomatik javob yozish. STANDART QIYMAT — O'CHIQ.
+   *
+   * 0.1 dagi kafolat "bot hech kimga yozmaydi" edi. Migratsiya bu
+   * kalitni `false` bilan qo'shadi, ya'ni kod deploy bo'lgani bilan
+   * bot jim qoladi; yoqishni admin ataylab qiladi.
+   */
+  autoReplyEnabled: boolean;
+  followupOfferReviewMinutes: number;
+  followupArticleDecisionMinutes: number;
+  followupLaterMinutes: number;
+}
+
 export interface SalesSettings {
   recencyBuckets: readonly RecencyBucket[];
   learning: SalesLearningSettings;
   deepLearning: SalesDeepLearningSettings;
+  flow: SalesFlowSettings;
 }
 
 export const DEFAULT_LEARNING_SETTINGS: SalesLearningSettings = {
   batchSize: 25,
   minMessagesPerConversation: 4,
 };
+
+export const DEFAULT_FLOW_SETTINGS: SalesFlowSettings = {
+  autoReplyEnabled: false,
+  followupOfferReviewMinutes: 7,
+  followupArticleDecisionMinutes: 5,
+  followupLaterMinutes: 60,
+};
+
+function parseFlow(value: unknown): SalesFlowSettings {
+  if (!value || typeof value !== "object") return DEFAULT_FLOW_SETTINGS;
+  const raw = value as Record<string, unknown>;
+  const minutes = (input: unknown, fallback: number) => {
+    const n = typeof input === "number" ? Math.round(input) : Number.NaN;
+    return Number.isFinite(n) && n >= 1 && n <= 10_080 ? n : fallback;
+  };
+  return {
+    // Faqat ANIQ `true` yoqadi: nosoz qiymat botni jim qoldiradi.
+    autoReplyEnabled: raw.autoReplyEnabled === true,
+    followupOfferReviewMinutes: minutes(
+      raw.followupOfferReviewMinutes,
+      DEFAULT_FLOW_SETTINGS.followupOfferReviewMinutes,
+    ),
+    followupArticleDecisionMinutes: minutes(
+      raw.followupArticleDecisionMinutes,
+      DEFAULT_FLOW_SETTINGS.followupArticleDecisionMinutes,
+    ),
+    followupLaterMinutes: minutes(
+      raw.followupLaterMinutes,
+      DEFAULT_FLOW_SETTINGS.followupLaterMinutes,
+    ),
+  };
+}
 
 export const DEFAULT_DEEP_LEARNING_SETTINGS: SalesDeepLearningSettings = {
   targetConversations: 500,
@@ -99,19 +147,23 @@ export async function getSalesSettings(): Promise<SalesSettings> {
     const { data } = await admin
       .from("sales_settings")
       .select("key, value")
-      .in("key", ["recency_buckets", "learning", "deep_learning"]);
+      .in("key", ["recency_buckets", "learning", "deep_learning", "flow"]);
 
     const map = new Map((data ?? []).map((row) => [row.key as string, row.value]));
     return {
       recencyBuckets: parseRecencyBuckets(map.get("recency_buckets")),
       learning: parseLearning(map.get("learning")),
       deepLearning: parseDeepLearning(map.get("deep_learning")),
+      flow: parseFlow(map.get("flow")),
     };
   } catch {
     return {
       recencyBuckets: DEFAULT_RECENCY_BUCKETS,
       learning: DEFAULT_LEARNING_SETTINGS,
       deepLearning: DEFAULT_DEEP_LEARNING_SETTINGS,
+      // Baza yetib bo'lmasa avto-javob O'CHIQ qoladi — jim qolish
+      // noto'g'ri javob yuborishdan xavfsizroq.
+      flow: DEFAULT_FLOW_SETTINGS,
     };
   }
 }

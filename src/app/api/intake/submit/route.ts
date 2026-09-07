@@ -7,6 +7,7 @@ import { clientIpHash, jsonError, noStoreJson, originAllowed, readJsonBody } fro
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { canAdvanceAnswer, type AnswerState } from "@/lib/intake/constants";
 import { askPaymentOnSubmit } from "@/lib/intake/payment";
+import { onIntakeSubmitted } from "@/lib/sales/flow/engine";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -136,6 +137,20 @@ export async function POST(request: NextRequest) {
   // and it swallows its own failures, so a Telegram outage cannot turn a
   // successful submission into an error for the candidate.
   await askPaymentOnSubmit(resolved.intakeId);
+
+  // AI Sotuv botidan kelgan anketa bo'lsa, sotuv oqimiga signal beriladi:
+  // mijozga tasdiq va to'lov ma'lumotlari yuboriladi. Bog'liq suhbat
+  // bo'lmasa funksiya jimgina null qaytaradi, ya'ni oddiy anketa
+  // topshirish yo'liga hech narsa qo'shmaydi. Xatosini o'zi yutadi —
+  // sotuv boti ishlamayotgani muvaffaqiyatli topshirishni buzmasligi kerak.
+  try {
+    await onIntakeSubmitted(resolved.intakeId);
+  } catch (err) {
+    console.error(
+      "[intake-submit] sotuv oqimi signali:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 
   return noStoreJson({ ok: true });
 }

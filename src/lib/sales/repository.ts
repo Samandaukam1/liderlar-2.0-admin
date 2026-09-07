@@ -107,6 +107,8 @@ export interface IngestResult {
   stored: boolean;
   duplicate: boolean;
   conversationId: string | null;
+  /** Saqlangan xabarning id'si — sotuv oqimi shunga bog'lanadi. */
+  messageId: string | null;
 }
 
 /**
@@ -171,7 +173,9 @@ export async function ingestBusinessMessage(
     .maybeSingle();
 
   if (conversationError) throw new Error(conversationError.message);
-  if (!conversation) return { stored: false, duplicate: false, conversationId: null };
+  if (!conversation) {
+    return { stored: false, duplicate: false, conversationId: null, messageId: null };
+  }
   const conversationId = conversation.id as string;
 
   // --- takror tekshiruvi ---
@@ -194,7 +198,12 @@ export async function ingestBusinessMessage(
   );
 
   if (!apply) {
-    return { stored: false, duplicate: existing != null, conversationId };
+    return {
+      stored: false,
+      duplicate: existing != null,
+      conversationId,
+      messageId: (existing?.id as string) ?? null,
+    };
   }
 
   const row = {
@@ -212,9 +221,11 @@ export async function ingestBusinessMessage(
     metadata: message.metadata,
   };
 
-  const { error: messageError } = await admin
+  const { data: savedMessage, error: messageError } = await admin
     .from("sales_messages")
-    .upsert(row, { onConflict: "business_connection_id,chat_id,telegram_message_id" });
+    .upsert(row, { onConflict: "business_connection_id,chat_id,telegram_message_id" })
+    .select("id")
+    .maybeSingle();
   if (messageError) throw new Error(messageError.message);
 
   await refreshConversationCounters(conversationId, {
@@ -224,7 +235,12 @@ export async function ingestBusinessMessage(
     learningStatus: (conversation.learning_status as LearningStatus) ?? "pending",
   });
 
-  return { stored: true, duplicate: existing != null, conversationId };
+  return {
+    stored: true,
+    duplicate: existing != null,
+    conversationId,
+    messageId: (savedMessage?.id as string) ?? (existing?.id as string) ?? null,
+  };
 }
 
 /**
@@ -601,12 +617,15 @@ export async function getConversationDetail(id: string): Promise<ConversationDet
 export interface KnowledgeListItem {
   id: string;
   category: KnowledgeCategory;
+  sourceType: "manual" | "ai_extracted";
+  priority: number;
   question: string | null;
   answer: string;
   status: KnowledgeStatus;
   confidence: number;
   tags: string[];
-  sourceConversationId: string;
+  /** Qo'lda kiritilgan bilimda manba suhbat YO'Q — bu ataylab. */
+  sourceConversationId: string | null;
   sourceMessageId: string | null;
   sourceExcerpt: string | null;
   createdAt: string;
@@ -626,9 +645,11 @@ export async function listKnowledge(options: {
   let query = admin
     .from("sales_knowledge")
     .select(
-      "id, category, question, answer, status, confidence, tags, source_conversation_id, source_message_id, source_excerpt, created_at, reviewed_at",
+      "id, category, question, answer, status, confidence, tags, source_type, priority, source_conversation_id, source_message_id, source_excerpt, created_at, reviewed_at",
       { count: "exact" },
     )
+    // Arxivlangan yozuv ro'yxatda ham, retrievalda ham ko'rinmaydi.
+    .is("archived_at", null)
     .order("created_at", { ascending: false })
     .range(from, from + options.pageSize - 1);
 
@@ -645,6 +666,8 @@ export async function listKnowledge(options: {
     items: (data ?? []).map((row) => ({
       id: row.id as string,
       category: row.category as KnowledgeCategory,
+      sourceType: ((row.source_type as string) ?? "ai_extracted") as "manual" | "ai_extracted",
+      priority: (row.priority as number) ?? 0,
       question: (row.question as string | null) ?? null,
       answer: row.answer as string,
       status: row.status as KnowledgeStatus,
@@ -1073,21 +1096,24 @@ export async function listApprovedKnowledge(limit = 500): Promise<KnowledgeListI
   const { data } = await admin
     .from("sales_knowledge")
     .select(
-      "id, category, question, answer, status, confidence, tags, source_conversation_id, source_message_id, source_excerpt, created_at, reviewed_at",
+      "id, category, question, answer, status, confidence, tags, source_type, priority, source_conversation_id, source_message_id, source_excerpt, created_at, reviewed_at",
     )
     .eq("status", "approved")
+    .is("archived_at", null)
     .order("confidence", { ascending: false })
     .limit(limit);
 
   return (data ?? []).map((row) => ({
     id: row.id as string,
     category: row.category as KnowledgeCategory,
+    sourceType: ((row.source_type as string) ?? "ai_extracted") as "manual" | "ai_extracted",
+    priority: (row.priority as number) ?? 0,
     question: (row.question as string | null) ?? null,
     answer: row.answer as string,
     status: row.status as KnowledgeStatus,
     confidence: Number(row.confidence ?? 0),
     tags: (row.tags as string[]) ?? [],
-    sourceConversationId: row.source_conversation_id as string,
+    sourceConversationId: (row.source_conversation_id as string | null) ?? null,
     sourceMessageId: (row.source_message_id as string | null) ?? null,
     sourceExcerpt: (row.source_excerpt as string | null) ?? null,
     createdAt: row.created_at as string,
@@ -1111,4 +1137,114 @@ export async function getTestChatReadiness(): Promise<{
     getActiveStyleProfile(),
   ]);
   return { approvedKnowledge, approvedPatterns, hasStyleProfile: style != null };
+}
+
+/* ======================================================================== *
+ * 0.2 SOTUV OQIMI — suhbat holati
+ * ======================================================================== */
+
+export interface ConversationFlowState {
+  stage: string;
+  stageUpdatedAt: string | null;
+  aiEnabled: boolean;
+  takeoverAt: string | null;
+  customerFullName: string | null;
+  intakeId: string | null;
+  intakeLinkPrefix: string | null;
+  intakeLinkExpiresAt: string | null;
+  paymentStatus: string;
+  paidAt: string | null;
+  evidence: Array<{
+    id: string;
+    fileKind: string;
+    storagePath: string | null;
+    receivedAt: string;
+    confirmedAt: string | null;
+  }>;
+  outbound: Array<{
+    id: string;
+    kind: string;
+    templateKey: string | null;
+    body: string;
+    simulated: boolean;
+    error: string | null;
+    createdAt: string;
+  }>;
+  pendingFollowups: Array<{
+    id: string;
+    followupType: string;
+    scheduledAt: string;
+    expectedStage: string;
+  }>;
+}
+
+export async function getConversationFlowState(
+  conversationId: string,
+): Promise<ConversationFlowState | null> {
+  const admin = createSupabaseAdminClient();
+
+  const [{ data: conversation }, { data: evidence }, { data: outbound }, { data: followups }] =
+    await Promise.all([
+      admin
+        .from("sales_conversations")
+        .select(
+          "sales_stage, stage_updated_at, ai_enabled, takeover_at, customer_full_name, intake_id, intake_link_prefix, intake_link_expires_at, payment_status, paid_at",
+        )
+        .eq("id", conversationId)
+        .maybeSingle(),
+      admin
+        .from("sales_payment_evidence")
+        .select("id, file_kind, storage_path, received_at, confirmed_at")
+        .eq("conversation_id", conversationId)
+        .order("received_at", { ascending: false }),
+      admin
+        .from("sales_outbound_log")
+        .select("id, kind, template_key, body, simulated, error, created_at")
+        .eq("conversation_id", conversationId)
+        .order("created_at", { ascending: false })
+        .limit(50),
+      admin
+        .from("sales_followups")
+        .select("id, followup_type, scheduled_at, expected_stage")
+        .eq("conversation_id", conversationId)
+        .eq("status", "pending")
+        .order("scheduled_at", { ascending: true }),
+    ]);
+
+  if (!conversation) return null;
+
+  return {
+    stage: (conversation.sales_stage as string) ?? "new",
+    stageUpdatedAt: (conversation.stage_updated_at as string | null) ?? null,
+    aiEnabled: conversation.ai_enabled !== false,
+    takeoverAt: (conversation.takeover_at as string | null) ?? null,
+    customerFullName: (conversation.customer_full_name as string | null) ?? null,
+    intakeId: (conversation.intake_id as string | null) ?? null,
+    intakeLinkPrefix: (conversation.intake_link_prefix as string | null) ?? null,
+    intakeLinkExpiresAt: (conversation.intake_link_expires_at as string | null) ?? null,
+    paymentStatus: (conversation.payment_status as string) ?? "none",
+    paidAt: (conversation.paid_at as string | null) ?? null,
+    evidence: (evidence ?? []).map((row) => ({
+      id: row.id as string,
+      fileKind: row.file_kind as string,
+      storagePath: (row.storage_path as string | null) ?? null,
+      receivedAt: row.received_at as string,
+      confirmedAt: (row.confirmed_at as string | null) ?? null,
+    })),
+    outbound: (outbound ?? []).map((row) => ({
+      id: row.id as string,
+      kind: row.kind as string,
+      templateKey: (row.template_key as string | null) ?? null,
+      body: row.body as string,
+      simulated: Boolean(row.simulated),
+      error: (row.error as string | null) ?? null,
+      createdAt: row.created_at as string,
+    })),
+    pendingFollowups: (followups ?? []).map((row) => ({
+      id: row.id as string,
+      followupType: row.followup_type as string,
+      scheduledAt: row.scheduled_at as string,
+      expectedStage: row.expected_stage as string,
+    })),
+  };
 }

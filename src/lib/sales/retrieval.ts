@@ -24,6 +24,10 @@ export interface RetrievableKnowledge {
   tags: string[];
   /** Ajratishdagi ishonch — teng ballda ustunlik beradi. */
   confidence: number;
+  /** 'manual' — admin yozgan; 'ai_extracted' — suhbatdan ajratilgan. */
+  sourceType?: "manual" | "ai_extracted";
+  /** Qo'lda kiritilgan bilim odatda 100, AI ajratgani 0. */
+  priority?: number;
 }
 
 export interface RetrievablePattern {
@@ -98,10 +102,27 @@ export const INTENT_CATEGORY_AFFINITY: Record<string, readonly KnowledgeCategory
 
 export interface ScoredKnowledge {
   item: RetrievableKnowledge;
+  /**
+   * MOSLIK bali — savolga qanchalik tegishli. Ustuvorlik bunga
+   * qo'shilmaydi: chegara aynan shu qiymatga qo'llanadi.
+   */
+  relevance: number;
+  /** Saralash bali: moslik + ustuvorlik. */
   score: number;
   /** Nega tanlangani — "Manbalarni ko'rish" oynasida ko'rsatiladi. */
   reasons: string[];
 }
+
+/**
+ * Ustuvorlik vazni.
+ *
+ * NEGA FAQAT MOS BILIMGA QO'LLANADI: agar ustuvorlik umumiy balga
+ * qo'shilsa, `priority = 100` bo'lgan qo'lda kiritilgan bilim SAVOLGA
+ * UMUMAN ALOQASI BO'LMASA HAM chegaradan o'tib ketardi va har javobga
+ * yopishib qolardi. Shuning uchun avval moslik tekshiriladi, ustuvorlik
+ * esa faqat MOS BILIMLAR ORASIDA kim birinchi turishini hal qiladi.
+ */
+const PRIORITY_WEIGHT = 3;
 
 const CATEGORY_BONUS = 2;
 const QUESTION_TOKEN_WEIGHT = 2;
@@ -115,6 +136,7 @@ export function scoreKnowledge(
 ): ScoredKnowledge {
   const reasons: string[] = [];
   let score = 0;
+  const priority = item.priority ?? 0;
 
   const affinity = intentKey ? INTENT_CATEGORY_AFFINITY[intentKey] : undefined;
   if (affinity?.includes(item.category)) {
@@ -146,7 +168,14 @@ export function scoreKnowledge(
   // Ajratishdagi ishonch faqat teng ballni ajratadi, ustun signal emas.
   score += item.confidence * 0.5;
 
-  return { item, score, reasons };
+  const relevance = score;
+  // Ustuvorlik FAQAT mos bilimga qo'shiladi (yuqoridagi izohga qarang).
+  if (relevance >= MIN_KNOWLEDGE_SCORE && priority > 0) {
+    score += (priority / 100) * PRIORITY_WEIGHT;
+    if (item.sourceType === "manual") reasons.push("qo‘lda kiritilgan (ustun)");
+  }
+
+  return { item, relevance, score, reasons };
 }
 
 export interface KnowledgeSelection {
@@ -167,9 +196,9 @@ export function selectKnowledge(
 
   const scored = items
     .map((item) => scoreKnowledge(item, queryTokens, options.intentKey))
-    // Chegara MUHIM: chegarasiz har savolga tasodifiy bilim biriktirilib,
-    // "3 ta knowledge topildi" degan yozuv ma'nosini yo'qotardi.
-    .filter((entry) => entry.score >= MIN_KNOWLEDGE_SCORE)
+    // Chegara MOSLIKKA qo'llanadi, umumiy balga emas: ustuvorlik
+    // aloqasiz bilimni ichkariga kiritib yubormasligi kerak.
+    .filter((entry) => entry.relevance >= MIN_KNOWLEDGE_SCORE)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 
