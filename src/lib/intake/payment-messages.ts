@@ -41,14 +41,21 @@ export function withinAskingHours(now: Date = new Date()): boolean {
 }
 
 /**
- * Grace period between confirming payment and the publish run starting.
+ * "To'lov qilindi" bosilgandan keyin nashr qancha kutadi.
  *
- * A mis-tap on "Ha" would otherwise publish a candidate and post them to every
- * editorial chat within a couple of minutes, and none of that can be recalled.
- * Ten minutes is enough to notice and undo, and short enough that a correct
- * confirmation still feels immediate.
+ * OLDIN 10 DAQIQA EDI — noto'g'ri bosilgan tugmani qaytarib olish
+ * oynasi sifatida. Amalda bu "to'lov qildim, maqola qani?" degan
+ * savolni tug'dirdi va kutish 2 daqiqalik cron bilan qo'shilib yanada
+ * uzaydi. Endi standart holat — DARHOL.
+ *
+ * Oyna kerak bo'lsa `INTAKE_PUBLISH_DELAY_MINUTES` env orqali
+ * qaytariladi; qiymat kodda qotib qolmagan.
  */
-export const PAYMENT_PUBLISH_DELAY_MS = 10 * 60 * 1000;
+export const PAYMENT_PUBLISH_DELAY_MS = (() => {
+  const raw = Number(process.env.INTAKE_PUBLISH_DELAY_MINUTES ?? "0");
+  const minutes = Number.isFinite(raw) && raw >= 0 && raw <= 120 ? raw : 0;
+  return minutes * 60 * 1000;
+})();
 
 /** How many recent confirmations the undo list offers. */
 export const UNDO_LIST_SIZE = 10;
@@ -282,7 +289,12 @@ export function buildPaymentAnswerText(
     "",
     paid
       ? [
-          `⏳ Nashr ${Math.round(PAYMENT_PUBLISH_DELAY_MS / 60000)} daqiqadan keyin boshlanadi.`,
+          // Matn KECHIKISHGA qarab yoziladi. Ilgari u qat'iy "10
+          // daqiqadan keyin" deb turardi; kechikish nolga tushganda
+          // xabar yolg'on gapira boshlagan bo'lardi.
+          PAYMENT_PUBLISH_DELAY_MS > 0
+            ? `⏳ Nashr ${Math.round(PAYMENT_PUBLISH_DELAY_MS / 60000)} daqiqadan keyin boshlanadi.`
+            : "⚡ Nashr darhol boshlanadi.",
           "",
           `Xato bosilgan bo‘lsa — “${UNDO_BUTTON_LABEL}” tugmasi orqali bekor qiling.`,
         ].join("\n")

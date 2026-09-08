@@ -38,11 +38,21 @@ export async function GET(request: NextRequest) {
 
   const batch = await runBatchTick();
 
-  // A payment confirmed in the bot sets the intake due immediately; this is
-  // what turns that into a published candidate within a couple of minutes
-  // rather than at the next quarter-hour pipeline tick. One at a time, so a
-  // manual batch running alongside still gets its share of the budget.
-  const paymentTriggered = batch.itemId ? [] : await runDuePipelines(1);
+  /**
+   * To'lov tasdiqlangan anketa DARHOL navbatga tushadi va shu yerda
+   * ishlanadi.
+   *
+   * OLDIN bu qator `batch.itemId ? [] : ...` edi — ya'ni qo'lda
+   * boshlangan nashr navbati ishlayotgan bo'lsa, to'lov qilgan nomzod
+   * UMUMAN ISHLANMASDI va navbat to'liq tugagunicha kutardi. Katta
+   * navbatda bu soatlab cho'zilishi mumkin, mijoz esa to'lovni
+   * allaqachon qilgan bo'ladi.
+   *
+   * Endi ikkalasi ham har tikda ishlaydi. Navbat elementi bittadan
+   * olinadi, to'lov quvuri ham bittadan — funksiya budjeti ikkovi
+   * uchun yetadi (maxDuration 300s).
+   */
+  const paymentTriggered = await runDuePipelines(1);
 
   return NextResponse.json({
     ok: true,

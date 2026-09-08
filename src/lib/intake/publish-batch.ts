@@ -52,7 +52,19 @@ export const DEFAULT_ITEM_DURATION_MS = 90_000;
  * a candidate who already went out this morning stays visible next to the ones
  * still waiting instead of vanishing the moment they are done.
  */
-const QUEUE_STATUSES = ["submitted", "approved", "promoted", "published"] as const;
+/**
+ * `ai_reviewing` ATAYLAB ro'yxatda: u o'tkinchi holat, lekin jarayon
+ * uzilib qolsa anketa shunda qotib qoladi. Ro'yxatdan tushib qolsa,
+ * to'lov qilgan nomzod navbat taxtasidan G'OYIB bo'lardi va admin
+ * uni umuman ko'rmasdi.
+ */
+const QUEUE_STATUSES = [
+  "submitted",
+  "ai_reviewing",
+  "approved",
+  "promoted",
+  "published",
+] as const;
 
 export type PaymentStatus = "unknown" | "paid" | "unpaid";
 

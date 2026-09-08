@@ -1,18 +1,39 @@
+import { TASHKENT_TZ } from "./tashkent-day.ts";
+
 export function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
 
+/**
+ * Sana va vaqt — DOIM Asia/Tashkent bo'yicha.
+ *
+ * NEGA ZONA OCHIQ KO'RSATILGAN: bu formatlagich hech qanday zona
+ * bermasa, muhitning zonasini oladi. Vercel serveri UTC'da ishlaydi,
+ * ya'ni server tomonda render bo'lgan har bir sana BESH SOAT ORQAGA
+ * surilgan holda chiqardi — kechqurun 21:30 da topshirilgan ariza
+ * ro'yxatda 16:30 bo'lib ko'rinardi. Bundan tashqari brauzerdagi
+ * qiymat serverdagidan farq qilib, hidratsiya nomuvofiqligini ham
+ * berardi.
+ *
+ * Loyihada zona allaqachon aniqlangan (lib/tashkent-day.ts) — shu
+ * yerda ham aynan o'sha manba ishlatiladi.
+ */
 export function formatDate(value: string | Date | null | undefined, withTime = false) {
   if (!value) return "—";
   const d = typeof value === "string" ? new Date(value) : value;
   if (Number.isNaN(d.getTime())) return "—";
   const date = new Intl.DateTimeFormat("uz-UZ", {
+    timeZone: TASHKENT_TZ,
     day: "2-digit",
     month: "short",
     year: "numeric",
   }).format(d);
   if (!withTime) return date;
   const time = new Intl.DateTimeFormat("uz-UZ", {
+    timeZone: TASHKENT_TZ,
+    // h23: uz-UZ ba'zi muhitlarda 12 soatlik shaklga tushib, "01:30"
+    // ni tushdan keyingimi yoki kechasimi ekanini yashirib qo'yadi.
+    hourCycle: "h23",
     hour: "2-digit",
     minute: "2-digit",
   }).format(d);

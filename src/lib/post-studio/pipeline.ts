@@ -1,5 +1,9 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import {
+  PIPELINE_STALE_AFTER_MS,
+  recoveredIntakeStatus,
+} from "./pipeline-recovery.ts";
 import { logAudit } from "@/lib/audit";
 import {
   IntakeImprovementError,
@@ -116,6 +120,57 @@ export async function findDueIntakes(limit = PIPELINE_BATCH_SIZE): Promise<DueIn
     .limit(limit);
 
   return (data ?? []) as DueIntake[];
+}
+
+/**
+ * Uzilib qolgan yugurishlarni navbatga qaytaradi.
+ *
+ * Bu funksiyasiz `running` holat DEAD END edi: `findDueIntakes` faqat
+ * `pending`/`failed` ni oladi, ya'ni funksiya timeout bilan o'lsa,
+ * anketa boshqa hech qachon ishlanmasdi. Admin buni "to'lov qilindi,
+ * lekin maqola chiqmadi" deb ko'rardi.
+ *
+ * Urinishlar soni QAYTA TIKLANMAYDI — `PIPELINE_MAX_ATTEMPTS` cheklovi
+ * kuchda qoladi, aks holda doim yiqiladigan anketa cheksiz aylanardi.
+ */
+export async function recoverStalePipelines(now: Date = new Date()): Promise<number> {
+  const db = createSupabaseAdminClient();
+  const cutoff = new Date(now.getTime() - PIPELINE_STALE_AFTER_MS).toISOString();
+
+  const { data: stale } = await db
+    .from("candidate_intakes")
+    .select("id, status, approved_at")
+    .eq("post_pipeline_status", "running")
+    .or(`post_pipeline_started_at.lt.${cutoff},post_pipeline_started_at.is.null`)
+    .limit(20);
+
+  if (!stale || stale.length === 0) return 0;
+
+  for (const row of stale) {
+    const intakeId = row.id as string;
+    const patch: Record<string, unknown> = {
+      post_pipeline_status: "pending",
+      post_pipeline_process_after: now.toISOString(),
+      post_pipeline_error:
+        "Oldingi yugurish tugamay uzilgan (timeout) — avtomatik qayta navbatga qo‘yildi.",
+    };
+
+    // "AI ko'rmoqda" o'tkinchi holat: jarayon o'lgan bo'lsa AI natijasi
+    // baribir yozilmagan va uni saqlab turishning ma'nosi yo'q.
+    const recovered = recoveredIntakeStatus(
+      (row.status as string) ?? "",
+      (row.approved_at as string | null) ?? null,
+    );
+    if (recovered) patch.status = recovered;
+
+    await db.from("candidate_intakes").update(patch).eq("id", intakeId);
+    console.warn(
+      `[pipeline] uzilgan yugurish tiklandi: ${intakeId}` +
+        (recovered ? ` (status ${row.status} -> ${recovered})` : ""),
+    );
+  }
+
+  return stale.length;
 }
 
 async function markPipeline(
@@ -421,6 +476,9 @@ async function deliverFinishedPost(
 
 /** One cron tick: claims and runs whatever is due. */
 export async function runDuePipelines(limit = PIPELINE_BATCH_SIZE): Promise<PipelineRunResult[]> {
+  // Har yugurishdan OLDIN uzilib qolganlar qaytariladi — aks holda
+  // ular navbatda ko'rinmay, cheksiz osilib qolardi.
+  await recoverStalePipelines();
   const due = await findDueIntakes(limit);
   const results: PipelineRunResult[] = [];
 

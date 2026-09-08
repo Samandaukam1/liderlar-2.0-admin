@@ -359,8 +359,10 @@ test("an answered question is rewritten with its outcome", () => {
   const yes = buildPaymentAnswerText({ fullName: "Test Nomzod" }, true, new Date("2026-09-04T11:00:00Z"));
   assert.match(yes, /TO‘LOV QILGAN/);
   assert.match(yes, /16:00/);
-  // The grace period is stated, and so is the way out of a mis-tap.
-  assert.match(yes, /10 daqiqadan keyin boshlanadi/);
+  // Publishing now starts immediately (the ten-minute grace period was
+  // removed on request), and the message says so rather than promising a
+  // wait that no longer happens. The way out of a mis-tap is still stated.
+  assert.match(yes, /Nashr darhol boshlanadi/);
   assert.match(yes, /To‘lov statusida adashish/);
 
   const no = buildPaymentAnswerText({ fullName: "Test Nomzod" }, false);
@@ -368,10 +370,12 @@ test("an answered question is rewritten with its outcome", () => {
   assert.match(no, /2 soatdan keyin qayta so‘raladi/);
 });
 
-test("a confirmed payment waits out a grace period before anything is published", () => {
-  // Publishing an article and posting it to every editorial chat cannot be
-  // recalled, so a mis-tap needs a window in which it still can be.
-  assert.equal(PAYMENT_PUBLISH_DELAY_MS, 10 * 60 * 1000);
+test("a confirmed payment is published immediately", () => {
+  // The ten-minute grace period was removed: it produced a "I paid, where is
+  // my article?" gap that, stacked on the cron interval, ran to a quarter of
+  // an hour. The undo button remains the way back from a mis-tap, and the
+  // window can be restored per-deployment via INTAKE_PUBLISH_DELAY_MINUTES.
+  assert.equal(PAYMENT_PUBLISH_DELAY_MS, 0);
   assert.match(PAYMENT, /Date\.now\(\) \+ PAYMENT_PUBLISH_DELAY_MS/);
 });
 
