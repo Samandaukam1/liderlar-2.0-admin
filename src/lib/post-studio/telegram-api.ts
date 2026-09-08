@@ -114,9 +114,21 @@ export interface SendMessageOptions {
   replyKeyboard?: string[][];
   parseMode?: "MarkdownV2" | "HTML";
   disableWebPagePreview?: boolean;
+  /**
+   * Telegram'ning javob maydonini ochadi va javob `reply_to_message`
+   * bilan qaytadi. Bu bot uchun HOLAT SAQLASHNING o'rnini bosadi:
+   * "bu chat hozir nima kutyapti" degan ma'lumot bazada emas,
+   * suhbatning o'zida qoladi.
+   */
+  forceReply?: boolean;
 }
 
 function replyMarkup(options: SendMessageOptions): Record<string, unknown> | undefined {
+  if (options.forceReply) {
+    // `selective` YO'Q: guruh chatida ham savol ko'rinishi kerak,
+    // chunki muharrirlar chati ko'p odamli bo'lishi mumkin.
+    return { force_reply: true, input_field_placeholder: "Ism familiya" };
+  }
   if (options.inlineKeyboard) {
     return { inline_keyboard: options.inlineKeyboard };
   }

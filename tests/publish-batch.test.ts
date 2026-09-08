@@ -700,12 +700,14 @@ test("editorial actions are refused outside the configured chats", () => {
   const listBranch = ROUTER.slice(ROUTER.indexOf("const listKind ="));
   assert.match(listBranch, /if \(!editorial\) return deny\(/, "the CRM lists check membership");
 
-  // Every callback kind re-checks it as well.
+  // Every callback kind re-checks it as well. The count rises with each new
+  // inline action — a fifth was added when the blacklist entry gained its
+  // "remove" button, which deletes a record and must be editorial-only.
   const callbacks = ROUTER.match(/async function handleCallbackQuery[\s\S]*?\n}/)?.[0] ?? "";
   assert.equal(
     (callbacks.match(/await isEditorialChat\(chatId\)/g) ?? []).length,
-    4,
-    "CRM pagination, blacklist, undo and payment callbacks are each guarded",
+    5,
+    "CRM pagination, blacklist add, blacklist remove, undo and payment callbacks are each guarded",
   );
 });
 

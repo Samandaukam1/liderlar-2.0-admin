@@ -2,6 +2,11 @@ import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 import { blacklistKey } from "./name-key";
+import {
+  findSimilarBlacklisted,
+  type BlacklistCandidate,
+  type BlacklistMatch,
+} from "./blacklist-match";
 
 /**
  * Qora ro'yxat — shartnomasi buzilgan nomzodlar.
@@ -114,6 +119,33 @@ export async function findBlacklistedSlugs(fullNames: readonly string[]): Promis
   return new Set((data ?? []).map((r) => r.name_slug as string));
 }
 
+/**
+ * Kalit bo'yicha olib tashlash.
+ *
+ * Bot tugmasi aynan shundan foydalanadi: callback ichida ism emas,
+ * KALIT yuboriladi. Ism yuborilsa, uzun F.I.Sh. Telegram'ning 64
+ * baytlik chegarasiga sig'may qolardi va kesilgan matn boshqa odamni
+ * ro'yxatdan chiqarib yuborishi mumkin edi.
+ */
+export async function removeFromBlacklistBySlug(nameSlug: string): Promise<void> {
+  if (!nameSlug.trim()) return;
+  const db = createSupabaseAdminClient();
+  const { data } = await db
+    .from("intake_blacklist")
+    .delete()
+    .eq("name_slug", nameSlug)
+    .select("full_name");
+
+  await logAudit({
+    actorId: null,
+    action: "intake.blacklist_removed",
+    entityType: "candidate_intake",
+    entityId: null,
+    severity: "warning",
+    metadata: { nameSlug, fullName: (data?.[0]?.full_name as string) ?? null },
+  });
+}
+
 export async function removeFromBlacklist(fullName: string): Promise<void> {
   const nameSlug = blacklistKey(fullName);
   if (!nameSlug) return;
@@ -127,4 +159,47 @@ export async function removeFromBlacklist(fullName: string): Promise<void> {
     severity: "warning",
     metadata: { fullName, nameSlug },
   });
+}
+
+/**
+ * Ro'yxatning boshi — o'xshash ism qidirish uchun.
+ *
+ * NEGA HAMMASI O'QILADI: o'xshashlik tahrir masofasiga tayanadi va uni
+ * SQL `ilike` bilan ifodalab bo'lmaydi — "Ravshanava" hech qanday
+ * `%ravshanova%` shabloniga tushmaydi. Ro'yxat shartnomasi buzilganlar
+ * ro'yxati, ya'ni o'nlab yozuv; chegara esa xotira portlab ketmasligi
+ * uchun ataylab qo'yilgan va u yetganda log'ga yoziladi.
+ */
+export const BLACKLIST_SCAN_LIMIT = 1000;
+
+export async function listBlacklistEntries(
+  limit = BLACKLIST_SCAN_LIMIT,
+): Promise<BlacklistCandidate[]> {
+  const db = createSupabaseAdminClient();
+  const { data, error } = await db
+    .from("intake_blacklist")
+    .select("name_slug, full_name, reason, created_at")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error("[blacklist] list failed", error.message);
+    return [];
+  }
+  const rows = data ?? [];
+  if (rows.length >= limit) {
+    console.warn(`[blacklist] scan limit reached (${limit}) — o‘xshash qidiruv to‘liq emas`);
+  }
+  return rows.map((row) => ({
+    nameSlug: row.name_slug as string,
+    fullName: row.full_name as string,
+    reason: (row.reason as string | null) ?? null,
+    createdAt: row.created_at as string,
+  }));
+}
+
+/** Shu ismga aniq va o'xshash mos keladigan yozuvlar. */
+export async function findSimilarInBlacklist(fullName: string): Promise<BlacklistMatch[]> {
+  const entries = await listBlacklistEntries();
+  return findSimilarBlacklisted(fullName, entries);
 }

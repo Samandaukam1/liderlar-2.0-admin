@@ -27,6 +27,19 @@ import {
 } from "@/lib/intake/payment.ts";
 import { runBotBatchButton } from "@/lib/intake/publish-batch.ts";
 import {
+  BLACKLIST_ADD_BUTTON_LABEL,
+  BLACKLIST_NAME_PROMPT,
+  blacklistRemoveCallbackData,
+  buildBlacklistResultMessage,
+  isBlacklistPromptReply,
+  parseBlacklistRemoveCallback,
+} from "@/lib/intake/blacklist-match.ts";
+import {
+  addToBlacklist,
+  findSimilarInBlacklist,
+  removeFromBlacklistBySlug,
+} from "@/lib/intake/blacklist.ts";
+import {
   buildCrmListPage,
   CRM_LIST_BY_BUTTON,
   CRM_LIST_BY_COMMAND,
@@ -81,6 +94,7 @@ export const EDITORIAL_HELP_REPLY = [
   "/chopetilganlar — chop etilganlar ro‘yxati",
   "/kutayotganlar — kutayotganlar ro‘yxati",
   "/toldirayotganlar — to‘ldirayotganlar ro‘yxati",
+  "/qora — qora ro‘yxatga ism kiritish",
 ].join("\n");
 
 export const NOT_AUTHORIZED_REPLY =
@@ -91,6 +105,12 @@ export interface TelegramUpdate {
     chat?: { id?: number };
     from?: TelegramFrom;
     text?: string;
+    /**
+     * Qaysi xabarga javob berilgani. Qora ro'yxat oqimi shu maydonga
+     * tayanadi: bot savolni `force_reply` bilan yuboradi va javobni
+     * aynan shu orqali taniydi — chat holati hech qayerda saqlanmaydi.
+     */
+    reply_to_message?: { text?: string };
   };
   callback_query?: {
     id: string;
@@ -123,6 +143,7 @@ function keyboardFor(editorial: boolean): string[][] | undefined {
     // re-checked — only for editorial chats.
     [PUBLISHED_BUTTON_LABEL],
     [WAITING_BUTTON_LABEL, FILLING_BUTTON_LABEL],
+    [BLACKLIST_ADD_BUTTON_LABEL],
   ];
 }
 
@@ -227,6 +248,30 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
     return;
   }
 
+  /*
+   * Qora ro'yxat — IKKI QADAM, lekin holatsiz.
+   *
+   * Tugma bosilganda savol `force_reply` bilan yuboriladi. Moderator
+   * javob yozganda Telegram uni `reply_to_message` bilan qaytaradi va
+   * bot shundan "bu qora ro'yxat uchun ism" ekanini biladi. Chat holati
+   * bazada saqlanmaydi: saqlansa, yarim tashlab ketilgan suhbat keyingi
+   * har qanday xabarni ism deb o'qib yuborardi.
+   */
+  if (command === "/qora" || text === BLACKLIST_ADD_BUTTON_LABEL) {
+    if (!editorial) return deny(chatId, keyboard);
+    await sendTelegramMessage(chatId, BLACKLIST_NAME_PROMPT, { forceReply: true });
+    console.log("[telegram-webhook] sendMessage success command=blacklist-prompt");
+    return;
+  }
+
+  if (isBlacklistPromptReply(message?.reply_to_message?.text)) {
+    // Javob ham qayta tekshiriladi: savol boshqa chatga forward
+    // qilinishi va u yerdan javob berilishi mumkin.
+    if (!editorial) return deny(chatId, keyboard);
+    await handleBlacklistName(chatId, text, keyboard);
+    return;
+  }
+
   // The CRM lists: one entry per list, reachable as a keyboard button or as a
   // typed command. Both are re-checked against the editorial chat list — a
   // label is just text, and anyone can type it.
@@ -242,6 +287,51 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
     replyKeyboard: keyboard,
   });
   console.log("[telegram-webhook] sendMessage success command=help");
+}
+
+/**
+ * Moderator yuborgan ismni qora ro'yxatga kiritadi va o'xshashlarini
+ * ko'rsatadi.
+ *
+ * TARTIB MUHIM: o'xshashlar QO'SHISHDAN OLDIN qidiriladi. Keyin
+ * qidirilsa, endigina qo'shilgan yozuvning o'zi "aniq moslik" bo'lib
+ * chiqib, ro'yxatni ma'nosiz qilardi.
+ */
+async function handleBlacklistName(
+  chatId: number,
+  fullName: string,
+  keyboard: string[][] | undefined,
+): Promise<void> {
+  const name = fullName.trim();
+  const matches = await findSimilarInBlacklist(name);
+
+  const result = await addToBlacklist({
+    fullName: name,
+    intakeId: null,
+    chatId,
+  });
+
+  const text = buildBlacklistResultMessage({
+    fullName: name,
+    added: result.ok,
+    alreadyListed: result.alreadyListed,
+    matches,
+  });
+
+  // Xato bosilgan bo'lsa darhol qaytarib olish tugmasi — bu yozuv
+  // nomzodning maqolasini bloklaydi, ya'ni xatosi qimmatga tushadi.
+  const undoData = result.ok && !result.alreadyListed
+    ? blacklistRemoveCallbackData(result.nameSlug)
+    : null;
+
+  await sendTelegramMessage(chatId, text, {
+    ...(undoData
+      ? { inlineKeyboard: [[{ text: "↩️ Ro‘yxatdan olib tashlash", callback_data: undoData }]] }
+      : { replyKeyboard: keyboard }),
+  });
+  console.log(
+    `[telegram-webhook] blacklist add ok=${result.ok} already=${result.alreadyListed} similar=${matches.length}`,
+  );
 }
 
 async function deny(chatId: number, keyboard: string[][] | undefined): Promise<void> {
@@ -300,6 +390,30 @@ async function handleCallbackQuery(
       callbackQueryId: query.id,
     });
     console.log(`[telegram-webhook] blacklist → ${outcome}`);
+    return;
+  }
+
+  const removeSlug = parseBlacklistRemoveCallback(query.data);
+  if (removeSlug) {
+    if (chatId == null || !(await isEditorialChat(chatId))) {
+      await safeAnswerCallback(query.id, "Ruxsat yo‘q");
+      return;
+    }
+    await safeAnswerCallback(query.id, "Olib tashlanmoqda…");
+    await removeFromBlacklistBySlug(removeSlug);
+    const messageId = query.message?.message_id ?? null;
+    if (messageId != null) {
+      // Tugma olib tashlanadi: bir marta bosiladigan amal ikkinchi
+      // marta bosilib, tushunarsiz natija bermasin.
+      await editTelegramMessageText(
+        chatId,
+        messageId,
+        "↩️ Yozuv qora ro‘yxatdan olib tashlandi.",
+      );
+    } else {
+      await sendTelegramMessage(chatId, "↩️ Yozuv qora ro‘yxatdan olib tashlandi.");
+    }
+    console.log(`[telegram-webhook] blacklist removed slug=${removeSlug}`);
     return;
   }
 
