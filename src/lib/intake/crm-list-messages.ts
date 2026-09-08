@@ -7,12 +7,76 @@
  * username ichidagi pastki chiziq butun yuborishni 400 bilan yiqitadi.
  */
 
+// Nisbiy yo'l: bu modulni node:test to'g'ridan-to'g'ri yuklaydi va u
+// tsconfig alias'larini bilmaydi.
+import {
+  shiftCalendarDate,
+  tashkentDayRange,
+  tashkentDayRangeForDate,
+} from "../tashkent-day.ts";
+
 /** The three CRM buttons added to the editorial /start keyboard. */
 export const PUBLISHED_BUTTON_LABEL = "📚 Hozirgacha chop etilganlar";
 export const WAITING_BUTTON_LABEL = "⏳ Kutayotganlar";
 export const FILLING_BUTTON_LABEL = "✍️ To‘ldirayotganlar";
 
 export type CrmListKind = "published" | "waiting" | "filling";
+
+/**
+ * Ro'yxat qaysi kun bo'yicha ko'rsatiladi.
+ *
+ * Standart — BUGUN. Ilgari har bosishda butun ro'yxat kelardi va ikki
+ * mingta yozuv ichidan bugungisini topish uchun sahifalarni varaqlash
+ * kerak bo'lardi. Muharrirga eng ko'p kerak bo'ladigan kesim — bugun.
+ *
+ * To'rt davr butun to'plamni QOLDIRIQSIZ bo'ladi: bugun + kecha +
+ * undan avval = hammasi. Sanasi yo'q yozuvlar "undan avval" ga
+ * qo'shiladi, aks holda ular hech qaysi kesimda ko'rinmay, jimgina
+ * yo'qolib qolardi.
+ */
+export const CRM_PERIODS = ["today", "yesterday", "earlier", "all"] as const;
+export type CrmPeriod = (typeof CRM_PERIODS)[number];
+
+export const CRM_PERIOD_LABELS: Record<CrmPeriod, string> = {
+  today: "Bugun",
+  yesterday: "Kecha",
+  earlier: "Undan avval",
+  all: "Hammasi",
+};
+
+export function isCrmPeriod(value: unknown): value is CrmPeriod {
+  return typeof value === "string" && (CRM_PERIODS as readonly string[]).includes(value);
+}
+
+/**
+ * Davr chegaralari — Toshkent kunlari bo'yicha.
+ *
+ * `endIso` DOIM eksklyuziv (`.gte(start).lt(end)`), shuning uchun
+ * yarim tunda muhrlangan yozuv faqat bitta kunga tegishli bo'ladi.
+ * `earlier` uchun faqat yuqori chegara bor.
+ */
+export interface CrmPeriodRange {
+  startIso: string | null;
+  endIso: string | null;
+  /** Sanasi yo'q yozuvlar ham shu kesimga kiradimi. */
+  includeNull: boolean;
+}
+
+export function crmPeriodRange(period: CrmPeriod, now: Date = new Date()): CrmPeriodRange {
+  if (period === "all") return { startIso: null, endIso: null, includeNull: true };
+
+  const today = tashkentDayRange(now);
+  const yesterday = tashkentDayRangeForDate(shiftCalendarDate(today.date, -1));
+
+  if (period === "today") {
+    return { startIso: today.startIso, endIso: today.endIso, includeNull: false };
+  }
+  if (period === "yesterday") {
+    return { startIso: yesterday.startIso, endIso: yesterday.endIso, includeNull: false };
+  }
+  // "Undan avval" — kechadan oldingi hammasi, sanasizlar bilan birga.
+  return { startIso: null, endIso: yesterday.startIso, includeNull: true };
+}
 
 /**
  * EXACT intake statuses behind each list, from 0010_candidate_intake_v2.sql:
@@ -96,12 +160,31 @@ const CODE_KIND: Record<string, CrmListKind> = {
   f: "filling",
 };
 
-export function crmListCallbackData(kind: CrmListKind, page: number): string {
-  return `${CALLBACK_PREFIX}${KIND_CODE[kind]}:${Math.max(1, Math.floor(page))}`;
+const PERIOD_CODE: Record<CrmPeriod, string> = {
+  today: "t",
+  yesterday: "y",
+  earlier: "e",
+  all: "a",
+};
+
+const CODE_PERIOD: Record<string, CrmPeriod> = {
+  t: "today",
+  y: "yesterday",
+  e: "earlier",
+  a: "all",
+};
+
+export function crmListCallbackData(
+  kind: CrmListKind,
+  period: CrmPeriod,
+  page: number,
+): string {
+  return `${CALLBACK_PREFIX}${KIND_CODE[kind]}:${PERIOD_CODE[period]}:${Math.max(1, Math.floor(page))}`;
 }
 
 export interface ParsedCrmListCallback {
   kind: CrmListKind;
+  period: CrmPeriod;
   page: number;
 }
 
@@ -116,13 +199,26 @@ export function parseCrmListCallback(
   data: string | undefined | null,
 ): ParsedCrmListCallback | null {
   if (!data || !data.startsWith(CALLBACK_PREFIX)) return null;
-  const [, code, rawPage] = data.split(":");
+  const parts = data.split(":");
+
+  // Eski uch bo'lakli shakl ("crm:p:2") hali chatlarda osilib turgan
+  // xabarlarda uchraydi. O'shanda davr tushunchasi yo'q edi va tugma
+  // BUTUN ro'yxatni bildirardi — shuning uchun u "hammasi" deb
+  // o'qiladi, "bugun" deb emas: aks holda eski tugma bosilganda
+  // ro'yxat jimgina qisqarib qolardi.
+  const [, code, third, fourth] = parts;
   const kind = CODE_KIND[code ?? ""];
   if (!kind) return null;
+
+  const hasPeriod = parts.length >= 4;
+  const period = hasPeriod ? CODE_PERIOD[third ?? ""] : "all";
+  if (!period) return null;
+
+  const rawPage = hasPeriod ? fourth : third;
   if (!/^\d+$/.test(rawPage ?? "")) return null;
   const page = Number(rawPage);
   if (!Number.isSafeInteger(page) || page < 1) return null;
-  return { kind, page };
+  return { kind, period, page };
 }
 
 /** Total pages for a row count, never less than one (an empty list has page 1). */
@@ -149,6 +245,7 @@ export interface CrmListRow {
 
 export interface CrmListPageInput {
   kind: CrmListKind;
+  period: CrmPeriod;
   rows: CrmListRow[];
   page: number;
   total: number;
@@ -171,10 +268,13 @@ export function buildCrmListText(input: CrmListPageInput): string {
   const header = [
     `${CRM_LIST_TITLES[input.kind]} — ${input.total} ta`,
     CRM_LIST_SUBTITLES[input.kind],
+    // Qaysi kesim ko'rsatilayotgani DOIM yoziladi: "12 ta" degan son
+    // qaysi kunga tegishli ekani aytilmasa, chalg'itadi.
+    `🗓 ${CRM_PERIOD_LABELS[input.period]}`,
   ];
 
   if (input.total === 0 || input.rows.length === 0) {
-    return [...header, "", "Hozircha bo‘sh."].join("\n");
+    return [...header, "", "Bu kesimda hech kim yo‘q."].join("\n");
   }
 
   const lines = input.rows.flatMap((row, index) => {
@@ -207,16 +307,41 @@ export interface CrmInlineButton {
  */
 export function buildCrmListKeyboard(
   kind: CrmListKind,
+  period: CrmPeriod,
   page: number,
   pageCount: number,
 ): CrmInlineButton[][] {
-  if (pageCount <= 1) return [];
-  const row: CrmInlineButton[] = [];
-  if (page > 1) {
-    row.push({ text: "◀️ Oldingi", callback_data: crmListCallbackData(kind, page - 1) });
+  const rows: CrmInlineButton[][] = [];
+
+  // Davr tugmalari DOIM ko'rinadi — bitta sahifali ro'yxatda ham,
+  // chunki ular sahifalash emas, kesim tanlash. Aktiv kesim belgi
+  // bilan ajratiladi, aks holda qaysi ro'yxat ochiqligi bilinmaydi.
+  const periodButton = (value: CrmPeriod): CrmInlineButton => ({
+    text: value === period ? `▪️ ${CRM_PERIOD_LABELS[value]}` : CRM_PERIOD_LABELS[value],
+    // Kesim almashganda sahifa 1 dan boshlanadi: 5-sahifada turib
+    // "Bugun" bosilsa, u yerda 5-sahifa bo'lmasligi mumkin.
+    callback_data: crmListCallbackData(kind, value, 1),
+  });
+
+  rows.push([periodButton("today"), periodButton("yesterday")]);
+  rows.push([periodButton("earlier"), periodButton("all")]);
+
+  if (pageCount > 1) {
+    const row: CrmInlineButton[] = [];
+    if (page > 1) {
+      row.push({
+        text: "◀️ Oldingi",
+        callback_data: crmListCallbackData(kind, period, page - 1),
+      });
+    }
+    if (page < pageCount) {
+      row.push({
+        text: "Keyingi ▶️",
+        callback_data: crmListCallbackData(kind, period, page + 1),
+      });
+    }
+    if (row.length > 0) rows.push(row);
   }
-  if (page < pageCount) {
-    row.push({ text: "Keyingi ▶️", callback_data: crmListCallbackData(kind, page + 1) });
-  }
-  return row.length > 0 ? [row] : [];
+
+  return rows;
 }

@@ -6,11 +6,13 @@ import {
   clampCrmPage,
   crmPageCount,
   crmPageOffset,
+  crmPeriodRange,
   CRM_LIST_PAGE_SIZE,
   CRM_LIST_STATUSES,
   type CrmInlineButton,
   type CrmListKind,
   type CrmListRow,
+  type CrmPeriod,
 } from "./crm-list-messages";
 
 /**
@@ -30,6 +32,7 @@ export interface CrmListPage {
   page: number;
   pageCount: number;
   total: number;
+  period: CrmPeriod;
 }
 
 /**
@@ -42,17 +45,62 @@ export interface CrmListPage {
  * The select carries full_name and telegram_username ONLY — phone_e164 is not
  * requested, so a phone number cannot reach a chat even by accident.
  */
+/**
+ * Har ro'yxatning O'Z sanasi bor.
+ *
+ * Kesim aynan ro'yxat saralanadigan ustun bo'yicha olinadi — aks holda
+ * "bugun chop etilganlar" ro'yxati bugun YARATILGANLARNI ko'rsatib,
+ * ikkisi bir-biriga umuman mos kelmasdi.
+ */
+const CRM_LIST_DATE_COLUMN: Record<CrmListKind, string> = {
+  published: "published_at",
+  waiting: "submitted_at",
+  filling: "created_at",
+};
+
+/** Kesim shartini so'rovga qo'yadi. */
+function applyPeriod<T extends {
+  gte: (column: string, value: string) => T;
+  lt: (column: string, value: string) => T;
+  or: (filter: string) => T;
+}>(query: T, kind: CrmListKind, period: CrmPeriod, now: Date): T {
+  const range = crmPeriodRange(period, now);
+  const column = CRM_LIST_DATE_COLUMN[kind];
+
+  if (range.startIso === null && range.endIso === null) return query;
+
+  if (range.startIso !== null && range.endIso !== null) {
+    return query.gte(column, range.startIso).lt(column, range.endIso);
+  }
+
+  // "Undan avval": sanasi yo'q yozuvlar ham shu yerga tushadi, aks
+  // holda ular hech qaysi kesimda ko'rinmay, jimgina yo'qolib qolardi.
+  if (range.endIso !== null) {
+    return range.includeNull
+      ? query.or(`${column}.lt.${range.endIso},${column}.is.null`)
+      : query.lt(column, range.endIso);
+  }
+  return query.gte(column, range.startIso!);
+}
+
 async function fetchRows(
   kind: CrmListKind,
+  period: CrmPeriod,
   page: number,
+  now: Date = new Date(),
 ): Promise<{ rows: CrmListRow[]; total: number; page: number; pageCount: number }> {
   const db = createSupabaseAdminClient();
 
   const base = () =>
-    db
-      .from("candidate_intakes")
-      .select("full_name, telegram_username", { count: "exact" })
-      .is("deleted_at", null);
+    applyPeriod(
+      db
+        .from("candidate_intakes")
+        .select("full_name, telegram_username", { count: "exact" })
+        .is("deleted_at", null),
+      kind,
+      period,
+      now,
+    );
 
   // Two round trips at most: the first learns the real total so a stale page
   // number from an old message can be clamped instead of returning nothing.
@@ -111,14 +159,16 @@ async function fetchRows(
 export async function buildCrmListPage(
   kind: CrmListKind,
   page: number,
+  period: CrmPeriod = "today",
 ): Promise<CrmListPage> {
-  const { rows, total, page: safePage, pageCount } = await fetchRows(kind, page);
+  const { rows, total, page: safePage, pageCount } = await fetchRows(kind, period, page);
   return {
-    text: buildCrmListText({ kind, rows, page: safePage, total }),
-    keyboard: buildCrmListKeyboard(kind, safePage, pageCount),
+    text: buildCrmListText({ kind, period, rows, page: safePage, total }),
+    keyboard: buildCrmListKeyboard(kind, period, safePage, pageCount),
     page: safePage,
     pageCount,
     total,
+    period,
   };
 }
 
@@ -131,4 +181,4 @@ export {
   PUBLISHED_BUTTON_LABEL,
   WAITING_BUTTON_LABEL,
 } from "./crm-list-messages";
-export type { CrmListKind } from "./crm-list-messages";
+export type { CrmListKind, CrmPeriod } from "./crm-list-messages";

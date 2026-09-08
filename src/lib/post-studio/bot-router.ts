@@ -147,9 +147,16 @@ function keyboardFor(editorial: boolean): string[][] | undefined {
   ];
 }
 
-/** Sends page 1 of a list; later pages replace this message in place. */
+/**
+ * Ro'yxatning birinchi sahifasi — BUGUN kesimida.
+ *
+ * Standart "bugun": ilgari har bosishda butun ro'yxat kelardi va
+ * muharrir bugungi bir nechta yozuvni topish uchun sahifalarni
+ * varaqlashi kerak bo'lardi. Boshqa kesimlar xabar ostidagi tugmalar
+ * bilan ochiladi.
+ */
 async function sendCrmList(chatId: number, kind: CrmListKind): Promise<void> {
-  const page = await buildCrmListPage(kind, 1);
+  const page = await buildCrmListPage(kind, 1, "today");
   await sendTelegramMessage(chatId, page.text, {
     inlineKeyboard: page.keyboard.length > 0 ? page.keyboard : undefined,
   });
@@ -361,7 +368,7 @@ async function handleCallbackQuery(
     const messageId = query.message?.message_id ?? null;
     // Live data on every tap: the page is re-queried, never paged from a cached
     // snapshot, so a candidate published a minute ago is already in the list.
-    const page = await buildCrmListPage(listPage.kind, listPage.page);
+    const page = await buildCrmListPage(listPage.kind, listPage.page, listPage.period);
     if (messageId == null) {
       await sendTelegramMessage(chatId, page.text, {
         inlineKeyboard: page.keyboard.length > 0 ? page.keyboard : undefined,
@@ -372,7 +379,9 @@ async function handleCallbackQuery(
         inlineKeyboard: page.keyboard,
       });
     }
-    console.log(`[telegram-webhook] crm list ${listPage.kind} page=${page.page}/${page.pageCount}`);
+    console.log(
+      `[telegram-webhook] crm list ${listPage.kind} period=${page.period} page=${page.page}/${page.pageCount}`,
+    );
     return;
   }
 
