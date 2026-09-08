@@ -318,11 +318,34 @@ export interface BotStatusCounts {
   published: number;
 }
 
+/**
+ * Yangi arizalar sanog'i.
+ *
+ * FAQAT `new` statusdagilar sanaladi va faqat MARKERdan keyingilari.
+ *
+ * Marker — statusi o'zgartirilgan eng oxirgi ariza. Ish usuli shunday:
+ * moderator kelgan arizalarni ko'rib chiqadi va oxirgisining statusini
+ * o'zgartirib qo'yadi — bu "shu yergacha ko'rdim" degan XATCHO'P.
+ * Keyingi hisobotda undan oldingilari umuman sanalmaydi, shuning uchun
+ * bir xil ariza ikki marta yuborilmaydi.
+ */
+export interface ApplicationCounts {
+  /** Joriy 19:00–19:00 oynasidagi yangi arizalar. */
+  today: number;
+  /** Markerdan keyingi barcha yangi arizalar. */
+  total: number;
+  /** Marker vaqti — hisobot qayerdan boshlanayotgani ko'rinsin. */
+  since: string | null;
+}
+
 export interface BotStatusReportInput {
   total: BotStatusCounts;
   today: BotStatusCounts;
   /** Tashkent calendar date the "today" block covers. */
   todayDate: string;
+  applications: ApplicationCounts;
+  /** Ariza oynasi qachondan qachongacha — "19:00 → 19:00". */
+  applicationWindowLabel: string;
 }
 
 /**
@@ -333,10 +356,18 @@ export interface BotStatusReportInput {
  * figures under a block that barely changes.
  */
 export function buildBotStatusReportText(input: BotStatusReportInput): string {
-  const { total, today } = input;
+  const { total, today, applications } = input;
   return [
     "📊 HOZIRGI HISOBOT",
     `🕐 ${formatTashkent(new Date())}`,
+    "",
+    // Arizalar boshida: moderator hisobotni aynan shu son uchun ochadi.
+    "— YANGI ARIZALAR —",
+    `📩 Bugun (${input.applicationWindowLabel}): ${applications.today}`,
+    `📩 Jami ko‘rilmagan: ${applications.total}`,
+    ...(applications.since
+      ? [`↪️ Oxirgi belgilangan arizadan keyin (${formatTashkent(applications.since)})`]
+      : ["↪️ Hali birorta ariza belgilanmagan — hammasi sanaldi"]),
     "",
     `— BUGUN (${input.todayDate}) —`,
     `✍️ To‘ldirmoqda: ${today.filling}`,

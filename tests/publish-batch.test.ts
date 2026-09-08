@@ -480,6 +480,8 @@ test("the report leads with today and puts the running totals underneath", () =>
     todayDate: "2026-09-05",
     total: { filling: 57, submitted: 200, paid: 3, unpaid: 1, paymentUnknown: 196, posts: 47, published: 16 },
     today: { filling: 2, submitted: 9, paid: 3, unpaid: 1, paymentUnknown: 5, posts: 1, published: 0 },
+    applications: { today: 4, total: 11, since: "2026-09-05T04:00:00.000Z" },
+    applicationWindowLabel: "04-sen 19:00 → 19:00",
   });
   const todayAt = text.indexOf("BUGUN");
   const totalAt = text.indexOf("JAMI");
@@ -492,6 +494,8 @@ test("the report leads with today and puts the running totals underneath", () =>
 test("the report separates 'no answer yet' from 'did not pay'", () => {
   const text = buildBotStatusReportText({
     todayDate: "2026-09-04",
+    applications: { today: 0, total: 0, since: null },
+    applicationWindowLabel: "03-sen 19:00 → 19:00",
     total: {
       filling: 12,
       submitted: 38,

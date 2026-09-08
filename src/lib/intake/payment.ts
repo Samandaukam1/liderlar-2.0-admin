@@ -1,7 +1,7 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
-import { tashkentDayRange } from "@/lib/tashkent-day";
+import { formatTashkent, tashkentDayRange, tashkentReportWindow } from "@/lib/tashkent-day";
 import { addToBlacklist, blacklistKey, findBlacklistedSlugs, isBlacklisted } from "./blacklist";
 import { findPublishedNamesake } from "./namesake";
 import {
@@ -28,6 +28,7 @@ import {
   paymentCallbackData,
   paymentUndoCallbackData,
   UNDO_LIST_SIZE,
+  type ApplicationCounts,
   type BotStatusCounts,
   type UndoCandidate,
 } from "./payment-messages";
@@ -768,10 +769,57 @@ export async function undoPaymentConfirmation(intakeId: string): Promise<UndoOut
  * Report
  * ------------------------------------------------------------------ */
 
+/**
+ * Yangi arizalar sanog'i — XATCHO'PDAN keyingilari.
+ *
+ * Moderatorning ish usuli: kelgan arizalarni ko'rib chiqadi va
+ * oxirgisining statusini o'zgartirib qo'yadi. Shu yozuv "shu yergacha
+ * ko'rdim" degan belgi bo'lib xizmat qiladi.
+ *
+ * Marker sifatida statusi `new` DAN BOSHQA eng SO'NGGI ariza olinadi.
+ * Undan oldingi hamma narsa — ko'rilgan bo'lmasa ham — sanalmaydi:
+ * talab aynan shunday va u ikki marta yuborishning oldini oladi.
+ */
+async function countNewApplications(
+  window: { startIso: string; endIso: string },
+): Promise<ApplicationCounts> {
+  const db = createSupabaseAdminClient();
+
+  const { data: marker } = await db
+    .from("applications")
+    .select("created_at")
+    .neq("status", "new")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const since = (marker?.created_at as string | null) ?? null;
+
+  const base = () => {
+    const query = db.from("applications").select("id", { count: "exact", head: true }).eq("status", "new");
+    // `gt`, `gte` emas: markerning o'zi ko'rilgan va u qayta sanalmaydi.
+    return since ? query.gt("created_at", since) : query;
+  };
+
+  const [total, today] = await Promise.all([
+    base(),
+    base().gte("created_at", window.startIso).lt("created_at", window.endIso),
+  ]);
+
+  return {
+    total: total.count ?? 0,
+    today: today.count ?? 0,
+    since,
+  };
+}
+
 /** Counts for the bot's "Hozirgi hisobot" button. */
 export async function buildBotStatusReport(): Promise<string> {
   const db = createSupabaseAdminClient();
   const day = tashkentDayRange();
+  // Arizalar kuni yarim tundan emas, 19:00 dan boshlanadi — hisobot
+  // aynan shu vaqtda yopiladi. Anketa bloklari kalendar kunida qoladi.
+  const applicationWindow = tashkentReportWindow();
 
   // Every tally is a head-only `count: exact` query — no rows cross the wire,
   // and the whole report is one round of parallel counts.
@@ -779,6 +827,8 @@ export async function buildBotStatusReport(): Promise<string> {
     db.from("candidate_intakes").select("id", { count: "exact", head: true }).is("deleted_at", null);
   const posts = () => db.from("candidate_social_posts").select("id", { count: "exact", head: true });
   const submitted = () => intakes().not("submitted_at", "is", null);
+
+  const applications = await countNewApplications(applicationWindow);
 
   const [
     fillingTotal,
@@ -840,5 +890,11 @@ export async function buildBotStatusReport(): Promise<string> {
     published: n(publishedToday),
   };
 
-  return buildBotStatusReportText({ total, today: todayCounts, todayDate: day.date });
+  return buildBotStatusReportText({
+    total,
+    today: todayCounts,
+    todayDate: day.date,
+    applications,
+    applicationWindowLabel: `${formatTashkent(applicationWindow.startIso)} → 19:00`,
+  });
 }

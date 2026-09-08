@@ -129,6 +129,42 @@ export function tashkentDayRangeForDate(date: string): DayRange {
   };
 }
 
+/**
+ * "Ish kuni" oynasi — yarim tundan emas, berilgan soatdan boshlanadi.
+ *
+ * NEGA KERAK: hisobot soat 19:00 da yopiladi. Kalendar kuni bo'yicha
+ * hisoblansa, kechqurun 20:00 da kelgan ariza "bugun" ga tushardi va
+ * ertalab hisobot olganda u allaqachon sanab bo'lingan bo'lardi —
+ * bir xil ariza ikki marta ko'rinardi.
+ *
+ * Oyna [boshlanish soati, ertasi kun o'sha soat) — yuqori chegara
+ * EKSKLYUZIV, shuning uchun aynan 19:00:00 da kelgan ariza faqat
+ * yangi oynaga tegishli bo'ladi.
+ *
+ * `date` — oyna BOSHLANGAN kalendar sana. Oyna ikki sanani qamragani
+ * uchun uni "bugun" deb bir so'z bilan atash mumkin emas.
+ */
+export function tashkentReportWindow(
+  now: Date = new Date(),
+  startHour = 19,
+): DayRange {
+  const wall = wallClockAt(now);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const todayDate = `${wall.year}-${pad(wall.month)}-${pad(wall.day)}`;
+
+  // Soat hali 19:00 ga yetmagan bo'lsa, hozirgi oyna KECHA boshlangan.
+  const startDate = wall.hour >= startHour ? todayDate : shiftCalendarDate(todayDate, -1);
+
+  const midnight = new Date(tashkentDayRangeForDate(startDate).startIso).getTime();
+  const startMs = midnight + startHour * 60 * 60 * 1000;
+
+  return {
+    startIso: new Date(startMs).toISOString(),
+    endIso: new Date(startMs + 24 * 60 * 60 * 1000).toISOString(),
+    date: startDate,
+  };
+}
+
 /** Today's Tashkent calendar date as YYYY-MM-DD. */
 export function tashkentToday(now: Date = new Date()): string {
   const wall = wallClockAt(now);
