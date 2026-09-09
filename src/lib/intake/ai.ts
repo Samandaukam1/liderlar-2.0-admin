@@ -1,4 +1,5 @@
 import "server-only";
+import { resolveModel } from "@/lib/ai-models";
 import OpenAI from "openai";
 import { z } from "zod";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -18,7 +19,7 @@ function openai(): OpenAI {
 }
 
 export function textModel(): string {
-  return process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+  return resolveModel("intake");
 }
 export function imageModel(): string {
   return process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-2";

@@ -3,6 +3,14 @@ import "server-only";
 import OpenAI from "openai";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
+import {
+  addUsage,
+  EMPTY_USAGE,
+  estimateCostUsd,
+  formatCostUsd,
+  resolveModel,
+  type TokenUsage,
+} from "@/lib/ai-models";
 import { candidateAiOutputSchema, type CandidateAiOutput, type CandidateStructuredData } from "./schema.ts";
 import { serializeCandidateData } from "./serializer.ts";
 import { normalizeShortBioItems } from "./short-bio.ts";
@@ -181,7 +189,10 @@ export async function structureCandidateWithAi(params: {
   candidateId?: string | null;
   intakeId?: string | null;
 }): Promise<CandidateAiResult> {
-  const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+  // Maqola O'Z modelini oladi: u eng ko'p token yeydigan ish va
+  // "hamma narsa uchun" qo'yilgan global sozlama uni tortib
+  // ketmasligi kerak (ai-models.ts dagi izohga qarang).
+  const model = resolveModel("article");
   const admin = createSupabaseAdminClient();
   const entityId = params.candidateId ?? params.intakeId ?? null;
   const { data: job } = await admin
@@ -209,6 +220,10 @@ export async function structureCandidateWithAi(params: {
   try {
     let best: { data: CandidateAiOutput; raw: unknown; quality: ArticleQualityReport } | null = null;
     let regenerations = 0;
+    // Sarf BARCHA urinishlar bo'yicha yig'iladi — hisobga tushadigan
+    // narsa ham shu, oxirgi urinish emas.
+    let usage: TokenUsage = EMPTY_USAGE;
+    let attempts = 0;
 
     for (let attempt = 0; attempt <= MAX_ARTICLE_REGENERATIONS; attempt += 1) {
       // Eng yaxshi urinishning bali — pastda "yaxshilanmadi" qarori
@@ -240,6 +255,13 @@ export async function structureCandidateWithAi(params: {
         },
       });
 
+      attempts += 1;
+      usage = addUsage(usage, {
+        promptTokens: completion.usage?.prompt_tokens ?? 0,
+        completionTokens: completion.usage?.completion_tokens ?? 0,
+        totalTokens: completion.usage?.total_tokens ?? 0,
+      });
+
       const message = completion.choices[0]?.message;
       if (message?.refusal) throw new Error(`AI so‘rovni rad etdi: ${message.refusal}`);
       const raw = message?.content ?? "{}";
@@ -259,7 +281,8 @@ export async function structureCandidateWithAi(params: {
       }
       console.log(
         `[candidate-ai] attempt=${attempt} score=${quality.score} ok=${quality.ok} ` +
-          `words=${quality.wordCount} ${Date.now() - startedAt}ms`,
+          `words=${quality.wordCount} tokens=${completion.usage?.total_tokens ?? "?"} ` +
+          `${Date.now() - startedAt}ms`,
       );
       // Qaror sof funksiyada — u yerda nega to'xtash kerakligi
       // izohlangan va testda qoplangan.
@@ -288,10 +311,21 @@ export async function structureCandidateWithAi(params: {
     const shortBio = normalizeShortBioItems(best.data.shortBioItems);
     const data: CandidateAiOutput = { ...best.data, shortBioItems: shortBio.items };
 
+    const estimatedCost = estimateCostUsd(model, usage);
+    console.log(
+      `[candidate-ai] yakun: attempts=${attempts} tokens=${usage.totalTokens} ` +
+        `model=${model} narx=${formatCostUsd(estimatedCost)}`,
+    );
+
     if (job?.id) {
       await admin.from("ai_jobs").update({
         status: "succeeded",
         output_chars: JSON.stringify(best.raw).length,
+        prompt_tokens: usage.promptTokens,
+        completion_tokens: usage.completionTokens,
+        total_tokens: usage.totalTokens,
+        estimated_cost_usd: estimatedCost,
+        attempts,
         finished_at: new Date().toISOString(),
       }).eq("id", job.id);
     }

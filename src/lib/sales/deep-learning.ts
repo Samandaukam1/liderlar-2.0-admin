@@ -1,6 +1,7 @@
 import "server-only";
 import OpenAI from "openai";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { resolveModel } from "@/lib/ai-models";
 import { logAudit } from "@/lib/audit";
 import { getSalesSettings } from "./settings.ts";
 import { redactPii } from "./redact.ts";
@@ -121,7 +122,7 @@ export async function startDeepLearning(options: {
   const settings = await getSalesSettings();
   const target = Math.max(1, Math.min(2000, options.target ?? settings.deepLearning.targetConversations));
   const batchSize = Math.max(1, Math.min(25, options.batchSize ?? settings.deepLearning.batchSize));
-  const model = process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
+  const model = resolveModel("sales");
 
   const selected = await selectLatestConversations(target);
 

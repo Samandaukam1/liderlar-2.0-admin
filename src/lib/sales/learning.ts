@@ -1,6 +1,7 @@
 import "server-only";
 import OpenAI from "openai";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { resolveModel } from "@/lib/ai-models";
 import { logAudit } from "@/lib/audit";
 import { getSalesSettings } from "./settings.ts";
 import {
@@ -29,7 +30,6 @@ import type { LearningJobKind, LearningStatus } from "./types.ts";
  *     bo'lishi kerak va bir xil kirishda bir xil natija berishi shart.
  */
 
-const DEFAULT_MODEL = "gpt-4o-mini";
 /** Bitta suhbatdan modelga yuboriladigan eng ko'p xabar. */
 const MAX_TRANSCRIPT_MESSAGES = 200;
 /** Uslub tahliliga olinadigan eng yangi chiquvchi xabarlar soni. */
@@ -317,7 +317,7 @@ export async function runLearning(options: {
 }): Promise<LearningRunResult> {
   const admin = createSupabaseAdminClient();
   const settings = await getSalesSettings();
-  const model = process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
+  const model = resolveModel("sales");
   const limit = Math.max(1, options.limit ?? settings.learning.batchSize);
 
   // MAXRAJ — bazadagi jami suhbat. Telegram'dagi butun tarix emas.

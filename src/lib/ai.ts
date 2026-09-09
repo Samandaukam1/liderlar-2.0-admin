@@ -2,6 +2,7 @@ import "server-only";
 import OpenAI from "openai";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
+import { resolveModel } from "@/lib/ai-models";
 
 let client: OpenAI | null = null;
 
@@ -44,7 +45,7 @@ export async function improveText(options: {
   actorId: string;
 }): Promise<ImproveResult> {
   const admin = createSupabaseAdminClient();
-  const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+  const model = resolveModel("improve");
 
   const { data: job } = await admin
     .from("ai_jobs")

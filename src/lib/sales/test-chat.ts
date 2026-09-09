@@ -1,6 +1,7 @@
 import "server-only";
 import OpenAI from "openai";
 import { logAudit } from "@/lib/audit";
+import { resolveModel } from "@/lib/ai-models";
 import {
   listApprovedKnowledge,
   listApprovedPatterns,
@@ -42,7 +43,6 @@ import { addUsage, EMPTY_USAGE, estimateCostUsd, type TokenUsage } from "./cost.
  * o'zini baholash so'ralmaydi.
  */
 
-const DEFAULT_MODEL = "gpt-4o-mini";
 const MAX_HISTORY_TURNS = 20;
 const MAX_MESSAGE_CHARS = 2000;
 
@@ -111,7 +111,7 @@ export async function generateTestReply(options: {
   actorId: string | null;
 }): Promise<TestChatResult> {
   const startedAt = Date.now();
-  const model = process.env.OPENAI_MODEL ?? DEFAULT_MODEL;
+  const model = resolveModel("sales");
 
   const message = options.message.trim().slice(0, MAX_MESSAGE_CHARS);
   const history = options.history.slice(-MAX_HISTORY_TURNS).map((turn) => ({
