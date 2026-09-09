@@ -6,6 +6,7 @@ import {
   countFactOccurrences,
   countWords,
   evaluateArticle,
+  shouldStopRegenerating,
   formatArticleFixPrompt,
   type ArticleInput,
 } from "../src/lib/candidates/article-quality.ts";
@@ -140,4 +141,53 @@ test("a clean report produces an empty fix prompt", () => {
   const report = evaluateArticle({ article, sourceText: "" });
   assert.equal(report.ok, true);
   assert.equal(formatArticleFixPrompt(report), "");
+});
+
+/* ==================== QAYTA YOZISH QARORI (tezlik) ====================== */
+
+test("talabga javob bergan maqola qayta yozilmaydi", () => {
+  assert.equal(
+    shouldStopRegenerating({ attempt: 0, ok: true, score: 90, bestScoreBefore: -1 }),
+    "ok",
+  );
+});
+
+test("birinchi urinish “yaxshilanmadi” sababi bilan to‘xtamaydi", () => {
+  // Solishtiradigan oldingi natija yo'q — tuzatish promti bilan
+  // ikkinchi urinishga haqli.
+  assert.equal(
+    shouldStopRegenerating({ attempt: 0, ok: false, score: 40, bestScoreBefore: -1 }),
+    null,
+  );
+});
+
+test("yaxshilangan urinishdan keyin davom etadi", () => {
+  assert.equal(
+    shouldStopRegenerating({ attempt: 1, ok: false, score: 70, bestScoreBefore: 55 }),
+    null,
+  );
+});
+
+test("yaxshilanmagan urinishdan keyin TO‘XTAYDI", () => {
+  // Tuzatish promti eng yaxshi urinishdan tuziladi. Bal oshmagan bo'lsa
+  // `best` o'zgarmaydi va keyingi urinish AYNAN shu promtni oladi —
+  // bir xil savolga bir xil javob kutish 2500-4500 so'zlik maqolani
+  // yana bir marta yozdirish demak.
+  assert.equal(
+    shouldStopRegenerating({ attempt: 1, ok: false, score: 55, bestScoreBefore: 55 }),
+    "no_improvement",
+  );
+  assert.equal(
+    shouldStopRegenerating({ attempt: 2, ok: false, score: 40, bestScoreBefore: 55 }),
+    "no_improvement",
+  );
+});
+
+test("to‘xtash sifatni pasaytirmaydi — eng yaxshi natija baribir saqlanadi", () => {
+  // Qaror faqat "yana bir marta yozdirilsinmi" degan savolga javob
+  // beradi; qaysi variant saqlanishini u hal qilmaydi.
+  assert.equal(
+    shouldStopRegenerating({ attempt: 1, ok: true, score: 30, bestScoreBefore: 90 }),
+    "ok",
+  );
 });

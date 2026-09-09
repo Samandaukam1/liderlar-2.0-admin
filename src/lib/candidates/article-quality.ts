@@ -240,3 +240,37 @@ export function formatArticleFixPrompt(report: ArticleQualityReport): string {
   }
   return lines.join("\n");
 }
+
+/* --------------------------- qayta yozish qarori -------------------------- */
+
+export type RegenerationStop = "ok" | "no_improvement" | null;
+
+/**
+ * Maqolani yana bir marta yozdirish kerakmi.
+ *
+ * NEGA MUHIM: bitta urinish 2500-4500 so'zlik maqola demak, ya'ni bir
+ * necha o'n soniya. Uchta urinish ketma-ket ketsa, admin "Nomzodga
+ * aylantirish" tugmasini bosib bir necha daqiqa kutadi.
+ *
+ * TO'XTASH SHARTLARI:
+ *   · `ok` — talablarga javob berdi, boshqasi shart emas;
+ *   · urinish eng yaxshi natijani ORTTIRMADI. Tuzatish promti eng
+ *     yaxshi urinishdan tuziladi, shuning uchun u o'zgarmagan bo'lsa
+ *     keyingi urinish AYNAN SHU savolni oladi — bir xil savolga bir
+ *     xil javob kutish behuda. Eng yaxshi natija baribir saqlanadi,
+ *     shuning uchun to'xtash sifatni pasaytirmaydi.
+ *
+ * Birinchi urinish (attempt 0) hech qachon shu sabab bilan to'xtamaydi:
+ * unda solishtiradigan oldingi natija yo'q.
+ */
+export function shouldStopRegenerating(input: {
+  attempt: number;
+  ok: boolean;
+  score: number;
+  /** Shu urinishdan OLDINGI eng yaxshi bal; birinchi urinishda -1. */
+  bestScoreBefore: number;
+}): RegenerationStop {
+  if (input.ok) return "ok";
+  if (input.attempt > 0 && input.score <= input.bestScoreBefore) return "no_improvement";
+  return null;
+}

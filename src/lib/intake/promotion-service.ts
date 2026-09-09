@@ -4,7 +4,7 @@ import { normalizeCandidateIntake } from "@/lib/candidates/normalize-intake";
 import { structureCandidateWithAi } from "@/lib/candidates/ai-service";
 import { composeArticleSections } from "@/lib/candidates/article-quality";
 import { serializeCandidateData } from "@/lib/candidates/serializer";
-import { saveCandidateProfile, updateCandidateAiMetadata } from "@/lib/candidates/repository";
+import { saveCandidateProfile } from "@/lib/candidates/repository";
 import { copyFinalPhotoToAvatar } from "@/lib/intake/promote";
 import { syncCandidateInstagramLink } from "@/lib/intake/instagram-link";
 import { getCandidatePublicationReadiness } from "@/lib/candidates/publication-service";
@@ -67,6 +67,25 @@ export async function promoteIntakeToDraft(intakeId: string, actorId: string | n
   normalized.data.fullName = String(intake.full_name ?? normalized.data.fullName);
 
   await admin.from("candidate_intakes").update({ status: "ai_reviewing" }).eq("id", intakeId).eq("status", "approved");
+
+  /*
+   * Rasm KO'CHIRISHI AI bilan BIR VAQTDA ketadi.
+   *
+   * `copyFinalPhotoToAvatar` faylni yuklab olib, avatar bucket'iga
+   * qayta yozadi — bir necha soniya. U AI natijasiga umuman bog'liq
+   * emas, shuning uchun uni maqola yozilishini kutib turishi bekorga
+   * sarflangan vaqt edi.
+   *
+   * Rad etilishi ATAYLAB ushlanadi: `Promise.all` ikkisidan biri
+   * yiqilsa darhol tashlaydi va AI natijasi yo'qolib ketardi —
+   * u esa eng qimmat qism.
+   */
+  const avatarPromise = copyFinalPhotoToAvatar(intakeId).catch((err) => {
+    console.error("[promotion] avatar copy failed", err instanceof Error ? err.message : err);
+    return null;
+  });
+
+  const aiStartedAt = Date.now();
   let aiResult: Awaited<ReturnType<typeof structureCandidateWithAi>>;
   try {
     aiResult = await structureCandidateWithAi({
@@ -76,12 +95,21 @@ export async function promoteIntakeToDraft(intakeId: string, actorId: string | n
       intakeId,
     });
   } catch (error) {
+    await avatarPromise;
     await admin.from("candidate_intakes").update({ status: "approved" }).eq("id", intakeId).eq("status", "ai_reviewing");
     return { ok: false, error: error instanceof Error ? `Jaxongir AI xatosi: ${error.message}` : "Jaxongir AI xatosi" };
   }
-  await admin.from("candidate_intakes").update({ status: "approved" }).eq("id", intakeId).eq("status", "ai_reviewing");
+  console.log(`[promotion] AI ${Date.now() - aiStartedAt}ms (${aiResult.regenerations} qayta yozish)`);
 
-  const avatarUrl = await copyFinalPhotoToAvatar(intakeId);
+  // Bu ikkisi bir-biriga bog'liq emas — birga kutiladi.
+  const [avatarUrl] = await Promise.all([
+    avatarPromise,
+    admin
+      .from("candidate_intakes")
+      .update({ status: "approved" })
+      .eq("id", intakeId)
+      .eq("status", "ai_reviewing"),
+  ]);
   const slug = slugify(intake.full_name as string);
 
   const { data, error } = await admin.rpc("promote_candidate_intake", {
@@ -96,7 +124,9 @@ export async function promoteIntakeToDraft(intakeId: string, actorId: string | n
 
   // The optional Instagram handle travels with the candidate: liderlar-web
   // renders every social_links row, so this is all the public profile needs.
-  await syncCandidateInstagramLink(
+  // Boshqa jadvalga yozadi va profil saqlashga bog'liq emas — pastda
+  // u bilan birga kutiladi.
+  const instagramPromise = syncCandidateInstagramLink(
     res.candidate_id,
     intake.instagram_username as string | null,
   );
@@ -124,18 +154,26 @@ export async function promoteIntakeToDraft(intakeId: string, actorId: string | n
     unparsedContent: "",
   };
   structured.formattedContent = serializeCandidateData(structured);
+  const saveStartedAt = Date.now();
   try {
     await saveCandidateProfile(structured, actorId);
-    await updateCandidateAiMetadata(res.candidate_id, {
-      status: "succeeded",
-      model: aiResult.model,
-      rawResponse: aiResult.rawResponse,
-    });
-    // Facts card + quality report drive the admin preview warnings; a failure
-    // here must not undo a successfully saved article.
+    /*
+     * Metadata va sifat hisoboti BITTA yozuvda.
+     *
+     * Ilgari bu ikki alohida UPDATE edi — ikkalasi ham `candidates`
+     * jadvalining O'SHA qatoriga. Ikkita ketma-ket borish-kelish
+     * o'rniga bittasi ketadi.
+     */
     await admin
       .from("candidates")
       .update({
+        // Maydonlar `updateCandidateAiMetadata` bilan AYNAN bir xil —
+        // birlashtirish xatti-harakatni o'zgartirmasligi kerak.
+        ai_status: "succeeded",
+        ai_model: aiResult.model,
+        ai_generated_at: new Date().toISOString(),
+        ai_raw_response: aiResult.rawResponse,
+        manually_reviewed: false,
         key_facts: aiResult.data.keyFacts,
         article_word_count: aiResult.quality.wordCount,
         fact_preservation_report: {
@@ -154,6 +192,8 @@ export async function promoteIntakeToDraft(intakeId: string, actorId: string | n
         },
       })
       .eq("id", res.candidate_id);
+    await instagramPromise;
+    console.log(`[promotion] saqlash ${Date.now() - saveStartedAt}ms`);
   } catch (saveError) {
     return {
       ok: false,

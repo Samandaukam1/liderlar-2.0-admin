@@ -13,6 +13,7 @@ import {
   ARTICLE_TARGET_MIN_WORDS,
   evaluateArticle,
   formatArticleFixPrompt,
+  shouldStopRegenerating,
   type ArticleQualityReport,
 } from "./article-quality.ts";
 
@@ -210,7 +211,11 @@ export async function structureCandidateWithAi(params: {
     let regenerations = 0;
 
     for (let attempt = 0; attempt <= MAX_ARTICLE_REGENERATIONS; attempt += 1) {
+      // Eng yaxshi urinishning bali — pastda "yaxshilanmadi" qarori
+      // shunga solishtiriladi.
+      const bestScoreBefore = best?.quality.score ?? -1;
       const fixBlock = best ? formatArticleFixPrompt(best.quality) : "";
+      const startedAt = Date.now();
       const completion = await openai().chat.completions.create({
         model,
         max_completion_tokens: ARTICLE_MAX_COMPLETION_TOKENS,
@@ -252,7 +257,27 @@ export async function structureCandidateWithAi(params: {
       if (!best || quality.score > best.quality.score) {
         best = { data: parsed.data, raw: json, quality };
       }
-      if (quality.ok) break;
+      console.log(
+        `[candidate-ai] attempt=${attempt} score=${quality.score} ok=${quality.ok} ` +
+          `words=${quality.wordCount} ${Date.now() - startedAt}ms`,
+      );
+      // Qaror sof funksiyada — u yerda nega to'xtash kerakligi
+      // izohlangan va testda qoplangan.
+      const stop = shouldStopRegenerating({
+        attempt,
+        ok: quality.ok,
+        score: quality.score,
+        bestScoreBefore,
+      });
+      if (stop) {
+        if (stop === "no_improvement") {
+          console.log(
+            `[candidate-ai] urinish yaxshilanmadi (${quality.score} <= ${bestScoreBefore}) — to‘xtatildi`,
+          );
+        }
+        break;
+      }
+
       if (attempt < MAX_ARTICLE_REGENERATIONS) regenerations += 1;
     }
 
