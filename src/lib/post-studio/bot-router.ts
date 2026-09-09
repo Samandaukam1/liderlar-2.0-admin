@@ -30,14 +30,19 @@ import {
   BLACKLIST_ADD_BUTTON_LABEL,
   BLACKLIST_NAME_PROMPT,
   blacklistRemoveCallbackData,
+  buildBlacklistReasonPrompt,
   buildBlacklistResultMessage,
   isBlacklistPromptReply,
+  isBlacklistReasonReply,
+  normalizeBlacklistReason,
   parseBlacklistRemoveCallback,
+  parseBlacklistReasonPrompt,
 } from "@/lib/intake/blacklist-match.ts";
 import {
   addToBlacklist,
   findSimilarInBlacklist,
   removeFromBlacklistBySlug,
+  BLACKLIST_REASON_CONTRACT,
 } from "@/lib/intake/blacklist.ts";
 import {
   buildCrmListPage,
@@ -275,7 +280,22 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
     // Javob ham qayta tekshiriladi: savol boshqa chatga forward
     // qilinishi va u yerdan javob berilishi mumkin.
     if (!editorial) return deny(chatId, keyboard);
-    await handleBlacklistName(chatId, text, keyboard);
+    await handleBlacklistName(chatId, text);
+    return;
+  }
+
+  // Ikkinchi qadam: izoh. Ism savol matnining ichida saqlangan —
+  // chat holati baribir hech qayerda yozilmaydi.
+  const reasonForName = parseBlacklistReasonPrompt(message?.reply_to_message?.text);
+  if (reasonForName || isBlacklistReasonReply(message?.reply_to_message?.text)) {
+    if (!editorial) return deny(chatId, keyboard);
+    if (!reasonForName) {
+      await sendTelegramMessage(chatId, "Ism o‘qilmadi — qaytadan boshlang.", {
+        replyKeyboard: keyboard,
+      });
+      return;
+    }
+    await handleBlacklistReason(chatId, reasonForName, text, keyboard);
     return;
   }
 
@@ -304,24 +324,49 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
  * qidirilsa, endigina qo'shilgan yozuvning o'zi "aniq moslik" bo'lib
  * chiqib, ro'yxatni ma'nosiz qilardi.
  */
-async function handleBlacklistName(
-  chatId: number,
-  fullName: string,
-  keyboard: string[][] | undefined,
-): Promise<void> {
+async function handleBlacklistName(chatId: number, fullName: string): Promise<void> {
   const name = fullName.trim();
+
+  // O'xshashlar SAQLASHDAN OLDIN ko'rsatiladi: moderator izohni
+  // yozishdan avval bu takror emasligini ko'rib olsin. Keyin
+  // qidirilsa, endigina qo'shilgan yozuvning o'zi "aniq moslik"
+  // bo'lib chiqib, ro'yxatni ma'nosiz qilardi.
   const matches = await findSimilarInBlacklist(name);
 
+  await sendTelegramMessage(chatId, buildBlacklistReasonPrompt(name, matches), {
+    forceReply: true,
+  });
+  console.log(`[telegram-webhook] blacklist reason prompt similar=${matches.length}`);
+}
+
+/**
+ * Ikkinchi qadam: izoh keldi — endi saqlanadi.
+ *
+ * Yozuv AYNAN shu yerda yaratiladi, birinchi qadamda emas: ism
+ * yuborilgan zahoti saqlansak, moderator izohni yozmasdan chiqib
+ * ketganida sababsiz yozuv qolib ketardi.
+ */
+async function handleBlacklistReason(
+  chatId: number,
+  fullName: string,
+  reasonText: string,
+  keyboard: string[][] | undefined,
+): Promise<void> {
+  const reason = normalizeBlacklistReason(reasonText) ?? BLACKLIST_REASON_CONTRACT;
+  const matches = await findSimilarInBlacklist(fullName);
+
   const result = await addToBlacklist({
-    fullName: name,
+    fullName,
     intakeId: null,
+    reason,
     chatId,
   });
 
   const text = buildBlacklistResultMessage({
-    fullName: name,
+    fullName,
     added: result.ok,
     alreadyListed: result.alreadyListed,
+    reason,
     matches,
   });
 

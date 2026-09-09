@@ -194,6 +194,92 @@ export function findSimilarBlacklisted(
     .slice(0, limit);
 }
 
+/* --------------------------- ikkinchi qadam: izoh ------------------------ */
+
+/**
+ * Izoh so'raladigan xabarning boshi.
+ *
+ * Birinchi qadamniki bilan chalkashmasligi uchun ATAYLAB boshqacha:
+ * "kiritish" emas, "izoh". Ikkalasi bir xil bo'lsa, izoh javobi ism
+ * deb o'qilib, oqim boshiga qaytib ketardi.
+ */
+export const BLACKLIST_REASON_PROMPT_PREFIX = "🚫 Qora ro‘yxat — izoh";
+
+/** Izoh o'rniga shu yuborilsa standart sabab yoziladi. */
+export const BLACKLIST_REASON_SKIP_TOKENS: readonly string[] = ["-", "—", "yo'q", "yoq", "skip"];
+
+export const BLACKLIST_REASON_MAX_LENGTH = 200;
+
+/**
+ * Izoh so'raydigan xabar.
+ *
+ * ISM SHU MATN ICHIDA saqlanadi. Bot holatsiz: "bu chat qaysi ism
+ * uchun izoh kutyapti" degan ma'lumot bazada emas, savolning o'zida
+ * yashaydi va javob `reply_to_message` bilan qaytganda o'qib olinadi.
+ *
+ * O'xshash yozuvlar SAQLASHDAN OLDIN ko'rsatiladi — moderator izohni
+ * yozishdan avval bu takror emasligini ko'rib olsin.
+ */
+export function buildBlacklistReasonPrompt(
+  fullName: string,
+  matches: readonly BlacklistMatch[],
+): string {
+  const lines = [BLACKLIST_REASON_PROMPT_PREFIX, "", `👤 ${fullName.trim()}`, ""];
+
+  const similar = matches.filter((match) => match.kind === "similar");
+  const exact = matches.some((match) => match.kind === "exact");
+
+  if (exact) {
+    lines.push("ℹ️ Bu ism ALLAQACHON qora ro‘yxatda — izoh yangilanadi.", "");
+  }
+  if (similar.length > 0) {
+    lines.push(`🔎 Ro‘yxatda o‘xshash ${similar.length} ta ism bor:`);
+    similar.forEach((match, index) => {
+      lines.push(`${index + 1}. ${match.fullName} — ${Math.round(match.score * 100)}% o‘xshash`);
+    });
+    lines.push("");
+  }
+
+  lines.push(
+    "Sabab yoki izohni yozib yuboring.",
+    `Izoh kerak bo‘lmasa "${BLACKLIST_REASON_SKIP_TOKENS[0]}" yuboring.`,
+  );
+  return lines.join("\n");
+}
+
+export function isBlacklistReasonReply(replyToText: string | null | undefined): boolean {
+  return (replyToText ?? "").trim().startsWith(BLACKLIST_REASON_PROMPT_PREFIX);
+}
+
+/**
+ * Izoh so'ralgan xabardan ismni qaytarib o'qiydi.
+ *
+ * Ism "👤 " bilan boshlangan satrda turadi — u savol matnining
+ * o'zgarmas qismi va shu sababli barqaror kalit.
+ */
+export function parseBlacklistReasonPrompt(
+  replyToText: string | null | undefined,
+): string | null {
+  if (!isBlacklistReasonReply(replyToText)) return null;
+  const line = (replyToText ?? "")
+    .split("\n")
+    .map((row) => row.trim())
+    .find((row) => row.startsWith("👤 "));
+  const name = line?.slice(2).trim() ?? "";
+  return name === "" ? null : name;
+}
+
+/**
+ * Yuborilgan izoh. O'tkazib yuborish belgisi bo'lsa `null` — chaqiruvchi
+ * standart sababni ishlatadi.
+ */
+export function normalizeBlacklistReason(text: string | null | undefined): string | null {
+  const value = (text ?? "").trim();
+  if (value === "") return null;
+  if (BLACKLIST_REASON_SKIP_TOKENS.includes(value.toLowerCase())) return null;
+  return value.slice(0, BLACKLIST_REASON_MAX_LENGTH);
+}
+
 /* ------------------------------- xabarlar ------------------------------- */
 
 export const BLACKLIST_REMOVE_PREFIX = "blk:rm:";
@@ -219,6 +305,8 @@ export interface BlacklistResultInput {
   /** Yozuv endi ro'yxatda (yangi qo'shilgan yoki avvaldan bor). */
   added: boolean;
   alreadyListed: boolean;
+  /** Saqlangan izoh — standart sabab bo'lsa ham ko'rsatiladi. */
+  reason: string;
   matches: readonly BlacklistMatch[];
 }
 
@@ -232,8 +320,9 @@ export function buildBlacklistResultMessage(input: BlacklistResultInput): string
 
   lines.push(
     input.alreadyListed
-      ? "ℹ️ Bu ism ALLAQACHON qora ro‘yxatda edi."
+      ? "ℹ️ Bu ism ALLAQACHON qora ro‘yxatda edi — izoh yangilandi."
       : "✅ Qora ro‘yxatga kiritildi.",
+    `📝 Izoh: ${input.reason}`,
   );
 
   const similar = input.matches.filter((match) => match.kind === "similar");

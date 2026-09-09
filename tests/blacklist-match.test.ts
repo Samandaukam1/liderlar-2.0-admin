@@ -5,6 +5,12 @@ import { join } from "node:path";
 import {
   BLACKLIST_ADD_BUTTON_LABEL,
   BLACKLIST_NAME_PROMPT,
+  BLACKLIST_REASON_MAX_LENGTH,
+  BLACKLIST_REASON_SKIP_TOKENS,
+  buildBlacklistReasonPrompt,
+  isBlacklistReasonReply,
+  normalizeBlacklistReason,
+  parseBlacklistReasonPrompt,
   blacklistRemoveCallbackData,
   buildBlacklistLookupMessage,
   buildBlacklistResultMessage,
@@ -118,6 +124,7 @@ test("yangi ism qo‘shilgani aytiladi", () => {
     fullName: "Ismoilov Jasur",
     added: true,
     alreadyListed: false,
+    reason: "Shartnoma buzildi",
     matches: [],
   });
   assert.match(text, /Qora ro‘yxatga kiritildi/);
@@ -129,9 +136,11 @@ test("avvaldan bor ism “allaqachon” deb belgilanadi", () => {
     fullName: "Ravshanova Maryam Rasulovna",
     added: true,
     alreadyListed: true,
+    reason: "Shartnoma buzildi",
     matches: findSimilarBlacklisted("Ravshanova Maryam Rasulovna", list),
   });
   assert.match(text, /ALLAQACHON/);
+  assert.match(text, /izoh yangilandi/);
 });
 
 test("o‘xshash ismlar ism-familiyasi bilan ko‘rsatiladi", () => {
@@ -139,10 +148,13 @@ test("o‘xshash ismlar ism-familiyasi bilan ko‘rsatiladi", () => {
     fullName: "Ravshanova Maryam",
     added: true,
     alreadyListed: false,
+    reason: "To‘lov qilib, javob bermay ketdi",
     matches: findSimilarBlacklisted("Ravshanova Maryam", list),
   });
   assert.match(text, /o‘xshash 1 ta ism bor/);
   assert.match(text, /Ravshanova Maryam Rasulovna/);
+  // Saqlangan izoh natijada ko'rinadi.
+  assert.match(text, /📝 Izoh: To‘lov qilib, javob bermay ketdi/);
   assert.match(text, /%\s?o‘xshash/);
   // Sabab ham ko'rinadi.
   assert.match(text, /Shartnoma buzildi/);
@@ -153,6 +165,7 @@ test("ism o‘qilmasa saqlanmagani ochiq aytiladi", () => {
     fullName: "!!!",
     added: false,
     alreadyListed: false,
+    reason: "Shartnoma buzildi",
     matches: [],
   });
   assert.match(text, /saqlanmadi/);
@@ -196,13 +209,15 @@ test("tugma tahririyat klaviaturasida", () => {
   assert.match(BLACKLIST_ADD_BUTTON_LABEL, /Qora ro‘yxatga kiritish/);
 });
 
-test("tugma ham, javob ham tahririyat ekanini QAYTA tekshiradi", () => {
+test("oqimning HAR QADAMI tahririyat ekanini QAYTA tekshiradi", () => {
   // Yorliq — oddiy matn, uni istalgan odam yozishi mumkin; savol esa
-  // boshqa chatga forward qilinishi mumkin.
+  // boshqa chatga forward qilinishi mumkin. Uchta kirish nuqtasi bor:
+  // tugma, ism javobi va izoh javobi.
   const block = ROUTER.slice(ROUTER.indexOf('command === "/qora"'), ROUTER.indexOf("// The CRM lists"));
-  assert.equal((block.match(/if \(!editorial\) return deny/g) ?? []).length, 2);
+  assert.equal((block.match(/if \(!editorial\) return deny/g) ?? []).length, 3);
   assert.match(block, /forceReply: true/);
   assert.match(block, /isBlacklistPromptReply/);
+  assert.match(block, /parseBlacklistReasonPrompt/);
 });
 
 test("o‘xshashlar QO‘SHISHDAN OLDIN qidiriladi", () => {
@@ -217,4 +232,93 @@ test("o‘xshashlar QO‘SHISHDAN OLDIN qidiriladi", () => {
 
 test("yordam matnida yangi buyruq bor", () => {
   assert.match(ROUTER, /\/qora — qora ro‘yxatga ism kiritish/);
+});
+
+/* --------------------------- ikkinchi qadam: izoh ------------------------ */
+
+test("izoh so‘raladigan xabar ISMNI ichida saqlaydi", () => {
+  // Bot holatsiz: "qaysi ism uchun izoh kutyapmiz" degan ma'lumot
+  // bazada emas, savolning o'zida yashaydi.
+  const prompt = buildBlacklistReasonPrompt("Ravshanova Maryam", []);
+  assert.equal(isBlacklistReasonReply(prompt), true);
+  assert.equal(parseBlacklistReasonPrompt(prompt), "Ravshanova Maryam");
+});
+
+test("izoh so‘rashdan OLDIN o‘xshashlar ko‘rsatiladi", () => {
+  // Moderator izohni yozishdan avval bu takror emasligini ko'rsin.
+  const prompt = buildBlacklistReasonPrompt(
+    "Ravshanova Maryam",
+    findSimilarBlacklisted("Ravshanova Maryam", list),
+  );
+  assert.match(prompt, /o‘xshash 1 ta ism bor/);
+  assert.match(prompt, /Ravshanova Maryam Rasulovna/);
+  assert.match(prompt, /Sabab yoki izohni yozib yuboring/);
+});
+
+test("allaqachon ro‘yxatdagi ism uchun izoh yangilanishi aytiladi", () => {
+  const prompt = buildBlacklistReasonPrompt(
+    "Ravshanova Maryam Rasulovna",
+    findSimilarBlacklisted("Ravshanova Maryam Rasulovna", list),
+  );
+  assert.match(prompt, /ALLAQACHON qora ro‘yxatda/);
+});
+
+test("ikki qadam bir-biri bilan CHALKASHMAYDI", () => {
+  // Prefikslar boshqacha bo'lmasa, izoh javobi ism deb o'qilib,
+  // oqim boshiga qaytib ketardi.
+  const namePrompt = BLACKLIST_NAME_PROMPT;
+  const reasonPrompt = buildBlacklistReasonPrompt("Kimdir Kimdirov", []);
+
+  assert.equal(isBlacklistPromptReply(namePrompt), true);
+  assert.equal(isBlacklistReasonReply(namePrompt), false);
+
+  assert.equal(isBlacklistReasonReply(reasonPrompt), true);
+  assert.equal(isBlacklistPromptReply(reasonPrompt), false);
+});
+
+test("izoh o‘qiladi, chegaradan uzuni kesiladi", () => {
+  assert.equal(normalizeBlacklistReason("  Pul to‘lamadi  "), "Pul to‘lamadi");
+  assert.equal(
+    normalizeBlacklistReason("x".repeat(500))?.length,
+    BLACKLIST_REASON_MAX_LENGTH,
+  );
+});
+
+test("o‘tkazib yuborish belgisi standart sababga qaytaradi", () => {
+  for (const token of BLACKLIST_REASON_SKIP_TOKENS) {
+    assert.equal(normalizeBlacklistReason(token), null, token);
+  }
+  assert.equal(normalizeBlacklistReason(""), null);
+  assert.equal(normalizeBlacklistReason("   "), null);
+  assert.equal(normalizeBlacklistReason(null), null);
+});
+
+test("noto‘g‘ri javobdan ism o‘qilmaydi", () => {
+  assert.equal(parseBlacklistReasonPrompt("Boshqa xabar"), null);
+  assert.equal(parseBlacklistReasonPrompt(null), null);
+  // Prefiks bor, lekin ism satri yo'q.
+  assert.equal(parseBlacklistReasonPrompt("🚫 Qora ro‘yxat — izoh\n\nSabab yozing."), null);
+});
+
+test("yozuv FAQAT izoh kelgach yaratiladi", () => {
+  // Ism yuborilgan zahoti saqlansak, moderator izohni yozmasdan
+  // chiqib ketganida sababsiz yozuv qolib ketardi.
+  const nameStep = ROUTER.slice(
+    ROUTER.indexOf("async function handleBlacklistName"),
+    ROUTER.indexOf("async function handleBlacklistReason"),
+  );
+  assert.ok(!nameStep.includes("addToBlacklist"), "ism qadamida saqlanmasligi kerak");
+  assert.match(nameStep, /forceReply: true/);
+
+  const reasonStep = ROUTER.slice(ROUTER.indexOf("async function handleBlacklistReason"));
+  assert.match(reasonStep, /addToBlacklist\(/);
+  assert.match(reasonStep, /reason,/);
+});
+
+test("izoh qadami ham tahririyat ekanini tekshiradi", () => {
+  const block = ROUTER.slice(
+    ROUTER.indexOf("const reasonForName ="),
+    ROUTER.indexOf("// The CRM lists"),
+  );
+  assert.match(block, /if \(!editorial\) return deny/);
 });
