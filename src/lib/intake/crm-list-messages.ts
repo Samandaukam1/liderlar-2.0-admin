@@ -14,6 +14,11 @@ import {
   tashkentDayRange,
   tashkentDayRangeForDate,
 } from "../tashkent-day.ts";
+import {
+  pipelineStageLabel,
+  splitPipelineError,
+} from "../post-studio/pipeline-stages.ts";
+import { PIPELINE_STALE_AFTER_MS } from "../post-studio/pipeline-recovery.ts";
 
 /** The three CRM buttons added to the editorial /start keyboard. */
 export const PUBLISHED_BUTTON_LABEL = "📚 Hozirgacha chop etilganlar";
@@ -248,6 +253,162 @@ export interface CrmListRow {
   fullName: string;
   /** Stored canonically as "@name"; null when the candidate never gave one. */
   telegramUsername: string | null;
+  /** Faqat "kutayotganlar" ro'yxatida to'ldiriladi. */
+  waiting?: WaitingContext;
+}
+
+/* ------------------------- nega kutayapti ------------------------------- */
+
+/**
+ * Bitta odam nega hali chiqmaganini aytish uchun kerak bo'lgan hamma narsa.
+ *
+ * Ro'yxat ilgari faqat ism ko'rsatardi va muharrir har biri uchun panelga
+ * kirib sabab qidirishga majbur edi. Hamma qiymat `candidate_intakes` dan
+ * keladi, ya'ni bu yerda taxmin qilinadigan narsa yo'q.
+ */
+export interface WaitingContext {
+  status: string;
+  /** 'paid' | 'unpaid' | 'unknown' — anketa to'lov holati. */
+  paymentStatus: string | null;
+  /** 'pending' | 'running' | 'completed' | 'failed' | 'needs_review' | 'skipped'. */
+  pipelineStatus: string | null;
+  /** `fail()` yozgan "<bosqich>: <matn>" shakli. */
+  pipelineError: string | null;
+  /** Quvur qachon boshlangan — "qotib qolgan"ni ajratish uchun. */
+  pipelineStartedAt: string | null;
+  /** Quvur qachon boshlanishi kerak edi (yuborilgandan +2 soat). */
+  processAfter: string | null;
+}
+
+export interface WaitingReason {
+  /** Bir qatorli asosiy sabab. */
+  label: string;
+  /** Texnik tafsilot — faqat xato bo'lganda. */
+  detail?: string;
+  icon: string;
+}
+
+/**
+ * "Qotib qolgan" chegarasi TIKLOVCHIDAN olinadi, bu yerda qayta
+ * yozilmaydi.
+ *
+ * `recoverStalePipelines()` aynan shu yoshdagi yugurishni o'lgan deb
+ * hisoblab qaytadan navbatga qo'yadi. Agar ro'yxat o'z sonini tutsa,
+ * ikkisi bir kun ajralib ketardi va ro'yxat "hammasi joyida" deyayotganda
+ * tiklovchi allaqachon uni o'lgan deb bilardi.
+ */
+const STUCK_RUN_MS = PIPELINE_STALE_AFTER_MS;
+
+/** Navbat vaqti o'tib ketgan, lekin boshlanmagan — cron ishlamayotgan belgisi. */
+const LATE_QUEUE_MS = 30 * 60 * 1000;
+
+const STATUS_REASONS: Record<string, string> = {
+  submitted: "Anketa to‘ldirilgan, navbatda",
+  ai_reviewing: "AI ko‘rib chiqmoqda",
+  needs_clarification: "Aniqlashtirish so‘ralgan — nomzod javobi kutilmoqda",
+  approved: "Tasdiqlangan, nashr navbatida",
+  promoted: "Nomzod yaratilgan, nashr kutilmoqda",
+};
+
+/**
+ * Nega bu odam hali saytda yo'q.
+ *
+ * TARTIB — "buni hal qilmaguncha keyingisi ahamiyatsiz" tamoyili bilan:
+ *
+ *   1. TO'LOV. Nashr to'lovga bog'langan; to'lov tasdiqlanmaguncha quvur bu
+ *      odamni umuman olmaydi. Shuning uchun u birinchi bo'lib aytiladi,
+ *      hatto eski xato yozuvi turgan bo'lsa ham — aks holda muharrir
+ *      hech qachon boshlanmagan ishning xatosini tuzatishga urinadi.
+ *   2. TEXNIK XATO — bosqich nomi bilan, chunki "nimadir bo'ldi" degan
+ *      xabar bilan hech narsa qilib bo'lmaydi.
+ *   3. QOTIB QOLGAN YUGURISH. "Ishlanmoqda" bilan "ikki soatdan beri
+ *      ishlanmoqda" bir xil narsa emas; ikkinchisi aralashuv talab qiladi.
+ *   4. HOLAT — qolgan, oddiy kutish hollari.
+ */
+export function describeWaitingReason(
+  context: WaitingContext | undefined,
+  now: Date = new Date(),
+): WaitingReason {
+  if (!context) return { icon: "❔", label: "Sabab aniqlanmadi" };
+
+  if (context.paymentStatus !== "paid") {
+    return {
+      icon: "💳",
+      label:
+        context.paymentStatus === "unpaid"
+          ? "Anketa to‘ldirilgan, hali to‘lov qilmagan"
+          : "Anketa to‘ldirilgan, to‘lov tasdiqlanmagan",
+    };
+  }
+
+  const pipeline = context.pipelineStatus;
+
+  if (pipeline === "failed" || pipeline === "needs_review") {
+    const { stage, message } = splitPipelineError(context.pipelineError);
+    return {
+      icon: "⚠️",
+      label: stage
+        ? `Texnik xato: ${pipelineStageLabel(stage)}`
+        : "Texnik xato — qo‘lda tekshirish kerak",
+      detail: message || undefined,
+    };
+  }
+
+  if (pipeline === "running") {
+    const age = elapsedMs(context.pipelineStartedAt, now);
+    if (age !== null && age > STUCK_RUN_MS) {
+      return {
+        icon: "⚠️",
+        label: `Qotib qolgan: ${formatAge(age)}dan beri "ishlanmoqda"`,
+        detail: "Avtomatik tiklash keyingi cron'da uriniladi.",
+      };
+    }
+    return { icon: "⏳", label: "Hozir ishlanmoqda" };
+  }
+
+  if (pipeline === "pending") {
+    const late = elapsedMs(context.processAfter, now);
+    if (late !== null && late > LATE_QUEUE_MS) {
+      return {
+        icon: "⚠️",
+        label: `Navbatda turibdi, lekin boshlanmagan (${formatAge(late)} kechikdi)`,
+      };
+    }
+    if (late !== null && late < 0) {
+      return { icon: "⏳", label: `Navbatda — ${formatAge(-late)}dan keyin boshlanadi` };
+    }
+    return { icon: "⏳", label: "Navbatda" };
+  }
+
+  // Quvur tugagan, lekin odam saytda yo'q. Bu yerga tushish o'zi
+  // nomuvofiqlik: aytiladi, yashirilmaydi.
+  if (pipeline === "completed") {
+    return { icon: "⚠️", label: "Post tayyor, lekin saytda chiqmagan" };
+  }
+  if (pipeline === "skipped") {
+    return { icon: "⏭", label: "Post quvuri o‘tkazib yuborilgan" };
+  }
+
+  const known = STATUS_REASONS[context.status];
+  if (known) return { icon: "⏳", label: known };
+
+  return { icon: "❔", label: `Holat: ${context.status}` };
+}
+
+/** Musbat = o'tgan vaqt, manfiy = hali kelmagan. Sana yaroqsiz bo'lsa null. */
+function elapsedMs(iso: string | null, now: Date): number | null {
+  if (!iso) return null;
+  const at = Date.parse(iso);
+  return Number.isFinite(at) ? now.getTime() - at : null;
+}
+
+/** "12 daqiqa" / "3 soat" / "2 kun" — chatda o'qish uchun, aniqlik uchun emas. */
+function formatAge(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  if (minutes < 60) return `${minutes} daqiqa`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} soat`;
+  return `${Math.round(hours / 24)} kun`;
 }
 
 export interface CrmListPageInput {
@@ -284,13 +445,72 @@ export function buildCrmListText(input: CrmListPageInput): string {
     return [...header, "", "Bu kesimda hech kim yo‘q."].join("\n");
   }
 
-  const lines = input.rows.flatMap((row, index) => {
+  // Har qator O'Z guruhi bo'lib yasaladi: chegaraga yetganda BUTUN
+  // yozuv tashlanadi, yarmi emas. Yarim qolgan yozuv "bu kim?" degan
+  // savol tug'diradi va uni hech qayerdan tekshirib bo'lmaydi.
+  const groups = input.rows.map((row, index) => {
     const name = row.fullName.trim() || "(ismi yo‘q)";
     const handle = normalizeHandleForDisplay(row.telegramUsername);
-    return [`${offset + index + 1}. ${name}`, `   ${handle}`];
+    const lines = [`${offset + index + 1}. ${name}`, `   ${handle}`];
+
+    // Sabab FAQAT "kutayotganlar" ro'yxatida: chop etilganlar uchun
+    // "nega kutayapti" degan savolning ma'nosi yo'q.
+    if (input.kind === "waiting") {
+      const reason = describeWaitingReason(row.waiting);
+      lines.push(`   ${reason.icon} ${reason.label}`);
+      if (reason.detail) lines.push(`      ${truncateDetail(reason.detail)}`);
+    }
+    return lines;
   });
 
-  return [...header, `Sahifa ${page}/${pageCount}`, "", ...lines].join("\n");
+  const prefix = [...header, `Sahifa ${page}/${pageCount}`, ""];
+  return joinWithinTelegramLimit(prefix, groups);
+}
+
+/**
+ * Telegram bitta xabarni 4096 BELGIDA kesadi — aniqrog'i, kesmaydi:
+ * butun yuborishni 400 bilan rad etadi va muharrir hech narsa ko'rmaydi.
+ *
+ * Sahifa hajmi (20) ism va username uchun tanlangan edi. "Kutayotganlar"
+ * ro'yxati endi har yozuvga sabab va texnik tafsilot qo'shadi, ya'ni
+ * qator ikki barobar uzun bo'lishi mumkin, ismlar esa erkin matn —
+ * ularning uzunligiga hech qanday kafolat yo'q.
+ *
+ * Shuning uchun chegara SO'NGGI nuqtada, tayyor matn ustida qo'llanadi:
+ * nechta yozuv sig'sa shuncha yuboriladi va nechtasi qolgani AYTILADI.
+ * Qolganlar keyingi sahifada — ular yo'qolmaydi.
+ */
+const TELEGRAM_TEXT_LIMIT = 4096;
+
+function joinWithinTelegramLimit(prefix: string[], groups: string[][]): string {
+  const kept: string[] = [];
+  let length = prefix.join("\n").length;
+  let shown = 0;
+
+  for (const group of groups) {
+    const cost = group.join("\n").length + 1;
+    // Zaxira — pastdagi "yana N ta" eslatmasining o'zi uchun.
+    if (length + cost > TELEGRAM_TEXT_LIMIT - 80) break;
+    kept.push(...group);
+    length += cost;
+    shown += 1;
+  }
+
+  const lines = [...prefix, ...kept];
+  const dropped = groups.length - shown;
+  if (dropped > 0) {
+    lines.push("", `… yana ${dropped} ta shu sahifada sig‘madi — keyingi sahifaga qarang.`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Xato matni uzun bo'lishi mumkin (`fail()` 900 belgigacha yozadi), ro'yxat
+ * qatori esa bir nechta odam bilan bitta xabarga sig'ishi kerak.
+ */
+function truncateDetail(text: string, max = 90): string {
+  const value = text.replace(/\s+/g, " ").trim();
+  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
 /** "@name" whether it was stored with the "@" or without; "—" when absent. */

@@ -219,24 +219,73 @@ function largestFileId(photos: { file_id: string; width: number }[] | undefined)
   return photos.reduce((a, b) => (b.width > a.width ? b : a)).file_id;
 }
 
+export interface SendPhotoOptions {
+  /**
+   * Izoh formati. Standart — MarkdownV2, chunki tayyor post izohi shu
+   * shaklda yasaladi va uni qayta yozish yuzlab satrga tegardi.
+   *
+   * `null` — FORMATSIZ. Izohda erkin matn (masalan ism) bo'lganda
+   * shu tanlanadi: MarkdownV2'da ismdagi bitta nuqta yoki chiziqcha
+   * butun yuborishni 400 bilan yiqitadi.
+   */
+  parseMode?: "MarkdownV2" | null;
+  /** Rasm ostidagi tugmalar. */
+  inlineKeyboard?: InlineButton[][];
+}
+
 export async function sendTelegramPhoto(
   chatId: number,
   photo: Buffer | string,
   caption: string,
+  options: SendPhotoOptions = {},
 ): Promise<SentPhoto> {
-  const common = { caption, parse_mode: "MarkdownV2" };
+  const parseMode = options.parseMode === undefined ? "MarkdownV2" : options.parseMode;
   let result: { message_id: number; photo?: { file_id: string; width: number }[] };
 
   if (typeof photo === "string") {
-    result = await callTelegram("sendPhoto", { chat_id: chatId, photo, ...common });
+    result = await callTelegram("sendPhoto", {
+      chat_id: chatId,
+      photo,
+      caption,
+      ...(parseMode ? { parse_mode: parseMode } : {}),
+      ...(options.inlineKeyboard
+        ? { reply_markup: { inline_keyboard: options.inlineKeyboard } }
+        : {}),
+    });
   } else {
     const form = new FormData();
     form.append("chat_id", String(chatId));
     form.append("caption", caption);
-    form.append("parse_mode", "MarkdownV2");
+    if (parseMode) form.append("parse_mode", parseMode);
+    if (options.inlineKeyboard) {
+      form.append("reply_markup", JSON.stringify({ inline_keyboard: options.inlineKeyboard }));
+    }
     form.append("photo", new Blob([new Uint8Array(photo)], { type: "image/png" }), "post.png");
     result = await callTelegram("sendPhoto", form);
   }
 
   return { messageId: result.message_id, fileId: largestFileId(result.photo) };
+}
+
+/**
+ * Rasmli xabarning izohini qayta yozadi.
+ *
+ * `editMessageText` rasm ostida ISHLAMAYDI — Telegram uni "there is no text
+ * in the message to edit" bilan rad etadi. Javob berilgan savolning tugmasi
+ * shu yo'l bilan olib tashlanadi: tugma qolib ketsa, u ikkinchi marta
+ * bosiladi va allaqachon hal bo'lgan savolga yana javob kelardi.
+ */
+export async function editTelegramMessageCaption(
+  chatId: number,
+  messageId: number,
+  caption: string,
+  options: { inlineKeyboard?: InlineButton[][]; parseMode?: "MarkdownV2" | null } = {},
+): Promise<void> {
+  await callTelegram("editMessageCaption", {
+    chat_id: chatId,
+    message_id: messageId,
+    caption,
+    ...(options.parseMode ? { parse_mode: options.parseMode } : {}),
+    reply_markup: { inline_keyboard: options.inlineKeyboard ?? [] },
+  });
 }

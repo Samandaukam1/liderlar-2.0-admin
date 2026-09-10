@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { runDuePipelines } from "@/lib/post-studio/pipeline";
 import { sendDueScheduledPosts } from "@/lib/post-studio/scheduler";
 import { runPaymentAskSweep } from "@/lib/intake/payment";
+import { runChannelReminderSweep } from "@/lib/post-studio/channel-reminder";
 import { getPostDeliveryChatIds } from "@/lib/post-studio/telegram";
 
 export const runtime = "nodejs";
@@ -45,7 +46,18 @@ export async function GET(request: NextRequest) {
   // Payment questions go to the same editorial chats the finished posts do.
   // The sweep itself enforces the two-hour gap per candidate, so running it on
   // every quarter-hour tick asks nobody twice.
-  const paymentAsks = await runPaymentAskSweep(await getPostDeliveryChatIds());
+  const editorialChats = await getPostDeliveryChatIds();
+  const paymentAsks = await runPaymentAskSweep(editorialChats);
+
+  /*
+   * "Kanalga qo'yildimi?" — quvurning oxirgi, QO'LDA bajariladigan qadami.
+   *
+   * Bu yerda turadi, alohida cron'da emas: eslatma tayyor postga tayanadi,
+   * tayyor postlar esa aynan shu yugurishda paydo bo'ladi. Sweep o'zi uch
+   * soatlik oraliqni va sokin soatlarni hisobga oladi, ya'ni har chorak
+   * soatlik tik hech kimni ikki marta bezovta qilmaydi.
+   */
+  const channelAsks = await runChannelReminderSweep(editorialChats);
 
   return NextResponse.json({
     ok: true,
@@ -54,8 +66,10 @@ export async function GET(request: NextRequest) {
     failed: results.filter((r) => !r.ok).length,
     scheduledSent: scheduled.filter((r) => r.ok).length,
     paymentAsked: paymentAsks.length,
+    channelAsked: channelAsks.filter((r) => r.sent > 0).length,
     results,
     scheduled,
     paymentAsks,
+    channelAsks,
   });
 }

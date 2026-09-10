@@ -19,8 +19,12 @@ import {
   parseCrmListCallback,
   PUBLISHED_BUTTON_LABEL,
   WAITING_BUTTON_LABEL,
+  describeWaitingReason,
   type CrmListRow,
+  type WaitingContext,
 } from "../src/lib/intake/crm-list-messages.ts";
+import { PIPELINE_STAGE_LABELS, splitPipelineError } from "../src/lib/post-studio/pipeline-stages.ts";
+import { isStaleRun, PIPELINE_STALE_AFTER_MS } from "../src/lib/post-studio/pipeline-recovery.ts";
 
 const rows = (n: number, offset = 0): CrmListRow[] =>
   Array.from({ length: n }, (_, i) => ({
@@ -344,4 +348,252 @@ test("every button label and command routes to its own list", () => {
   assert.equal(CRM_LIST_BY_COMMAND["/kutayotganlar"], "waiting");
   assert.equal(CRM_LIST_BY_COMMAND["/toldirayotganlar"], "filling");
   assert.equal(CRM_LIST_BY_BUTTON["salom"], undefined, "ordinary text routes nowhere");
+});
+
+/* ---------------------------- nega kutayapti ---------------------------- */
+
+const waitingContext = (over: Partial<WaitingContext> = {}): WaitingContext => ({
+  status: "promoted",
+  paymentStatus: "paid",
+  pipelineStatus: null,
+  pipelineError: null,
+  pipelineStartedAt: null,
+  processAfter: null,
+  ...over,
+});
+
+const AT = new Date("2026-09-10T09:00:00Z");
+const minutesBefore = (n: number) => new Date(AT.getTime() - n * 60_000).toISOString();
+const minutesAfter = (n: number) => new Date(AT.getTime() + n * 60_000).toISOString();
+
+test("to‘lov qilmagan odam aynan shu so‘z bilan ajratiladi", () => {
+  const unpaid = describeWaitingReason(
+    waitingContext({ status: "submitted", paymentStatus: "unpaid" }),
+    AT,
+  );
+  assert.match(unpaid.label, /to‘lov qilmagan/);
+
+  // 'unknown' — hech kim tekshirmagan, 'unpaid' — tekshirilib rad etilgan.
+  // Ikkalasini bir xil aytish muharrirni yo'q qarorga ishontirardi.
+  const unknown = describeWaitingReason(
+    waitingContext({ status: "submitted", paymentStatus: "unknown" }),
+    AT,
+  );
+  assert.match(unknown.label, /tasdiqlanmagan/);
+  assert.notEqual(unknown.label, unpaid.label);
+});
+
+test("to‘lov yo‘qligi eski xato yozuvidan USTUN turadi", () => {
+  // Quvur to'lovsiz bu odamni umuman olmaydi, ya'ni o'sha xato hozirgi
+  // to'siq emas. Aks holda muharrir boshlanmagan ishni tuzatishga o'tardi.
+  const reason = describeWaitingReason(
+    waitingContext({
+      paymentStatus: "unpaid",
+      pipelineStatus: "failed",
+      pipelineError: "render: eski urinish",
+    }),
+    AT,
+  );
+  assert.match(reason.label, /to‘lov qilmagan/);
+  assert.ok(!reason.label.includes("render"));
+});
+
+test("texnik xato AYNAN qaysi bosqichda bo‘lganini aytadi", () => {
+  const reason = describeWaitingReason(
+    waitingContext({
+      pipelineStatus: "failed",
+      pipelineError: "render: sharp: unsupported image format",
+    }),
+    AT,
+  );
+  assert.equal(reason.label, `Texnik xato: ${PIPELINE_STAGE_LABELS.render}`);
+  assert.equal(reason.detail, "sharp: unsupported image format");
+});
+
+test("pipeline.ts dagi `fail()` yozgan satr aynan shu shaklda o‘qiladi", () => {
+  // Format bitta joyda yoziladi va boshqa joyda o'qiladi; ikkisi
+  // ajralib ketsa ro'yxat bosqich o'rniga xom satrni ko'rsatib qo'yardi.
+  const source = readFileSync("src/lib/post-studio/pipeline.ts", "utf8");
+  assert.ok(
+    source.includes("post_pipeline_error: `${stage}: ${error}`"),
+    "fail() endi xatoni boshqa shaklda yozmoqda — o‘qish qoidasi yangilansin",
+  );
+
+  for (const stage of Object.keys(PIPELINE_STAGE_LABELS)) {
+    const stored = `${stage}: nimadir buzildi`;
+    const parsed = splitPipelineError(stored);
+    assert.equal(parsed.stage, stage);
+    assert.equal(parsed.message, "nimadir buzildi");
+  }
+});
+
+test("notanish prefiks bosqich deb o‘qilmaydi — butun satr tafsilot bo‘ladi", () => {
+  const reason = describeWaitingReason(
+    waitingContext({
+      pipelineStatus: "failed",
+      pipelineError: "Error: connect ETIMEDOUT 10.0.0.1:443",
+    }),
+    AT,
+  );
+  assert.match(reason.label, /Texnik xato/);
+  assert.ok(!reason.label.includes("Error"), "o‘ylab topilgan bosqich nomi bo‘lmasin");
+  assert.equal(reason.detail, "Error: connect ETIMEDOUT 10.0.0.1:443");
+});
+
+test("“ishlanmoqda” bilan “qotib qolgan” bir xil aytilmaydi", () => {
+  const fresh = describeWaitingReason(
+    waitingContext({ pipelineStatus: "running", pipelineStartedAt: minutesBefore(2) }),
+    AT,
+  );
+  assert.equal(fresh.icon, "⏳");
+  assert.match(fresh.label, /ishlanmoqda/);
+
+  const stuck = describeWaitingReason(
+    waitingContext({
+      pipelineStatus: "running",
+      pipelineStartedAt: new Date(AT.getTime() - PIPELINE_STALE_AFTER_MS - 60_000).toISOString(),
+    }),
+    AT,
+  );
+  assert.equal(stuck.icon, "⚠️");
+  assert.match(stuck.label, /Qotib qolgan/);
+});
+
+test("qotish chegarasi tiklovchi bilan BIR XIL sonda", () => {
+  // Ro'yxat "hammasi joyida" deyayotganda tiklovchi allaqachon uni
+  // o'lgan deb bilsa, ikkisi bir-birini yolg'onga chiqaradi.
+  const justUnder = new Date(AT.getTime() - PIPELINE_STALE_AFTER_MS + 1_000).toISOString();
+  const justOver = new Date(AT.getTime() - PIPELINE_STALE_AFTER_MS - 1_000).toISOString();
+  assert.ok(!isStaleRun(justUnder, AT), "sanity: tiklovchi hali o‘lgan demaydi");
+  assert.ok(isStaleRun(justOver, AT), "sanity: tiklovchi endi o‘lgan deydi");
+
+  assert.match(
+    describeWaitingReason(
+      waitingContext({ pipelineStatus: "running", pipelineStartedAt: justUnder }),
+      AT,
+    ).label,
+    /ishlanmoqda/,
+  );
+  assert.match(
+    describeWaitingReason(
+      waitingContext({ pipelineStatus: "running", pipelineStartedAt: justOver }),
+      AT,
+    ).label,
+    /Qotib qolgan/,
+  );
+});
+
+test("navbat vaqti kelmagani bilan kechikkani ajratiladi", () => {
+  const soon = describeWaitingReason(
+    waitingContext({ pipelineStatus: "pending", processAfter: minutesAfter(40) }),
+    AT,
+  );
+  assert.equal(soon.icon, "⏳");
+  assert.match(soon.label, /keyin boshlanadi/);
+
+  // Vaqti o'tib ketgan, lekin hech kim olmagan — cron ishlamayotganining
+  // belgisi va bu odamning aybi emas.
+  const late = describeWaitingReason(
+    waitingContext({ pipelineStatus: "pending", processAfter: minutesBefore(180) }),
+    AT,
+  );
+  assert.equal(late.icon, "⚠️");
+  assert.match(late.label, /boshlanmagan/);
+});
+
+test("quvur tugagan, lekin odam saytda yo‘q — bu yashirilmaydi", () => {
+  const reason = describeWaitingReason(waitingContext({ pipelineStatus: "completed" }), AT);
+  assert.equal(reason.icon, "⚠️");
+  assert.match(reason.label, /saytda chiqmagan/);
+});
+
+test("noma’lum holat o‘ylab topilmaydi — holat nomi o‘zi ko‘rsatiladi", () => {
+  const reason = describeWaitingReason(
+    waitingContext({ status: "yangi_holat", pipelineStatus: null }),
+    AT,
+  );
+  assert.ok(reason.label.includes("yangi_holat"));
+
+  // Kontekst umuman yo'q bo'lsa ham sabab O'YLAB TOPILMAYDI.
+  assert.match(describeWaitingReason(undefined, AT).label, /aniqlanmadi/);
+});
+
+test("sabab FAQAT kutayotganlar ro‘yxatida chiqadi", () => {
+  const row: CrmListRow = {
+    fullName: "Karimov Aziz",
+    telegramUsername: "@aziz",
+    waiting: waitingContext({ status: "submitted", paymentStatus: "unpaid" }),
+  };
+
+  const waiting = buildCrmListText({
+    kind: "waiting",
+    period: "all",
+    rows: [row],
+    page: 1,
+    total: 1,
+  });
+  assert.match(waiting, /to‘lov qilmagan/);
+  // Sabab ISM BILAN BIR QATORDA emas, uning tagida — ism qidirish
+  // uchun ro'yxat ustuni tekis qolishi kerak.
+  const lines = waiting.split("\n");
+  const nameLine = lines.findIndex((l) => l.startsWith("1. "));
+  assert.equal(lines[nameLine], "1. Karimov Aziz");
+  assert.ok(lines[nameLine + 2].includes("to‘lov qilmagan"));
+
+  for (const kind of ["published", "filling"] as const) {
+    const text = buildCrmListText({ kind, period: "all", rows: [row], page: 1, total: 1 });
+    assert.ok(!text.includes("to‘lov qilmagan"), kind);
+  }
+});
+
+test("uzun texnik xato ham to‘liq sahifani Telegram chegarasida ushlab turadi", () => {
+  const long = `render: ${"x".repeat(800)}`;
+  const page: CrmListRow[] = Array.from({ length: CRM_LIST_PAGE_SIZE }, (_, i) => ({
+    fullName: `Juda Uzun Ismli Nomzod Familiyasi ${i + 1}`,
+    telegramUsername: `@nomzod_${i + 1}`,
+    waiting: waitingContext({ pipelineStatus: "failed", pipelineError: long }),
+  }));
+
+  const text = buildCrmListText({
+    kind: "waiting",
+    period: "all",
+    rows: page,
+    page: 1,
+    total: 2000,
+  });
+  assert.ok(text.length < 4096, `sahifa ${text.length} belgi — Telegram 4096 da rad etadi`);
+  assert.ok(text.includes("…"), "kesilgani ko‘rinib tursin");
+});
+
+test("chegaraga sig‘magan yozuvlar jimgina yo‘qolmaydi", () => {
+  // F.I.Sh. erkin matn — uzunligiga hech qanday kafolat yo'q, va
+  // sabab qatorlari bilan birga sahifa chegaradan oshib ketishi mumkin.
+  const page: CrmListRow[] = Array.from({ length: CRM_LIST_PAGE_SIZE }, (_, i) => ({
+    fullName: `Nomzod ${i + 1} ${"Familiyasi".repeat(12)}`,
+    telegramUsername: `@nomzod_${i + 1}`,
+    waiting: waitingContext({
+      pipelineStatus: "failed",
+      pipelineError: `render: ${"x".repeat(400)}`,
+    }),
+  }));
+
+  const text = buildCrmListText({
+    kind: "waiting",
+    period: "all",
+    rows: page,
+    page: 1,
+    total: 20,
+  });
+
+  const shown = text.split("\n").filter((l) => /^\d+\. /.test(l)).length;
+  assert.ok(shown < CRM_LIST_PAGE_SIZE, "sanity: bu sahifa haqiqatan sig‘maydi");
+  assert.ok(
+    text.includes(`yana ${CRM_LIST_PAGE_SIZE - shown} ta`),
+    "nechtasi tushib qolgani AYNAN aytilsin",
+  );
+  // Tushgan yozuv yarim qolmasin: oxirgi ko'rsatilgan odamning
+  // username qatori ham joyida bo'lishi kerak.
+  assert.ok(text.includes(`@nomzod_${shown}`));
+  assert.ok(!text.includes(`${shown + 1}. Nomzod ${shown + 1} `));
+  assert.ok(text.length < 4096);
 });

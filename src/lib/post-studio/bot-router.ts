@@ -1,10 +1,16 @@
 import "server-only";
 import {
   answerCallbackQuery,
+  editTelegramMessageCaption,
   editTelegramMessageText,
   sendTelegramMessage,
   type InlineButton,
 } from "./telegram-api.ts";
+import {
+  buildChannelConfirmedCaption,
+  confirmChannelPost,
+  parseChannelConfirmCallback,
+} from "./channel-reminder.ts";
 import { getPostDeliveryChatIds } from "./delivery-recipients.ts";
 import {
   deactivateSubscriber,
@@ -427,6 +433,43 @@ async function handleCallbackQuery(
     console.log(
       `[telegram-webhook] crm list ${listPage.kind} period=${page.period} page=${page.page}/${page.pageCount}`,
     );
+    return;
+  }
+
+  /*
+   * "KANALGA QO'YILDIMI?" — javob.
+   *
+   * Savol RASM bilan yuborilgan, shuning uchun javob `editMessageCaption`
+   * bilan yoziladi: `editMessageText` rasm ostida "there is no text in the
+   * message to edit" bilan rad etiladi va tugma joyida qolib ketardi.
+   */
+  const channelPostId = parseChannelConfirmCallback(query.data);
+  if (channelPostId) {
+    if (chatId == null || !(await isEditorialChat(chatId))) {
+      await safeAnswerCallback(query.id, "Ruxsat yo‘q");
+      return;
+    }
+    const outcome = await confirmChannelPost(channelPostId, query.from?.id ?? null);
+    await safeAnswerCallback(query.id, outcome.text);
+
+    const messageId = query.message?.message_id ?? null;
+    if (messageId != null) {
+      // Tugma OLIB TASHLANADI: qolib ketsa, hal bo'lgan savolga ikkinchi
+      // marta bosiladi va javob tushunarsiz bo'lardi.
+      try {
+        await editTelegramMessageCaption(
+          chatId,
+          messageId,
+          buildChannelConfirmedCaption(outcome.fullName),
+        );
+      } catch (err) {
+        console.error(
+          "[telegram-webhook] channel caption edit failed",
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    console.log(`[telegram-webhook] channel confirm post=${channelPostId} → ${outcome.ok}`);
     return;
   }
 

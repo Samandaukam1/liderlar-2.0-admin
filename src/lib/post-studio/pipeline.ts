@@ -1,5 +1,14 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+// Bosqich yorliqlari SOF modulda: ularni bot xabarlarini yasaydigan
+// kod ham o'qiydi va u `server-only` importni ko'tara olmaydi.
+export {
+  PIPELINE_STAGE_LABELS,
+  pipelineStageLabel,
+  splitPipelineError,
+  type PipelineStage,
+} from "./pipeline-stages.ts";
+import type { PipelineStage } from "./pipeline-stages.ts";
 import {
   allowsArticleStages,
   PIPELINE_STALE_AFTER_MS,
@@ -48,33 +57,7 @@ export const PIPELINE_MAX_AGE_DAYS = 14;
 /** How many intakes one cron invocation will process, to stay inside the budget. */
 export const PIPELINE_BATCH_SIZE = 3;
 
-export type PipelineStage =
-  | "ai_improvement"
-  | "fact_validation"
-  | "approval"
-  | "promotion"
-  | "publication"
-  | "post_draft"
-  | "portrait"
-  | "render"
-  | "caption"
-  | "telegram"
-  | "done";
 
-/** Uzbek labels for the admin batch table's live "joriy bosqich" column. */
-export const PIPELINE_STAGE_LABELS: Record<PipelineStage, string> = {
-  ai_improvement: "Jaxongir AI — javoblarni yaxshilash",
-  fact_validation: "Faktlarni tekshirish",
-  approval: "Tasdiqlanmoqda",
-  promotion: "Nomzodga aylantirilmoqda",
-  publication: "Nashr qilinmoqda",
-  post_draft: "Post yaratilmoqda",
-  portrait: "Portret tayyorlanmoqda",
-  render: "Post render qilinmoqda",
-  caption: "Caption tayyorlanmoqda",
-  telegram: "Telegramga yuborilmoqda",
-  done: "Tayyor",
-};
 
 export interface PipelineRunResult {
   intakeId: string;

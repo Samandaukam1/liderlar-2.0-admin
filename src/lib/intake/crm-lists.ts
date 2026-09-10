@@ -58,6 +58,25 @@ const CRM_LIST_DATE_COLUMN: Record<CrmListKind, string> = {
   filling: "created_at",
 };
 
+/**
+ * Har ro'yxat O'ZIGA kerak bo'lgan ustunlarni so'raydi.
+ *
+ * "Kutayotganlar" uchun sabab ustunlari ham kerak — ular ro'yxatda har
+ * ismning tagida chiqadi. Boshqa ikkitasida bu savolning ma'nosi yo'q,
+ * shuning uchun ular so'ralmaydi.
+ *
+ * Ikkalasida ham `phone_e164` YO'Q: ro'yxatlar chatga boradi, chatlar
+ * uzatiladi, telefon raqami esa bu jadvaldagi yagona qaytarib
+ * bo'lmaydigan maydon.
+ */
+const CRM_LIST_COLUMNS: Record<CrmListKind, string> = {
+  published: "full_name, telegram_username",
+  waiting:
+    "full_name, telegram_username, status, payment_status, post_pipeline_status, " +
+    "post_pipeline_error, post_pipeline_started_at, post_pipeline_process_after",
+  filling: "full_name, telegram_username",
+};
+
 /** Kesim shartini so'rovga qo'yadi. */
 function applyPeriod<T extends {
   gte: (column: string, value: string) => T;
@@ -107,7 +126,7 @@ async function fetchRows(
     applyPeriod(
       db
         .from("candidate_intake_crm")
-        .select("full_name, telegram_username", { count: "exact" })
+        .select(CRM_LIST_COLUMNS[kind], { count: "exact" })
         .is("deleted_at", null),
       kind,
       period,
@@ -165,9 +184,31 @@ async function fetchRows(
     return { rows: [], total, page: safePage, pageCount };
   }
 
-  const rows: CrmListRow[] = (data ?? []).map((row) => ({
+  /*
+   * Ustunlar ro'yxati ro'yxat turiga qarab tanlanadi, ya'ni u literal
+   * emas — PostgREST tiplari esa aynan literal matndan qator shaklini
+   * chiqaradi. Shu sababli qator bu yerda oddiy xarita sifatida
+   * o'qiladi; qaysi kalitlar borligini yuqoridagi CRM_LIST_COLUMNS
+   * belgilaydi va yo'q kalit `null` bo'lib keladi.
+   */
+  const raw = (data ?? []) as unknown as Record<string, unknown>[];
+
+  const rows: CrmListRow[] = raw.map((row) => ({
     fullName: (row.full_name as string) ?? "",
     telegramUsername: (row.telegram_username as string | null) ?? null,
+    // Sabab konteksti faqat "kutayotganlar" so'rovida so'raladi;
+    // qolganlarida bu maydon berilmaydi va matn uni so'ramaydi ham.
+    waiting:
+      kind === "waiting"
+        ? {
+            status: (row.status as string) ?? "",
+            paymentStatus: (row.payment_status as string | null) ?? null,
+            pipelineStatus: (row.post_pipeline_status as string | null) ?? null,
+            pipelineError: (row.post_pipeline_error as string | null) ?? null,
+            pipelineStartedAt: (row.post_pipeline_started_at as string | null) ?? null,
+            processAfter: (row.post_pipeline_process_after as string | null) ?? null,
+          }
+        : undefined,
   }));
 
   return { rows, total, page: safePage, pageCount };
