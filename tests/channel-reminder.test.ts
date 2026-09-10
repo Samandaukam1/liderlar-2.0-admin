@@ -208,3 +208,42 @@ test("funksiyadan oldingi postlar butun tarixni navbatga qo‘ymaydi", () => {
   );
   assert.ok(!/\bdrop\b|\btruncate\b/i.test(migration), "non-destructive");
 });
+
+/**
+ * Chegara qiymati SERVER modulida turadi (u `@/` aliaslarini ishlatadi va
+ * node:test uni yuklay olmaydi), shuning uchun manbadan o'qiladi.
+ */
+const ORIGIN_LITERAL =
+  service.match(/CHANNEL_REMINDER_ORIGIN_ISO\s*=\s*"([^"]+)"/)?.[1] ?? "";
+
+test("amaliyot BUGUNDAN — Toshkent yarim tunidan boshlanadi", () => {
+  // UTC yarim tuni emas: tahririyat kuni Toshkentda boshlanadi, va
+  // "bugun chiqqan post" degani ham shu. UTC bo'yicha olinsa, bugun
+  // soat 00:00–05:00 orasida chiqqan postlar chegaradan tushib qolardi.
+  assert.ok(ORIGIN_LITERAL, "chegara qiymati topilsin");
+  const origin = new Date(ORIGIN_LITERAL);
+  assert.ok(Number.isFinite(origin.getTime()), "yaroqli sana");
+
+  const tashkent = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tashkent",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(origin);
+  const part = (type: string) => tashkent.find((p) => p.type === type)?.value;
+
+  assert.equal(part("hour"), "00", "Toshkent yarim tuni");
+  assert.equal(part("minute"), "00");
+  assert.equal(`${part("year")}-${part("month")}-${part("day")}`, "2026-09-10");
+});
+
+test("chegara QOTIB turadi — har yugurishda qayta hisoblanmaydi", () => {
+  // "Bugun" deb hisoblansa, ertaga bugungi postlar chegaradan tushib
+  // qolardi va ular haqida hech qachon so'ralmasdi.
+  const declaration = service.match(/CHANNEL_REMINDER_ORIGIN_ISO\s*=\s*(.+);/)?.[1] ?? "";
+  assert.match(declaration, /^"[\d-]+T[\d:]+Z"$/, "qat’iy satr bo‘lsin, hisoblanadigan qiymat emas");
+  assert.ok(!/new Date|Date\.now|tashkent/i.test(declaration), "har yugurishda qayta hisoblanmasin");
+});

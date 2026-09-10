@@ -41,20 +41,27 @@ export const CHANNEL_REMINDER_FIRST_DELAY_MS = 60 * 60 * 1000;
 export const CHANNEL_REMINDER_BATCH_SIZE = 5;
 
 /**
- * Bu funksiyadan OLDIN yetkazilgan postlar haqida so'ralmaydi.
+ * Bu sanadan OLDIN yetkazilgan postlar haqida so'ralmaydi.
  *
- * Sana — 20260910160000 migratsiyasining o'zi, ya'ni ustunlar paydo
- * bo'lgan payt. Undan oldingi har post "tasdiqlanmagan" bo'lib turibdi,
- * chunki tasdiqlash tushunchasi o'shanda mavjud emas edi — va ularning
- * aksariyati allaqachon kanalda. Chegarasiz birinchi sweep butun tarixni
- * navbatga qo'yardi va tahririyat chatiga yuzlab rasm quyilardi; bunday
- * eslatma birinchi kuni o'chirib qo'yiladi.
+ * BUGUNDAN BOSHLANADI — 2026-yil 10-sentyabr, Toshkent bo'yicha soat
+ * 00:00 (UTC+5, ya'ni 2026-09-09T19:00:00Z). Sana UTC yarim tuniga
+ * emas, TOSHKENT yarim tuniga bog'langan: tahririyat kuni shu yerda
+ * boshlanadi va "bugun chiqqan post" degani ham shu.
+ *
+ * NEGA CHEGARA BOR: undan oldingi har post "tasdiqlanmagan" bo'lib
+ * turibdi, chunki tasdiqlash tushunchasi o'shanda mavjud emas edi — va
+ * ularning aksariyati allaqachon kanalda. Chegarasiz birinchi sweep
+ * butun tarixni navbatga qo'yardi va tahririyat chatiga yuzlab rasm
+ * quyilardi; bunday eslatma birinchi kuni o'chirib qo'yiladi.
  *
  * Eski postlar "tasdiqlangan" DEB BELGILANMADI ham: hech kim ularni
  * tasdiqlamagan va bazaga bo'lmagan qarorni yozish — yolg'on yozish.
  * Tizimning ular haqida fikri yo'q, shunday bo'lib ham qoladi.
+ *
+ * QOTIB TURADI, "bugun" bo'lib qolmaydi: har yugurishda qayta
+ * hisoblansa, ertaga bugungi postlar chegaradan tushib qolardi.
  */
-export const CHANNEL_REMINDER_ORIGIN_ISO = "2026-09-10T16:00:00Z";
+export const CHANNEL_REMINDER_ORIGIN_ISO = "2026-09-09T19:00:00Z";
 
 interface PendingPost {
   id: string;
