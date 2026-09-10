@@ -166,3 +166,73 @@ test("iqtibos manbasi ro‘yxatiga ai_generated qo‘shilgan", () => {
     assert.ok(migration.includes(`'${source}'`), source);
   }
 });
+
+/* ------------------- mavjud postni yangilash yo‘li --------------------- */
+
+const repository = readFileSync("src/lib/post-studio/repository.ts", "utf8");
+/** Izohlar tashlanadi: tekshiruv KODNI o‘qishi kerak, izohni emas. */
+const repoCode = repository
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+const syncBody = (() => {
+  const at = repoCode.indexOf("export async function synchronizePostSourceData");
+  return repoCode.slice(at, repoCode.indexOf("\n}", at));
+})();
+
+test("avtomatik yozish MAVJUD postni yangilashda ham ishlaydi", () => {
+  // Ilgari fallback faqat createPostDraft'da edi. Amalda deyarli har
+  // post synchronizePostSourceData'dan o'tadi — u iqtibos yo'qligini
+  // ko'rib to'g'ridan-to'g'ri needs_review ga qo'yardi va avtomatik
+  // yozish umuman ishga tushmasdi.
+  assert.ok(
+    syncBody.includes("generateFallbackQuote({"),
+    "yangilash yo‘lida ham iqtibos yozilsin",
+  );
+});
+
+test("yozib berilgan iqtibos keyingi renderda O‘CHIRILMAYDI", () => {
+  // Shart `quoteSource !== "manual"` edi, ya'ni allaqachon avtomatik
+  // yozilgan iqtibos ham bo'shatilardi va post yana "qo'lda kiriting"
+  // holatiga qaytardi.
+  assert.ok(syncBody.includes('post.quoteSource === "ai_generated"'));
+  assert.ok(
+    syncBody.includes("post.quote.trim()"),
+    "mavjud matn bor-yo‘qligi tekshirilsin",
+  );
+  // Bo'shatish faqat ikkalasi ham bo'lmaganda bo'ladi.
+  assert.ok(!/patch\.quote = canonical\?\.text \?\? ""/.test(syncBody), "eski bo‘shatish qolmasin");
+});
+
+test("nomzodning O‘Z so‘zi paydo bo‘lsa hamma narsadan ustun", () => {
+  // Nomzod keyin anketani to'ldirsa, post uning o'z gapiga qaytishi
+  // kerak — yozib berilgan matn bilan qolib ketmasligi.
+  const canonicalFirst = syncBody.indexOf("if (canonical?.text)");
+  const aiBranch = syncBody.indexOf('post.quoteSource === "ai_generated"');
+  assert.ok(canonicalFirst !== -1 && canonicalFirst < aiBranch, "canonical birinchi tekshirilsin");
+});
+
+test("qo‘lda kiritilgan iqtibosga tegilmaydi", () => {
+  assert.ok(syncBody.includes('post.quoteSource !== "manual"'));
+});
+
+test("iqtibos topilgach post needs_review da qolib ketmaydi", () => {
+  // Aks holda avtomatik yozish ishlaganda ham post o'sha to'xtash
+  // holatida turaverardi va hech qachon chiqmasdi.
+  assert.ok(syncBody.includes('patch.status = "draft"'));
+  assert.ok(syncBody.includes("patch.error = null"));
+});
+
+test("to‘xtash FAQAT avtomatik yozish ham ishlamaganda", () => {
+  assert.ok(syncBody.includes("if (!patch.quote) {"));
+  const stop = syncBody.indexOf('patch.status = "needs_review"');
+  const guard = syncBody.indexOf("if (!patch.quote) {");
+  assert.ok(guard !== -1 && guard < stop, "to‘xtash shartning ichida bo‘lsin");
+});
+
+test("avtomatik yozilgani metadata'da belgilanadi", () => {
+  // Admin qaysi iqtibos nomzodniki, qaysi biri yozib berilgani ajrata
+  // olishi kerak.
+  assert.ok(syncBody.includes("quote_generated"));
+  assert.ok(syncBody.includes('reason: "intake_quote_blank"'));
+});

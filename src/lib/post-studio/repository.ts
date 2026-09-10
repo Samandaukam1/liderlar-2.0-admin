@@ -621,8 +621,29 @@ export interface CreatePostInput {
 
 /**
  * Refreshes automatic source fields before every render/caption generation.
- * Manual quote overrides are respected; every other legacy quote source is
- * replaced with the canonical intake answer (or cleared for human review).
+ *
+ * IQTIBOS TARTIBI — o'zgarmas:
+ *
+ *   1. NOMZODNING O'Z SO'ZI (15-savol). Paydo bo'lishi bilan hamma
+ *      narsadan ustun turadi, hatto avval yozib berilgan iqtibos
+ *      turgan bo'lsa ham: nomzod keyin anketani to'ldirsa, post
+ *      uning o'z gapiga qaytishi kerak.
+ *   2. QO'LDA kiritilgani — muharrir qarori.
+ *   3. AVTOMATIK yozilgani — nomzodning o'z materialidan, uning
+ *      nomidan.
+ *
+ * BU YERDA IKKI XATO BOR EDI:
+ *
+ *   • Avtomatik yozish faqat YANGI post yaratishda ishlardi. Mavjud
+ *     post har yangilanganda esa shu funksiya ishlaydi va u iqtibos
+ *     yo'qligini ko'rib to'g'ridan-to'g'ri `needs_review` ga qo'yardi.
+ *     Amalda deyarli har post shu yo'ldan o'tadi, ya'ni avtomatik
+ *     yozish umuman ishga tushmasdi.
+ *
+ *   • Bundan ham yomoni: shart `quoteSource !== "manual"` edi, ya'ni
+ *     ALLAQACHON avtomatik yozilgan iqtibos ham bo'shatib yuborilardi
+ *     va post yana "iqtibosni qo'lda kiriting" holatiga qaytardi.
+ *     Bir marta yozilgan iqtibos keyingi renderda yo'q bo'lardi.
  */
 export async function synchronizePostSourceData(post: PostRecord): Promise<PostRecord> {
   const source = await loadCandidateSourceData(post.candidateId);
@@ -634,12 +655,45 @@ export async function synchronizePostSourceData(post: PostRecord): Promise<PostR
     patch.portrait_source_url = sourceReference;
   }
 
+  // Muharrir kiritgan iqtibosga hech qachon tegilmaydi.
   if (post.quoteSource !== "manual") {
     const canonical = source.canonicalQuote;
-    patch.quote = canonical?.text ?? "";
-    patch.quote_source = canonical?.text ? "intake_quote" : "none";
+    let fallback: FallbackQuoteResult | null = null;
+
+    if (canonical?.text) {
+      // Nomzodning o'z so'zi bor — u yagona to'g'ri javob.
+      patch.quote = canonical.text;
+      patch.quote_source = "intake_quote";
+    } else if (post.quoteSource === "ai_generated" && post.quote.trim()) {
+      // Avval yozib berilgan iqtibos JOYIDA QOLADI. Uni bo'shatib,
+      // keyin qaytadan yozdirish har renderda yangi matn degani
+      // bo'lardi — bir odamning posti har safar boshqa gap bilan
+      // chiqardi.
+      patch.quote = post.quote;
+      patch.quote_source = "ai_generated";
+    } else {
+      // Iqtibos umuman yo'q — nomzodning o'z materialidan yoziladi.
+      fallback = await generateFallbackQuote({
+        candidateId: source.id,
+        fullName: source.fullName,
+        shortBioItems: source.shortBioItems,
+        articleText: await loadArticleText(source.id),
+        actorId: null,
+      });
+      patch.quote = fallback.ok && fallback.text ? fallback.text : "";
+      patch.quote_source = patch.quote ? "ai_generated" : "none";
+    }
+
     patch.metadata = {
       ...post.metadata,
+      ...(patch.quote_source === "ai_generated" && fallback
+        ? {
+            quote_generated: {
+              attempts: fallback.attempts,
+              reason: "intake_quote_blank",
+            },
+          }
+        : {}),
       quote_provenance: canonical
         ? {
             canonical_key: CANONICAL_POST_QUOTE_KEY,
@@ -653,9 +707,18 @@ export async function synchronizePostSourceData(post: PostRecord): Promise<PostR
             missing: true,
           },
     };
-    if (!canonical?.text) {
+
+    // FAQAT avtomatik yozish ham ishlamagan holatda to'xtaydi.
+    if (!patch.quote) {
       patch.status = "needs_review";
-      patch.error = "15-savol iqtibosi bo‘sh. Iqtibosni qo‘lda kiriting.";
+      patch.error = `15-savol iqtibosi bo‘sh va avtomatik yozib bo‘lmadi${
+        fallback?.error ? ` (${fallback.error})` : ""
+      }. Iqtibosni qo‘lda kiriting.`;
+    } else if (post.status === "needs_review" && (post.error ?? "").includes("iqtibos")) {
+      // Oldingi to'xtash aynan iqtibos tufayli edi va u endi bor —
+      // post o'sha holatda qolib ketmasin.
+      patch.status = "draft";
+      patch.error = null;
     }
   }
 
