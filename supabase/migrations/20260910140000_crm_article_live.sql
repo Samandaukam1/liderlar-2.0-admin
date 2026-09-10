@@ -57,10 +57,26 @@ comment on view public.candidate_intake_crm is
 --    "kutish" holatlaridan birida turgan qatorlar. Boshqa hech
 --    narsa o'zgarmaydi.
 -- ------------------------------------------------------------
+--    NASHR SANASI `articles` DAN OLINADI.
+--
+--    `candidates` jadvalida `published_at` ustuni YO'Q — nashr sanasi
+--    maqola qatorida yashaydi. `now()` bilan to'ldirish esa o'tmish
+--    haqida yolg'on yozish bo'lardi: yozuv bugun emas, o'z vaqtida
+--    chop etilgan. Maqola topilmasa ustun O'Z HOLICHA qoladi (null
+--    bo'lsa null), ya'ni noma'lum sana noma'lum bo'lib turaveradi.
 update public.candidate_intakes i
    set status = 'published',
-       published_at = coalesce(i.published_at, c.published_at, now())
+       published_at = coalesce(i.published_at, a.published_at)
   from public.candidates c
+  left join lateral (
+    select ar.published_at
+      from public.articles ar
+     where ar.candidate_id = c.id
+       and ar.status = 'published'
+       and ar.deleted_at is null
+     order by ar.published_at asc nulls last
+     limit 1
+  ) a on true
  where c.id = i.candidate_id
    and c.status = 'published'
    and c.deleted_at is null

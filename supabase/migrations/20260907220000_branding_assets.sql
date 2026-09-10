@@ -28,5 +28,21 @@ on conflict (id) do update set public = excluded.public;
 -- bayrog'i va `has_permission` orqali beriladi. Shu sababli bu yerda
 -- faqat bucket yaratiladi; yuklashni server service_role bilan qiladi.
 
-comment on table storage.buckets is
-  'Fayl bucketlari. "branding" — panel logotipi va favicon (ochiq, versiyalangan yo''l).';
+-- ESLATMA (COMMENT ON EMAS, ATAYLAB):
+--
+--   `comment on table storage.buckets ...` bu yerda turgan edi va
+--   hosted Supabase'da migratsiyani yiqitardi:
+--     ERROR: must be owner of table buckets (SQLSTATE 42501)
+--
+--   `storage` — Supabase'ning o'z sxemasi va biz uning jadvallarining
+--   egasi emasmiz. Egalik talab qiladigan DDL (COMMENT ON, ALTER TABLE)
+--   u yerda bajarilmaydi. Qator QO'SHISH (`insert into storage.buckets`)
+--   va `storage.objects` uchun policy yaratish esa ruxsat etilgan —
+--   ular 0008_storage_and_rls.sql da allaqachon ishlagan.
+--
+--   Ma'lumotning o'zi yo'qolmasin uchun izoh oddiy SQL izohiga
+--   aylantirildi:
+--
+--   "branding" bucket'i — panel logotipi va favicon. Ochiq, chunki
+--   favicon brauzer tomonidan sessiyasiz so'raladi. Fayllar
+--   versiyalangan yo'lda saqlanadi.
