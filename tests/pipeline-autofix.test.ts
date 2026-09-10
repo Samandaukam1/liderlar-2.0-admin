@@ -142,6 +142,65 @@ test("qaytarish holat SHARTLI — ikki yugurish bir anketani olmasin", () => {
   assert.ok(update !== -1 && guard > update, "shart update zanjirining ichida bo‘lsin");
 });
 
+/* --------------------- avval saytga qaraladi ---------------------------- */
+
+const sweepBody = (() => {
+  const at = code(pipeline).indexOf("export async function recoverAutoFixableFailures");
+  return code(pipeline).slice(at, code(pipeline).indexOf("\n}", at));
+})();
+
+test("qaytarishdan OLDIN sayt tekshiriladi", () => {
+  // Bu anketalar ustida odam allaqachon ishlagan bo'lishi mumkin:
+  // to'xtash yozuvi bazada qolgan, nomzod esa qo'lda chiqarilgan.
+  const check = sweepBody.indexOf("findOwnPublishedCandidate(");
+  const requeue = sweepBody.indexOf('post_pipeline_status: "pending"');
+  assert.ok(check !== -1, "sayt holati so‘ralsin");
+  assert.ok(check < requeue, "tekshiruv navbatga qaytarishdan OLDIN");
+});
+
+test("sayt holati o‘qilmasa hech narsa qilinmaydi", () => {
+  // "Bilmadim" ni "chop etilmagan" deb o'qish jonli maqolani
+  // qayta yozdirishi mumkin edi.
+  assert.ok(sweepBody.includes("if (!live.known) {"));
+  const unknown = sweepBody.indexOf("if (!live.known) {");
+  const nextContinue = sweepBody.indexOf("continue;", unknown);
+  const requeue = sweepBody.indexOf('post_pipeline_status: "pending"');
+  assert.ok(nextContinue !== -1 && nextContinue < requeue, "noma’lum holatda o‘tkazib yuborilsin");
+});
+
+test("qo‘lda bajarilgan ish qayta ishlanmaydi va “tuzatildi” deb aytilmaydi", () => {
+  // Qaytadan quvurga solish OpenAI pulini sarflaydi, postni qayta
+  // yuborishi mumkin va tahririyatga yolg'on xabar beradi — aslida
+  // uni odam tuzatgan.
+  assert.ok(sweepBody.includes("hasDeliveredPost("));
+  const done = sweepBody.indexOf("hasDeliveredPost(");
+  const closed = sweepBody.indexOf('post_pipeline_status: "completed"', done);
+  assert.ok(closed !== -1, "yozuv yopilsin");
+  // Yopish yo'lida autofix belgisi QO'YILMAYDI — xabar shundan chiqadi.
+  const branch = sweepBody.slice(done, sweepBody.indexOf("continue;", closed));
+  assert.ok(
+    !branch.includes("post_pipeline_autofix_from"),
+    "belgi qo‘yilmasin, aks holda “avtomatik tuzatildi” xabari ketardi",
+  );
+});
+
+test("“saytda bor, posti yo‘q” esa aynan qaytariladi", () => {
+  // Bu quvur tuzatadigan holatning o'zi: maqola chiqqan, post
+  // chiqmagan. Bunda ish tugamagan va yopib qo'yish uni abadiy
+  // postsiz qoldirardi.
+  assert.ok(sweepBody.includes("hasDeliveredPost("));
+  const closeAt = sweepBody.indexOf('post_pipeline_status: "completed"');
+  const requeueAt = sweepBody.indexOf('post_pipeline_status: "pending"');
+  assert.ok(closeAt < requeueAt, "yopish faqat post yetkazilgan holatda");
+});
+
+test("yetkazilganlik POSTNING o‘zidan so‘raladi", () => {
+  const helper = code(pipeline).slice(code(pipeline).indexOf("async function hasDeliveredPost"));
+  const body = helper.slice(0, helper.indexOf("\n}"));
+  assert.ok(body.includes('.not("telegram_last_sent_at", "is", null)'));
+  assert.ok(body.includes('from("candidate_social_posts")'));
+});
+
 test("oldingi xato saqlanadi — xabar nima tuzatilganini biladi", () => {
   const sweep = code(pipeline).slice(
     code(pipeline).indexOf("export async function recoverAutoFixableFailures"),

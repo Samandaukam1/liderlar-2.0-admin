@@ -356,6 +356,24 @@ async function findOwnPublishedCandidate(
   return { known: true, id: (data?.id as string | null) ?? null };
 }
 
+/**
+ * Bu nomzodning posti tahririyatga yetkazilganmi.
+ *
+ * "Ish bajarilgan" degan savolning yagona ishonchli javobi shu:
+ * `candidate_social_posts.telegram_last_sent_at` faqat post haqiqatan
+ * chatga tushganda qo'yiladi.
+ */
+async function hasDeliveredPost(candidateId: string): Promise<boolean> {
+  const db = createSupabaseAdminClient();
+  const { data } = await db
+    .from("candidate_social_posts")
+    .select("id")
+    .eq("candidate_id", candidateId)
+    .not("telegram_last_sent_at", "is", null)
+    .limit(1);
+  return (data?.length ?? 0) > 0;
+}
+
 /** Runs the whole chain for one intake. */
 export async function runPipelineForIntake(
   intake: DueIntake,
@@ -668,7 +686,7 @@ export async function recoverAutoFixableFailures(
 
   const { data: stopped } = await db
     .from("candidate_intakes")
-    .select("id, full_name, post_pipeline_error, post_pipeline_attempts")
+    .select("id, full_name, candidate_id, post_pipeline_error, post_pipeline_attempts")
     .eq("post_pipeline_status", "needs_review")
     .is("deleted_at", null)
     .lt("post_pipeline_attempts", PIPELINE_MAX_ATTEMPTS)
@@ -681,6 +699,51 @@ export async function recoverAutoFixableFailures(
     const previous = (row.post_pipeline_error as string | null) ?? null;
     const decision = decideAutoRetry(previous);
     if (!decision.retry) continue;
+
+    /*
+     * AVVAL SAYTGA QARAYMIZ.
+     *
+     * Bu anketalar ustida odam allaqachon ishlagan bo'lishi mumkin —
+     * to'xtash yozuvi bazada qolgan, nomzod esa qo'lda chiqarilgan.
+     * Bunday odamni qaytadan quvurga solish OpenAI pulini sarflaydi,
+     * postni qayta yuborishi mumkin va eng yomoni tahririyatga
+     * "avtomatik tuzatildi" deb yolg'on xabar beradi — aslida uni
+     * odam tuzatgan.
+     *
+     * Shuning uchun saytda turgan nomzod uchun ish bormi-yo'qmi degan
+     * savol POSTGA ko'chadi: post yetkazilgan bo'lsa qiladigan ish
+     * yo'q va yozuv shunchaki yopiladi; yetkazilmagan bo'lsa quvur
+     * qaytariladi va u faqat post bosqichlarini bajaradi (maqolaga
+     * tegmaydi).
+     */
+    const candidateId = (row.candidate_id as string | null) ?? null;
+    const live = await findOwnPublishedCandidate(candidateId);
+    if (!live.known) {
+      // TAXMIN QILMAYMIZ: sayt holati o'qilmadi, keyingi tik javob oladi.
+      continue;
+    }
+
+    if (live.id) {
+      if (await hasDeliveredPost(live.id)) {
+        // Odam o'zi bajargan. Yozuvni yopamiz, xabar YUBORMAYMIZ:
+        // tuzatilgan narsa yo'q va bu ishni bot qilmagan.
+        await db
+          .from("candidate_intakes")
+          .update({
+            post_pipeline_status: "completed",
+            post_pipeline_finished_at: now.toISOString(),
+            post_pipeline_error: null,
+          })
+          .eq("id", row.id as string)
+          .eq("post_pipeline_status", "needs_review");
+        console.log(
+          `[pipeline] ${row.id}: nomzod saytda va posti yuborilgan — qo‘lda bajarilgan, yopildi`,
+        );
+        continue;
+      }
+      // Saytda bor, lekin posti chiqmagan — aynan quvur tuzatadigan holat.
+      console.log(`[pipeline] ${row.id}: nomzod saytda, posti yo‘q — post bosqichlari qaytarildi`);
+    }
 
     await db
       .from("candidate_intakes")
