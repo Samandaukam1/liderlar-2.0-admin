@@ -40,6 +40,22 @@ export const CHANNEL_REMINDER_FIRST_DELAY_MS = 60 * 60 * 1000;
 /** Bitta yugurishda nechta post so'raladi — chat bir zumda to'lib ketmasin. */
 export const CHANNEL_REMINDER_BATCH_SIZE = 5;
 
+/**
+ * Bu funksiyadan OLDIN yetkazilgan postlar haqida so'ralmaydi.
+ *
+ * Sana — 20260910160000 migratsiyasining o'zi, ya'ni ustunlar paydo
+ * bo'lgan payt. Undan oldingi har post "tasdiqlanmagan" bo'lib turibdi,
+ * chunki tasdiqlash tushunchasi o'shanda mavjud emas edi — va ularning
+ * aksariyati allaqachon kanalda. Chegarasiz birinchi sweep butun tarixni
+ * navbatga qo'yardi va tahririyat chatiga yuzlab rasm quyilardi; bunday
+ * eslatma birinchi kuni o'chirib qo'yiladi.
+ *
+ * Eski postlar "tasdiqlangan" DEB BELGILANMADI ham: hech kim ularni
+ * tasdiqlamagan va bazaga bo'lmagan qarorni yozish — yolg'on yozish.
+ * Tizimning ular haqida fikri yo'q, shunday bo'lib ham qoladi.
+ */
+export const CHANNEL_REMINDER_ORIGIN_ISO = "2026-09-10T16:00:00Z";
+
 interface PendingPost {
   id: string;
   candidate_id: string;
@@ -78,6 +94,7 @@ export async function findPostsNeedingChannelReminder(
     )
     .is("channel_confirmed_at", null)
     .not("telegram_last_sent_at", "is", null)
+    .gte("telegram_last_sent_at", CHANNEL_REMINDER_ORIGIN_ISO)
     .lte("telegram_last_sent_at", deliveredBefore)
     .or(`channel_reminder_last_at.is.null,channel_reminder_last_at.lte.${askableBefore}`)
     .order("channel_reminder_last_at", { ascending: true, nullsFirst: true })

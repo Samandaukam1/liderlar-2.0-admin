@@ -190,3 +190,21 @@ test("javob rasm izohi orqali yoziladi, matn orqali emas", () => {
 test("sweep cron'dan chaqiriladi", () => {
   assert.ok(code(cron).includes("runChannelReminderSweep("));
 });
+
+test("funksiyadan oldingi postlar butun tarixni navbatga qo‘ymaydi", () => {
+  // Chegarasiz birinchi sweep har yetkazilgan postni so'rardi va
+  // tahririyat chatiga yuzlab rasm quyilardi.
+  assert.ok(code(service).includes('.gte("telegram_last_sent_at", CHANNEL_REMINDER_ORIGIN_ISO)'));
+
+  // Eski postlar "tasdiqlangan" deb BELGILANMAYDI ham — hech kim
+  // ularni tasdiqlamagan, va bo'lmagan qarorni bazaga yozish yolg'on.
+  const migration = readFileSync(
+    "supabase/migrations/20260910160000_channel_post_confirmation.sql",
+    "utf8",
+  );
+  assert.ok(
+    !/update\s+public\.candidate_social_posts/i.test(migration),
+    "migratsiya mavjud qatorlarga qiymat yozmasin",
+  );
+  assert.ok(!/\bdrop\b|\btruncate\b/i.test(migration), "non-destructive");
+});
