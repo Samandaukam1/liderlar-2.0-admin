@@ -3,10 +3,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  allowsArticleStages,
+  allowsPostStages,
   isStaleRun,
   PIPELINE_STALE_AFTER_MS,
+  planPipeline,
   recoveredIntakeStatus,
 } from "../src/lib/post-studio/pipeline-recovery.ts";
+
 import { formatDate } from "../src/lib/utils.ts";
 import { TASHKENT_TZ } from "../src/lib/tashkent-day.ts";
 
@@ -155,4 +159,87 @@ test("bo‘sh yoki buzuq sana chiziqcha beradi", () => {
   assert.equal(formatDate(null), "—");
   assert.equal(formatDate(undefined), "—");
   assert.equal(formatDate("buzuq"), "—");
+});
+
+/* ============ 6. ALLAQACHON CHOP ETILGANNI QAYTA YOZMASLIK ============== */
+
+test("saytdagi nomzod uchun maqola bosqichlari ISHLAMAYDI", () => {
+  // Aynan shu xato: qayta yugurish jonli maqolani qaytadan yozib
+  // chiqardi — AI yana ishlaydi, matn o'zgaradi, nashr sanasi suriladi.
+  const plan = planPipeline("published");
+  assert.equal(plan, "post_only");
+  assert.equal(allowsArticleStages(plan), false);
+  // Post bosqichlari esa davom etadi — "chop etilgan, lekin posti
+  // chiqmagan" holatini tuzatadigan yagona yo'l shu.
+  assert.equal(allowsPostStages(plan), true);
+});
+
+test("chop etilmagan nomzod uchun to‘liq zanjir ishlaydi", () => {
+  const plan = planPipeline("not_published");
+  assert.equal(plan, "rebuild");
+  assert.equal(allowsArticleStages(plan), true);
+  assert.equal(allowsPostStages(plan), true);
+});
+
+test("holat NOMA’LUM bo‘lsa hech narsa qilinmaydi", () => {
+  // "Bilmadim" ni "chop etilmagan" deb o'qish eng qimmat xatoga olib
+  // boradi: maqola qayta yoziladi va uni qaytarib bo'lmaydi.
+  const plan = planPipeline("unknown");
+  assert.equal(plan, "abort_unknown");
+  assert.equal(allowsArticleStages(plan), false);
+  assert.equal(allowsPostStages(plan), false);
+});
+
+test("qo‘riqchi quvurda HAQIQATAN ulangan", () => {
+  // Uch bosqich ham bir xil qarorga bo‘ysunishi shart.
+  assert.equal((PIPELINE.match(/allowsArticleStages\(plan\)/g) ?? []).length, 3);
+  assert.match(PIPELINE, /planPipeline\(/);
+  // Noma'lum holatda yugurish TO'XTAYDI.
+  assert.match(PIPELINE, /plan === "abort_unknown"/);
+  assert.match(PIPELINE, /Nomzod holatini o‘qib bo‘lmadi/);
+});
+
+test("anketa holati haqiqatga moslashtiriladi", () => {
+  // Nomzod saytda-yu, anketa hamon "AI ko'rmoqda" bo'lsa, taxta
+  // yolg'on ko'rsatib turaveradi.
+  const block = PIPELINE.slice(PIPELINE.indexOf("const liveCandidateId ="));
+  assert.match(block.slice(0, 800), /status: "published"/);
+});
+
+/* ============ 7. "AI KO'RMOQDA" — HAR QANDAY YO'LDAN TIKLASH =========== */
+
+test("qotib qolgan “AI ko‘rmoqda” quvur holatidan QAT’I NAZAR tiklanadi", () => {
+  // `ai_reviewing` ni uch xil yo'l qo'yadi: avtomatik quvur, nashr
+  // navbati va admin tugmasi. Oxirgi ikkisi quvur holatiga tegmaydi,
+  // shuning uchun faqat `running` ni tekshirish yetarli emas edi.
+  const block = PIPELINE.slice(PIPELINE.indexOf("async function recoverStuckAiReview"));
+  assert.match(block, /\.eq\("status", "ai_reviewing"\)/);
+  assert.match(block, /\.lt\("updated_at", cutoff\)/);
+  // Quvur holati bo'yicha filtr YO'Q — aynan shu kengaytma.
+  assert.ok(!/\.eq\("post_pipeline_status"/.test(block.slice(0, 900)));
+});
+
+test("tugagan yugurish qayta navbatga solinmaydi", () => {
+  const block = PIPELINE.slice(PIPELINE.indexOf("async function recoverStuckAiReview"));
+  assert.match(block, /pipelineStatus !== "completed"/);
+});
+
+test("tiklash boshqa workerning ishini bosib o‘tmaydi", () => {
+  // Orada holat o'zgargan bo'lsa, yozuv qo'llanmaydi.
+  const block = PIPELINE.slice(PIPELINE.indexOf("async function recoverStuckAiReview"));
+  assert.match(block, /\.eq\("status", "ai_reviewing"\);/);
+});
+
+test("chegara nashr navbatining o‘z tiklashidan UZUNROQ", () => {
+  // Aks holda hali ishlab turgan batch elementi uzilib qolardi.
+  // `publish-batch.ts` `@/` aliaslarini ishlatadi va uni node:test
+  // yuklay olmaydi, shuning uchun qiymat manbadan o‘qiladi.
+  const batch = readFileSync(join(ROOT, "src/lib/intake/publish-batch.ts"), "utf8");
+  const match = batch.match(/STALE_ITEM_MS = (\d+) \* 60 \* 1000/);
+  assert.ok(match, "STALE_ITEM_MS topilmadi");
+  const staleItemMs = Number(match![1]) * 60 * 1000;
+  assert.ok(
+    PIPELINE_STALE_AFTER_MS > staleItemMs,
+    `${PIPELINE_STALE_AFTER_MS} vs ${staleItemMs}`,
+  );
 });

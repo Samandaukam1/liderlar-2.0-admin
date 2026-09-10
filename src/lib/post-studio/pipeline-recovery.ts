@@ -58,3 +58,46 @@ export function recoveredIntakeStatus(
   if (currentStatus !== "ai_reviewing") return null;
   return approvedAt ? "approved" : "submitted";
 }
+
+/* ----------------------- qayta yugurish rejasi -------------------------- */
+
+/** Nomzodning saytdagi holati haqida bilganimiz. */
+export type LiveCandidateLookup = "published" | "not_published" | "unknown";
+
+export type PipelinePlan =
+  /** To'liq zanjir: yaxshilash -> promote -> nashr -> post. */
+  | "rebuild"
+  /** Nomzod saytda — faqat post bosqichlari. */
+  | "post_only"
+  /** Holat noma'lum — hech narsa qilinmaydi, keyingi tikda qayta uriniladi. */
+  | "abort_unknown";
+
+/**
+ * Qayta yugurishda maqola bosqichlari ishlaydimi.
+ *
+ * MUAMMO SHU EDI: `findPublishedNamesake` anketaning O'Z nomzodini
+ * ataylab chetlab o'tadi (bir marta promote qilingan anketa o'ziga
+ * o'zi "dublikat" bo'lib ko'rinadi). Shu sababli allaqachon chop
+ * etilgan nomzod uchun qayta yugurish hech narsaga urilmasdan o'tib
+ * ketardi va JONLI MAQOLANI qaytadan yozib chiqardi.
+ *
+ * NOMA'LUM — REBUILD EMAS. Qidiruv yiqilganda "chop etilmagan" deb
+ * hisoblash eng qimmat xatoga olib boradi: maqola qayta yoziladi va
+ * uni qaytarib bo'lmaydi. Shuning uchun yugurish to'xtaydi.
+ */
+export function planPipeline(lookup: LiveCandidateLookup): PipelinePlan {
+  if (lookup === "unknown") return "abort_unknown";
+  return lookup === "published" ? "post_only" : "rebuild";
+}
+
+/** Reja maqola bosqichlariga ruxsat beradimi. */
+export function allowsArticleStages(plan: PipelinePlan): boolean {
+  return plan === "rebuild";
+}
+
+/** Reja post bosqichlariga (render, caption, Telegram) ruxsat beradimi. */
+export function allowsPostStages(plan: PipelinePlan): boolean {
+  // `post_only` aynan shu uchun bor: "chop etilgan, lekin posti
+  // chiqmagan" holatini tuzatadigan yagona yo'l.
+  return plan === "rebuild" || plan === "post_only";
+}

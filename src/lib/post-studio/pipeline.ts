@@ -1,7 +1,9 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
+  allowsArticleStages,
   PIPELINE_STALE_AFTER_MS,
+  planPipeline,
   recoveredIntakeStatus,
 } from "./pipeline-recovery.ts";
 import { logAudit } from "@/lib/audit";
@@ -170,7 +172,78 @@ export async function recoverStalePipelines(now: Date = new Date()): Promise<num
     );
   }
 
-  return stale.length;
+  return stale.length + (await recoverStuckAiReview(now));
+}
+
+/**
+ * "AI ko'rmoqda" da qotib qolgan anketalarni qaytaradi.
+ *
+ * NEGA ALOHIDA: yuqoridagi tiklash `post_pipeline_status = 'running'`
+ * ga tayanadi. Lekin `ai_reviewing` ni UCH xil yo'l qo'yadi —
+ * avtomatik quvur, nashr navbati (batch) va adminning qo'lidagi
+ * "Nomzodga aylantirish" tugmasi. Oxirgi ikkisi quvur holatiga
+ * umuman tegmaydi, shuning uchun ular uzilib qolganda anketa
+ * hech kim qaytarmaydigan holatda osilib qolardi — admin buni
+ * "biri 2 daqiqada chiqadi, boshqasi AI ko'rmoqda deb qoladi" deb
+ * ko'radi.
+ *
+ * `updated_at` ishonchli belgi: qotib qolgan qatorga hech kim
+ * tegmaydi, ya'ni u aynan holatga kirgan payt bo'lib qoladi.
+ * Chegara nashr navbatining o'z tiklashidan (10 daqiqa) uzunroq,
+ * shuning uchun hali ishlab turgan yugurish uzilmaydi.
+ */
+async function recoverStuckAiReview(now: Date): Promise<number> {
+  const db = createSupabaseAdminClient();
+  const cutoff = new Date(now.getTime() - PIPELINE_STALE_AFTER_MS).toISOString();
+
+  const { data: stuck } = await db
+    .from("candidate_intakes")
+    .select("id, status, approved_at, post_pipeline_status")
+    .eq("status", "ai_reviewing")
+    .lt("updated_at", cutoff)
+    .limit(20);
+
+  if (!stuck || stuck.length === 0) return 0;
+
+  for (const row of stuck) {
+    const intakeId = row.id as string;
+    const recovered = recoveredIntakeStatus(
+      (row.status as string) ?? "",
+      (row.approved_at as string | null) ?? null,
+    );
+    if (!recovered) continue;
+
+    const pipelineStatus = (row.post_pipeline_status as string | null) ?? null;
+    // Tugagan yugurishni qayta navbatga solmaymiz: u ish qilib
+    // bo'lgan, faqat holat ortda qolgan. Qolgan hollarda ish
+    // tugamagan, shuning uchun navbatga qaytadi.
+    const requeue = pipelineStatus !== "completed";
+
+    await db
+      .from("candidate_intakes")
+      .update({
+        status: recovered,
+        ...(requeue
+          ? {
+              post_pipeline_status: "pending",
+              post_pipeline_process_after: now.toISOString(),
+              post_pipeline_error:
+                "AI bosqichi tugamay uzilgan — avtomatik qayta navbatga qo‘yildi.",
+            }
+          : {}),
+      })
+      .eq("id", intakeId)
+      // Shart takrorlanadi: orada boshqa worker holatni o'zgartirgan
+      // bo'lsa, uni bosib o'tmaymiz.
+      .eq("status", "ai_reviewing");
+
+    console.warn(
+      `[pipeline] "AI ko‘rmoqda" da qotgan anketa tiklandi: ${intakeId} -> ${recovered}` +
+        (requeue ? " (navbatga qaytarildi)" : ""),
+    );
+  }
+
+  return stuck.length;
 }
 
 async function markPipeline(
@@ -241,6 +314,37 @@ export interface PipelineOptions {
   onStage?: (stage: PipelineStage) => Promise<void> | void;
 }
 
+/**
+ * Anketaning O'Z nomzodi saytda chop etilganmi.
+ *
+ * `findPublishedNamesake` dan farqi shu: u BOSHQA odam bir xil ism
+ * bilan chiqqanini qidiradi, bu esa "shu anketaning ishi allaqachon
+ * bajarilganmi?" degan savolga javob beradi. Ikkisi turli savol va
+ * ikkinchisi hech qayerda so'ralmagan edi.
+ */
+async function findOwnPublishedCandidate(
+  candidateId: string | null,
+): Promise<{ known: true; id: string | null } | { known: false }> {
+  if (!candidateId) return { known: true, id: null };
+  const db = createSupabaseAdminClient();
+  const { data, error } = await db
+    .from("candidates")
+    .select("id")
+    .eq("id", candidateId)
+    .eq("status", "published")
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (error) {
+    // TAXMIN QILMAYMIZ. "Bilmadim" ni "chop etilmagan" deb o'qish jonli
+    // maqolani qayta yozdirishi mumkin edi — bu qaytarib bo'lmaydigan
+    // zarar. Yugurish to'xtaydi va keyingi tikda qayta uriniladi.
+    console.error("[pipeline] live candidate lookup failed", error.message);
+    return { known: false };
+  }
+  return { known: true, id: (data?.id as string | null) ?? null };
+}
+
 /** Runs the whole chain for one intake. */
 export async function runPipelineForIntake(
   intake: DueIntake,
@@ -255,8 +359,49 @@ export async function runPipelineForIntake(
     }
   };
 
+  const db = createSupabaseAdminClient();
+
+  /*
+   * -------- 0. BU NOMZOD ALLAQACHON SAYTDAMI? --------
+   *
+   * `findPublishedNamesake` bu savolga javob BERMAYDI: u ataylab
+   * anketaning O'Z nomzodini chetlab o'tadi (chunki bir marta
+   * promote qilingan anketa o'ziga o'zi "dublikat" bo'lib ko'rinadi).
+   *
+   * Natijada allaqachon chop etilgan nomzod uchun qayta yugurish
+   * hech narsaga urilmasdan o'tib ketardi va JONLI MAQOLANI qaytadan
+   * yozib chiqardi: AI yana ishlaydi, matn o'zgaradi, nashr sanasi
+   * suriladi. Admin buni "u avval chiqarilganini bilmay qayta
+   * chiqaryapti" deb ko'radi.
+   *
+   * Nomzod saytda bo'lsa, maqola bosqichlari (1-4) BUTUNLAY
+   * o'tkazib yuboriladi. Post bosqichlari (5-9) esa idempotent —
+   * mavjud post qayta ishlatiladi va Telegram allaqachon olgan
+   * chatga qayta yubormaydi — shuning uchun ular davom etaveradi:
+   * aynan shu "chop etilgan, lekin posti chiqmagan" holatni tuzatadi.
+   */
+  const live = await findOwnPublishedCandidate(intake.candidate_id);
+  const plan = planPipeline(
+    !live.known ? "unknown" : live.id ? "published" : "not_published",
+  );
+  if (plan === "abort_unknown") {
+    // Qayta uriniladigan xato (needsReview emas): keyingi tik javob oladi.
+    return fail(intakeId, "promotion", "Nomzod holatini o‘qib bo‘lmadi — qayta uriniladi.", false);
+  }
+  const liveCandidateId = live.known ? live.id : null;
+
+  if (liveCandidateId && intake.status !== "published") {
+    // Anketa holati haqiqatdan ortda qolgan — uni to'g'irlaymiz,
+    // aks holda taxta uni hamon "AI ko'rmoqda" deb ko'rsataveradi.
+    console.warn(
+      `[pipeline] ${intakeId}: nomzod allaqachon saytda, anketa holati ` +
+        `"${intake.status}" -> "published"`,
+    );
+    await markPipeline(intakeId, { status: "published" });
+  }
+
   /* -------- 1. fact-preserving answer improvement -------- */
-  if (["draft", "submitted", "ai_reviewing"].includes(intake.status)) {
+  if (allowsArticleStages(plan) && ["draft", "submitted", "ai_reviewing"].includes(intake.status)) {
     await stage("ai_improvement");
     try {
       const improvement = await runIntakeAiImprovement({ intakeId, actorId: null });
@@ -285,7 +430,6 @@ export async function runPipelineForIntake(
   }
 
   /* -------- 3. promotion: structured draft + biographic article -------- */
-  const db = createSupabaseAdminClient();
   let { data: current } = await db
     .from("candidate_intakes")
     .select("status, candidate_id, full_name")
@@ -309,7 +453,7 @@ export async function runPipelineForIntake(
     return fail(intakeId, "promotion", "Shartnoma buzildi — qora ro‘yxatdagi nomzod.", true);
   }
 
-  if (current?.status === "approved") {
+  if (allowsArticleStages(plan) && current?.status === "approved") {
     await stage("promotion");
     const promoted = await promoteIntakeToDraft(intakeId, null);
     if (!promoted.ok) return fail(intakeId, "promotion", promoted.error ?? "Promote xatosi", true);
@@ -321,7 +465,7 @@ export async function runPipelineForIntake(
   }
 
   /* -------- 4. publication -> canonical article URL -------- */
-  if (current?.status === "promoted") {
+  if (allowsArticleStages(plan) && current?.status === "promoted") {
     await stage("publication");
     const published = await publishPromotedIntake(intakeId, null);
     if (!published.ok) {
@@ -329,7 +473,8 @@ export async function runPipelineForIntake(
     }
   }
 
-  const candidateId = (current?.candidate_id as string | null) ?? intake.candidate_id;
+  const candidateId =
+    liveCandidateId ?? (current?.candidate_id as string | null) ?? intake.candidate_id;
   if (!candidateId) {
     return fail(intakeId, "publication", "Nomzod yaratilmadi.", true);
   }
