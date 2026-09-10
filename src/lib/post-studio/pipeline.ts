@@ -32,6 +32,10 @@ import {
   getPostDeliveryChatIds,
   isTelegramConfigured,
 } from "./telegram.ts";
+import { sendTelegramMessage } from "./telegram-api.ts";
+import { buildAutofixNotice } from "./autofix-message.ts";
+import { decideAutoRetry } from "./pipeline-retry.ts";
+import { buildCandidateArticleUrl } from "./site-origin.ts";
 
 /**
  * The automated post pipeline that runs two hours after a candidate submits
@@ -263,8 +267,32 @@ async function claim(intake: DueIntake): Promise<boolean> {
  * every detected fact. If any answer had to fall back to the original text, a
  * human reads it before anything is published.
  */
-function factGatePassed(warnings: { kept_original: boolean }[] | undefined): boolean {
-  return !(warnings ?? []).some((w) => w.kept_original);
+/**
+ * Faktlar saqlanmagani TO'XTATMAYDI — chunki hech qanday fakt yo'qolmaydi.
+ *
+ * OLDIN NIMA BO'LGAN: `kept_original` bayrog'i "AI javobni yaxshilay
+ * olmadi, shuning uchun nomzodning O'Z matni saqlandi" degani. Ya'ni bu
+ * himoyaning MUVAFFAQIYATI: matn nomzod yozganday, hamma fakti joyida.
+ * Kod esa aynan shu bayroqni yiqilish deb o'qib, anketani `needs_review`
+ * ga qo'yardi. Natijada faktlarning BIRORTASI yo'qolmagan yagona holat
+ * nashrni to'xtatib turardi.
+ *
+ * `enforceFactPreservation` ning ikkala natijasi ham faktni to'liq
+ * saqlaydi: yo yaxshilangan matn tekshiruvdan o'tadi, yo asl matn
+ * o'z holicha qoladi. Uchinchi yo'l yo'q. Shuning uchun bu yerda
+ * to'xtatadigan narsa ham yo'q.
+ *
+ * QOIDA (tahririyat qarori): faktlarning to'g'riligiga NOMZODNING O'ZI
+ * javobgar. Anketada noto'g'ri sana yoki nom bo'lsa, bu tizimning
+ * xatosi emas va nashrni to'xtatmaydi. Bizning vazifamiz — nomzod
+ * yozgan faktni O'ZGARTIRMASDAN yetkazish, uni tekshirish emas.
+ *
+ * Ogohlantirishlar YO'QOLMAYDI: har javob uchun `ai_fact_preservation`
+ * yozuvi saqlanadi va panelda ko'rinadi. O'zgargani — ular endi
+ * hisobot, to'siq emas.
+ */
+function factFallbackCount(warnings: { kept_original: boolean }[] | undefined): number {
+  return (warnings ?? []).filter((w) => w.kept_original).length;
 }
 
 async function fail(
@@ -388,12 +416,12 @@ export async function runPipelineForIntake(
     await stage("ai_improvement");
     try {
       const improvement = await runIntakeAiImprovement({ intakeId, actorId: null });
-      if (!factGatePassed(improvement.fact_warnings)) {
-        return fail(
-          intakeId,
-          "fact_validation",
-          "Javoblarni yaxshilashda ayrim faktlar saqlanmadi — qo‘lda tekshirish kerak.",
-          true,
+      const keptOriginal = factFallbackCount(improvement.fact_warnings);
+      if (keptOriginal > 0) {
+        // Yiqilish EMAS, yozuv: shuncha javob nomzodning o'z so'zlari
+        // bilan qoldi. Nashr davom etadi.
+        console.log(
+          `[pipeline] ${intakeId}: ${keptOriginal} ta javob nomzodning asl matnida qoldirildi`,
         );
       }
     } catch (err) {
@@ -538,7 +566,20 @@ export async function runPipelineForIntake(
     },
   });
 
-  if (!needsReview) await stage("done");
+  if (!needsReview) {
+    await stage("done");
+    // Bu yugurish avtomatik qaytarilgan bo'lsa — tahririyat buni
+    // bilishi kerak. Yiqilsa ham yugurishning natijasiga tegmaydi:
+    // maqola ham, post ham allaqachon joyida.
+    try {
+      await announceAutofix(intakeId, candidateId);
+    } catch (err) {
+      console.error(
+        "[pipeline] autofix e'loni yiqildi",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
 
   return {
     intakeId,
@@ -602,11 +643,139 @@ async function deliverFinishedPost(
   }
 }
 
+/**
+ * To'xtab qolganlarni navbatga qaytaradi — bot o'zi tuzatadi.
+ *
+ * `needs_review` O'LIK NUQTA edi: navbat so'rovi faqat `pending` va
+ * `failed` ni oladi, ya'ni bu holatdagi anketa hech qachon o'zi qayta
+ * ishlanmasdi. Botdagi "kutayotganlar" ro'yxatida ular "texnik xato"
+ * bo'lib to'planib borardi va har birini qo'lda bosish kerak edi.
+ *
+ * QAYSI BIRI QAYTARILADI — `decideAutoRetry` hal qiladi. Ismdosh va
+ * qora ro'yxat to'xtashlari CHIQARIB TASHLANGAN: ular xato emas, odam
+ * qarori, va ularni "tuzatish" yo tirik maqolani qayta yozardi, yo
+ * bekor qilingan shartnomani nashr qilardi.
+ *
+ * Urinishlar soni QAYTA TIKLANMAYDI: `PIPELINE_MAX_ATTEMPTS` kuchda
+ * qoladi, aks holda doim yiqiladigan anketa cheksiz aylanardi va har
+ * aylanishda OpenAI puli sarflanardi.
+ */
+export async function recoverAutoFixableFailures(
+  limit = 20,
+  now: Date = new Date(),
+): Promise<number> {
+  const db = createSupabaseAdminClient();
+
+  const { data: stopped } = await db
+    .from("candidate_intakes")
+    .select("id, full_name, post_pipeline_error, post_pipeline_attempts")
+    .eq("post_pipeline_status", "needs_review")
+    .is("deleted_at", null)
+    .lt("post_pipeline_attempts", PIPELINE_MAX_ATTEMPTS)
+    .limit(limit);
+
+  if (!stopped || stopped.length === 0) return 0;
+
+  let requeued = 0;
+  for (const row of stopped) {
+    const previous = (row.post_pipeline_error as string | null) ?? null;
+    const decision = decideAutoRetry(previous);
+    if (!decision.retry) continue;
+
+    await db
+      .from("candidate_intakes")
+      .update({
+        post_pipeline_status: "pending",
+        post_pipeline_process_after: now.toISOString(),
+        // Oldingi to'xtash matni SAQLANADI: yugurish tugagach
+        // tahririyatga "nima tuzatilgani" aytiladi. Ustunsiz tugagan
+        // yugurish o'zining qanday boshlanganini bilmaydi.
+        post_pipeline_autofix_from: previous,
+        post_pipeline_error: null,
+      })
+      .eq("id", row.id as string)
+      // Holat shartli: shu orada boshqa yugurish uni olib ulgurgan
+      // bo'lishi mumkin va ikkalasi bir anketani ishlab ketardi.
+      .eq("post_pipeline_status", "needs_review");
+
+    requeued += 1;
+    console.warn(
+      `[pipeline] avtomatik qaytarildi: ${row.id} (${decision.stage ?? "?"}) — ${previous}`,
+    );
+  }
+
+  return requeued;
+}
+
+/**
+ * Avtomatik tuzatilgan anketa muvaffaqiyatli tugadi — tahririyatga aytiladi.
+ *
+ * Xabar FAQAT haqiqatan qaytarilgan yugurish uchun ketadi va bir marta:
+ * belgi tozalanadi. Yuborish yiqilsa ham belgi tozalanadi — takrorlangan
+ * xabar tuzatilgan postdan ko'ra ko'proq shubha uyg'otadi.
+ */
+async function announceAutofix(intakeId: string, candidateId: string | null): Promise<void> {
+  const db = createSupabaseAdminClient();
+  const { data: intake } = await db
+    .from("candidate_intakes")
+    .select("full_name, post_pipeline_autofix_from")
+    .eq("id", intakeId)
+    .maybeSingle();
+
+  const previous = (intake?.post_pipeline_autofix_from as string | null) ?? null;
+  if (!previous) return;
+
+  await db
+    .from("candidate_intakes")
+    .update({ post_pipeline_autofix_from: null })
+    .eq("id", intakeId);
+
+  let articleUrl: string | null = null;
+  if (candidateId) {
+    const { data: candidate } = await db
+      .from("candidates")
+      .select("slug")
+      .eq("id", candidateId)
+      .maybeSingle();
+    const slug = (candidate?.slug as string | null) ?? "";
+    if (slug) articleUrl = await buildCandidateArticleUrl(slug);
+  }
+
+  const text = buildAutofixNotice({
+    fullName: (intake?.full_name as string | null) ?? "",
+    previousError: previous,
+    articleUrl,
+  });
+
+  const chatIds = await getPostDeliveryChatIds();
+  for (const chatId of chatIds) {
+    try {
+      await sendTelegramMessage(chatId, text);
+    } catch (err) {
+      console.error(
+        `[pipeline] autofix xabari yuborilmadi chat=${chatId}`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  await logAudit({
+    actorId: null,
+    action: "post.pipeline_autofixed",
+    entityType: "candidate_intake",
+    entityId: intakeId,
+    metadata: { previousError: previous, candidateId },
+  });
+}
+
 /** One cron tick: claims and runs whatever is due. */
 export async function runDuePipelines(limit = PIPELINE_BATCH_SIZE): Promise<PipelineRunResult[]> {
   // Har yugurishdan OLDIN uzilib qolganlar qaytariladi — aks holda
   // ular navbatda ko'rinmay, cheksiz osilib qolardi.
   await recoverStalePipelines();
+  // To'xtab qolganlar ham shu yerda navbatga qaytadi — o'sha tikning
+  // o'zida olinishi mumkin, keyingisini kutmasdan.
+  await recoverAutoFixableFailures();
   const due = await findDueIntakes(limit);
   const results: PipelineRunResult[] = [];
 
