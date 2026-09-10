@@ -4,10 +4,15 @@ import type { PostQuoteSource } from "./types.ts";
  * Quote selection — pure, so the priority order is unit-tested rather than
  * buried in a query.
  *
- * The AI never writes a quote for a post. The only automatic source is the
- * intake question carrying canonical_key=post_quote. `manual` remains an admin
- * escape hatch when that answer is blank; legacy source types are retained in
- * the type/schema only so existing rows stay readable.
+ * Birlamchi manba — `canonical_key=post_quote` bo'lgan anketa savoli,
+ * ya'ni nomzodning O'Z so'zi. U bo'sh bo'lsa iqtibos nomzod materialidan
+ * yoziladi (`ai_generated`, quote-fallback.ts) — ilgari bu holat postni
+ * butunlay to'xtatib qo'yardi. `manual` admin uchun qo'lda kiritish yo'li
+ * bo'lib qoladi; eski manba turlari faqat mavjud qatorlar o'qilishi
+ * uchun saqlanadi.
+ *
+ * TARTIB O'ZGARMAYDI: nomzodning o'z so'zi har doim birinchi. Avtomatik
+ * yozilgan iqtibos faqat o'sha bo'sh bo'lgandagina ishlatiladi.
  */
 
 export interface QuoteCandidate {
@@ -19,6 +24,7 @@ export interface QuoteCandidate {
 
 const PRIORITY: PostQuoteSource[] = [
   "intake_quote",
+  "ai_generated",
   "manual",
   "featured_quote",
   "article_quote",

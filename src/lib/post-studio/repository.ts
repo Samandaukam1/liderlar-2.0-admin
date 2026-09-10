@@ -9,6 +9,7 @@ import {
 } from "@/lib/intake/canonical-quote";
 import { buildCandidateArticleUrl } from "./site-origin.ts";
 import { pickQuote, rankQuoteCandidates, type QuoteCandidate } from "./quote-source.ts";
+import { generateFallbackQuote, type FallbackQuoteResult } from "./quote-fallback.ts";
 import { splitNameIntoLines } from "./name-lines.ts";
 import { DEFAULT_POST_TEMPLATE_ID, pickTemplateForCandidate } from "./layout-config.ts";
 import {
@@ -680,7 +681,29 @@ export async function createPostDraft(input: CreatePostInput): Promise<PostRecor
   const source = await loadCandidateSourceData(input.candidateId);
   if (!source) throw new Error("Nomzod topilmadi.");
 
-  const quote = pickQuote(source.quotes);
+  /*
+   * Nomzodning O'Z so'zi birinchi. U bo'sh bo'lsa — ilgari post shu
+   * yerda `needs_review` ga tushib, "iqtibosni qo'lda kiriting" deb
+   * turib qolardi va amalda umuman chiqmasdi. Endi iqtibos nomzodning
+   * o'z materialidan, uning nomidan yoziladi va alohida manba
+   * (`ai_generated`) sifatida belgilanadi.
+   */
+  let quote = pickQuote(source.quotes);
+  let fallback: FallbackQuoteResult | null = null;
+
+  if (!quote) {
+    fallback = await generateFallbackQuote({
+      candidateId: source.id,
+      fullName: source.fullName,
+      shortBioItems: source.shortBioItems,
+      articleText: await loadArticleText(source.id),
+      actorId: input.createdBy ?? null,
+    });
+    if (fallback.ok && fallback.text) {
+      quote = { text: fallback.text, source: "ai_generated" };
+    }
+  }
+
   const db = createSupabaseAdminClient();
 
   const { data, error } = await db
@@ -695,8 +718,18 @@ export async function createPostDraft(input: CreatePostInput): Promise<PostRecor
       short_bio_items: source.shortBioItems,
       portrait_source_url: source.portraitSourceUrl,
       status: quote ? "draft" : "needs_review",
-      error: quote ? null : "15-savol iqtibosi bo‘sh. Iqtibosni qo‘lda kiriting.",
+      // Faqat avtomatik yozish HAM ishlamagan holatda to'xtaydi.
+      error: quote
+        ? null
+        : `15-savol iqtibosi bo‘sh va avtomatik yozib bo‘lmadi${
+            fallback?.error ? ` (${fallback.error})` : ""
+          }. Iqtibosni qo‘lda kiriting.`,
       metadata: {
+        // Iqtibos avtomatik yozilgan bo'lsa buni yozib qo'yamiz —
+        // admin qaysi biri nomzodniki ekanini ajrata olishi kerak.
+        ...(quote?.source === "ai_generated"
+          ? { quote_generated: { attempts: fallback?.attempts ?? 0, reason: "intake_quote_blank" } }
+          : {}),
         quote_provenance: source.canonicalQuote
           ? {
               canonical_key: CANONICAL_POST_QUOTE_KEY,
@@ -728,4 +761,27 @@ export async function updatePost(postId: string, patch: Row): Promise<PostRecord
 
   if (error) throw new Error(`Postni saqlashda xatolik: ${error.message}`);
   return mapPostRow(data as unknown as Row);
+}
+
+/**
+ * Maqola matni — avtomatik iqtibos uchun nomzodning o'z materiali.
+ *
+ * Sarlavha va bo'limlar birlashtiriladi; matn bo'lmasa `null` va
+ * generator faqat qisqa tavsifga tayanadi.
+ */
+async function loadArticleText(candidateId: string): Promise<string | null> {
+  if (!candidateId) return null;
+  const db = createSupabaseAdminClient();
+  const { data } = await db
+    .from("candidate_sections")
+    .select("title, content")
+    .eq("candidate_id", candidateId)
+    .order("sort_order", { ascending: true })
+    .limit(20);
+
+  const text = (data ?? [])
+    .map((row) => [(row.title as string) ?? "", (row.content as string) ?? ""].join("\n"))
+    .join("\n\n")
+    .trim();
+  return text === "" ? null : text;
 }

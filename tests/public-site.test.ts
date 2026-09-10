@@ -54,7 +54,12 @@ test("env formatting mistakes are healed rather than propagated", () => {
 
 test("an explicitly configured setting still allows a non-canonical origin", () => {
   // site_settings is a human decision — the documented escape hatch — so unlike
-  // an env var it is not second-guessed.
+  // an env var it is not second-guessed HERE.
+  //
+  // The resolver on top of it (post-studio/site-origin.ts) does reject a
+  // *.vercel.app setting: a deployment address left in that row was reaching
+  // every post, caption and QR code. This normalizer stays permissive because
+  // it is also used for origins that are legitimately non-canonical.
   assert.equal(
     normalizePublicWebUrl("https://liderlar-web.vercel.app"),
     "https://liderlar-web.vercel.app",

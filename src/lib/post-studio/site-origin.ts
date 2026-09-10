@@ -3,6 +3,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
   CANONICAL_PUBLIC_SITE_URL,
   candidateArticlePath,
+  isVercelDeploymentUrl,
   normalizeEnvPublicUrl,
   normalizePublicWebUrl,
   PUBLIC_WEB_SETTING_KEY,
@@ -42,11 +43,30 @@ export async function resolvePublicWebUrl(): Promise<string> {
     fromSettings = null;
   }
 
-  // The setting is a human decision (a preview origin there is deliberate);
-  // the env vars are platform config, so a *.vercel.app value in them is
-  // dropped rather than published to every subscriber.
+  /*
+   * SOZLAMADAGI *.vercel.app QIYMATI HAM RAD ETILADI.
+   *
+   * Ilgari sozlama "inson qarori" deb hisoblanib, unga yozilgan har
+   * qanday qiymat hamma narsadan ustun turardi. Amalda o'sha yerda
+   * deploy manzili qolib ketgan edi va har bir post, sertifikat QR
+   * kodi va Telegram sarlavhasi obunachilarga
+   * `liderlar-2-0.vercel.app` havolasini yuborardi.
+   *
+   * `*.vercel.app` — infratuzilma manzili: u deploy'dan deploy'ga
+   * o'zgaradi va saytning ommaviy shaxsi emas. Endi u qayerda
+   * turishidan qat'i nazar tashlanadi va log'ga yoziladi, ya'ni
+   * sozlamani tuzatish kerakligi ko'rinib turadi.
+   */
+  const settingValue = normalizePublicWebUrl(fromSettings);
+  if (settingValue && isVercelDeploymentUrl(settingValue)) {
+    console.warn(
+      `[site-origin] ${PUBLIC_WEB_SETTING_KEY} sozlamasida deploy manzili turibdi ` +
+        `(${settingValue}) — e'tiborsiz qoldirildi, ${CANONICAL_PUBLIC_SITE_URL} ishlatiladi.`,
+    );
+  }
+
   const value =
-    normalizePublicWebUrl(fromSettings) ??
+    (settingValue && !isVercelDeploymentUrl(settingValue) ? settingValue : null) ??
     normalizeEnvPublicUrl(process.env.NEXT_PUBLIC_PUBLIC_WEB_URL) ??
     normalizeEnvPublicUrl(process.env.NEXT_PUBLIC_SITE_URL) ??
     CANONICAL_PUBLIC_SITE_URL;

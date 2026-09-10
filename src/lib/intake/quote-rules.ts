@@ -26,12 +26,26 @@ export const QUOTE_MAX_WORDS_PER_SENTENCE = 18;
  *
  * A run of terminators counts once ("Harakat qiling!!!" is one sentence), and a
  * trailing terminator does not produce an empty final entry.
+ *
+ * NUQTADAN KEYIN PROBEL QO'YILMASA HAM AJRATILADI. Ilgari ajratish faqat
+ * "tinish belgisi + bo'shliq" bo'yicha ketardi, ya'ni "...erishasan.Sabr
+ * eng katta kuchdir." — ikkita mukammal gap — BITTA gap deb sanalardi va
+ * iqtibos "Gaplar soni 1 — aynan 2 ta bo'lishi kerak" deb rad etilardi.
+ * Probelni tashlab ketish juda keng tarqalgan yozuv odati, natijada
+ * nomzod iqtibos yozgan bo'lsa ham post "tekshirish kerak" da qolardi.
+ *
+ * Ikkinchi qoida ATAYLAB tor: tinish belgisidan oldin kamida IKKI harf
+ * va keyin BOSH HARF bo'lishi shart. Shu sababli "A.B. Ismoilov" kabi
+ * bosh harflar va "3.5" kabi sonlar bo'linmaydi.
  */
+const SENTENCE_BREAK_NO_SPACE = /(?<=\p{L}{2}[.!?]+)(?=\p{Lu})/u;
+
 export function splitSentences(text: string): string[] {
   return (text ?? "")
     .replace(/\s+/g, " ")
     .trim()
     .split(/(?<=[.!?])\s+/u)
+    .flatMap((part) => part.split(SENTENCE_BREAK_NO_SPACE))
     .map((s) => s.trim())
     .filter(Boolean);
 }

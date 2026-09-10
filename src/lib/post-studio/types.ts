@@ -265,6 +265,8 @@ export interface PostLayout {
 
 export type PostQuoteSource =
   | "intake_quote"
+  /** 15-savol bo'sh bo'lgani uchun nomzod materialidan yozilgan. */
+  | "ai_generated"
   | "featured_quote"
   | "article_quote"
   | "life_motto"
