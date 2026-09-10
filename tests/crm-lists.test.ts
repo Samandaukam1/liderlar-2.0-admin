@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   buildCrmListKeyboard,
   buildCrmListText,
@@ -30,6 +31,8 @@ const rows = (n: number, offset = 0): CrmListRow[] =>
 /* --------------------------- status semantics --------------------------- */
 
 test("each list maps to the exact intake statuses it claims", () => {
+  // `published` endi so'rovda ishlatilmaydi — ro'yxat saytdan
+  // so'raydi (`article_live`). Qiymat tarixiy ma'lumot sifatida qoladi.
   assert.deepEqual(CRM_LIST_STATUSES.published, ["published"]);
   assert.deepEqual(CRM_LIST_STATUSES.filling, ["draft"]);
   assert.deepEqual(CRM_LIST_STATUSES.waiting, [
@@ -39,6 +42,33 @@ test("each list maps to the exact intake statuses it claims", () => {
     "approved",
     "promoted",
   ]);
+});
+
+test("“kutayotgan” va “chop etilgan” SAYTDAN so‘raladi, holatdan emas", () => {
+  // Anketa holati hujjatning holati; sayt esa haqiqat. Ikkalasi
+  // ajralganda bot chiqib bo'lgan odamni "kutayapti" deb ko'rsatardi.
+  const source = readFileSync(new URL("../src/lib/intake/crm-lists.ts", import.meta.url), "utf8");
+  assert.match(source, /from\("candidate_intake_crm"\)/);
+  assert.match(source, /case "published":[\s\S]{0,200}\.eq\("article_live", true\)/);
+  assert.match(source, /case "waiting":[\s\S]{0,200}\.eq\("article_live", false\)/);
+  // Eski shart butunlay olib tashlangan.
+  assert.ok(!/\.eq\("status", "published"\)/.test(source));
+});
+
+test("ko‘rinish saytning javobini jonli hisoblaydi", () => {
+  const migration = readFileSync(
+    new URL("../supabase/migrations/20260910140000_crm_article_live.sql", import.meta.url),
+    "utf8",
+  );
+  // Anketa holati `article_live` hisobiga umuman qatnashmaydi.
+  assert.match(migration, /c\.status = 'published' and c\.deleted_at is null\)\s+as article_live/);
+  assert.ok(!/i\.status[^\n]*as article_live/.test(migration));
+  // Ko'rinish anon uchun ochiq qoldirilmaydi.
+  assert.match(migration, /revoke all on public\.candidate_intake_crm from anon, authenticated/);
+  assert.match(migration, /security_invoker = true/);
+  // Ortda qolgan qatorlar bir marta to'g'irlanadi, boshqasi tegilmaydi.
+  assert.match(migration, /and i\.status in \('submitted', 'ai_reviewing'/);
+  assert.ok(!/delete from|drop table|truncate/i.test(migration));
 });
 
 test("waiting is strictly between filling and published, and excludes archived", () => {

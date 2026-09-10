@@ -84,9 +84,16 @@ export function crmPeriodRange(period: CrmPeriod, now: Date = new Date()): CrmPe
  *   status in ('draft','submitted','ai_reviewing','needs_clarification',
  *              'approved','promoted','published','archived')
  *
- *   • published — 'published'. Stamped by promote_candidate_intake(p_publish
- *     => true), the same call that publishes the candidate and the article.
- *     The real "live on the site" state, not "a post exists".
+ * MUHIM O'ZGARISH: "chop etilgan" va "kutayotgan" endi anketa holatiga
+ * EMAS, saytning o'ziga qaraydi (`candidate_intake_crm.article_live`).
+ * Anketa holati hujjatning holati — u saytdan ajralib qolishi mumkin
+ * va ajralganda bot allaqachon chiqib bo'lgan odamni "kutayapti" deb
+ * ko'rsatardi. `CRM_LIST_STATUSES.waiting` esa hamon kerak: u
+ * "yuborilgan, lekin tashlab yuborilmagan" doirasini belgilaydi.
+ *
+ *   • published — endi `article_live`, ya'ni saytda turgan nomzod.
+ *     `CRM_LIST_STATUSES.published` faqat tarixiy ma'lumot uchun
+ *     qoldirilgan va so'rovda ISHLATILMAYDI.
  *   • waiting   — every status between draft and published: the candidate
  *     submitted and is not live yet. 'ai_reviewing' and 'needs_clarification'
  *     are in, because from the editorial side those people are still waiting;
@@ -122,7 +129,7 @@ export const CRM_LIST_TITLES: Record<CrmListKind, string> = {
 /** One line under each title, so the reader knows what the list actually is. */
 export const CRM_LIST_SUBTITLES: Record<CrmListKind, string> = {
   published: "Saytda maqolasi chop etilgan nomzodlar.",
-  waiting: "Anketani yuborgan, hali chop etilmagan nomzodlar.",
+  waiting: "Anketani yuborgan, maqolasi hali saytda yo‘q nomzodlar.",
   filling: "Anketani boshlagan, hali yubormagan nomzodlar.",
 };
 

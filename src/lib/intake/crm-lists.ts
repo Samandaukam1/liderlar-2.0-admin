@@ -91,10 +91,22 @@ async function fetchRows(
 ): Promise<{ rows: CrmListRow[]; total: number; page: number; pageCount: number }> {
   const db = createSupabaseAdminClient();
 
+  /*
+   * SAYTNING javobi so'raladi, anketa holatiniki emas.
+   *
+   * Ilgari ro'yxat `candidate_intakes.status` ga qarardi — bu anketa
+   * hujjatining holati, saytning holati emas. Ikkalasi ajralib
+   * qolganda (uzilgan yugurish, yoki nomzod anketadan tashqari yo'l
+   * bilan chop etilgani) bot allaqachon chiqib bo'lgan odamlarni
+   * "kutayapti" deb ko'rsatardi.
+   *
+   * `candidate_intake_crm` ko'rinishidagi `article_live` har so'rovda
+   * jonli hisoblanadi, ya'ni u eskirib qola olmaydi.
+   */
   const base = () =>
     applyPeriod(
       db
-        .from("candidate_intakes")
+        .from("candidate_intake_crm")
         .select("full_name, telegram_username", { count: "exact" })
         .is("deleted_at", null),
       kind,
@@ -107,9 +119,14 @@ async function fetchRows(
   const countQuery = (() => {
     switch (kind) {
       case "published":
-        return base().eq("status", "published");
+        // "Chop etilgan" = SAYTDA turgan. Anketa holati emas.
+        return base().eq("article_live", true);
       case "waiting":
-        return base().in("status", CRM_LIST_STATUSES.waiting).not("submitted_at", "is", null);
+        // "Kutayotgan" = anketani yuborgan, lekin hali saytda YO'Q.
+        return base()
+          .eq("article_live", false)
+          .in("status", CRM_LIST_STATUSES.waiting)
+          .not("submitted_at", "is", null);
       case "filling":
         return base().eq("status", "draft");
     }
@@ -128,11 +145,12 @@ async function fetchRows(
       case "published":
         // Newest publication first — that is the order an editor scans for.
         return base()
-          .eq("status", "published")
+          .eq("article_live", true)
           .order("published_at", { ascending: false, nullsFirst: false });
       case "waiting":
         // Oldest submission first: the person who has waited longest is on top.
         return base()
+          .eq("article_live", false)
           .in("status", CRM_LIST_STATUSES.waiting)
           .not("submitted_at", "is", null)
           .order("submitted_at", { ascending: true });
