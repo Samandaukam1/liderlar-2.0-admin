@@ -45,6 +45,18 @@ import {
   CANONICAL_BENEFITS_TEXT,
   isGeneralBenefitsQuestion,
 } from "./canonical-benefits.ts";
+import { enqueueJob } from "../queue/queue-store.ts";
+import {
+  applyMemoryUpdate,
+  parseMemory,
+  type ConversationMemory,
+} from "../memory/conversation-memory.ts";
+import { buildMemoryBlock, verifiedFactTextsFrom } from "../memory/memory-block.ts";
+import { buildRollingSummary, RECENT_WINDOW } from "../memory/rolling-summary.ts";
+import { mineQuestion } from "../mining/question-mining.ts";
+import { redactPii } from "../redact.ts";
+import type { PaymentState } from "../memory/conversation-memory.ts";
+import { decideGreeting, greetingInstruction, startsWithGreeting, stripGreeting } from "./greeting-policy.ts";
 
 /**
  * SOTUV OQIMI DVIGATELI.
@@ -118,6 +130,11 @@ interface FlowConversation {
   optedOut: boolean;
   isMinor: boolean;
   rolloutBucket: number | null;
+  /* --- 2-faza: tuzilmali xotira va salomlashish sessiyasi --- */
+  memory: ConversationMemory;
+  greetedAt: string | null;
+  greetingSessionStartedAt: string | null;
+  humanRequiredAt: string | null;
 }
 
 async function loadConversation(conversationId: string): Promise<FlowConversation | null> {
@@ -127,7 +144,8 @@ async function loadConversation(conversationId: string): Promise<FlowConversatio
     .select(
       "id, business_connection_id, chat_id, sales_stage, ai_enabled, customer_full_name, " +
         "intake_id, payment_status, objections, lead_score, lead_score_reasons, " +
-        "lead_temperature, opted_out_at, is_minor, rollout_bucket",
+        "lead_temperature, opted_out_at, is_minor, rollout_bucket, " +
+        "memory, greeted_at, greeting_session_started_at, human_required_at",
     )
     .eq("id", conversationId)
     .maybeSingle();
@@ -155,6 +173,15 @@ async function loadConversation(conversationId: string): Promise<FlowConversatio
     optedOut: row.opted_out_at != null,
     isMinor: row.is_minor === true,
     rolloutBucket: typeof row.rollout_bucket === "number" ? row.rollout_bucket : null,
+    /*
+     * XOTIRA (24-band). Nosoz qiymat javobni to'xtatmaydi:
+     * `parseMemory()` bo'sh xotira qaytaradi va bot holatni
+     * qaytadan aniqlaydi. Javobsiz qolishdan bu yaxshiroq.
+     */
+    memory: parseMemory(row.memory),
+    greetedAt: (row.greeted_at as string | null) ?? null,
+    greetingSessionStartedAt: (row.greeting_session_started_at as string | null) ?? null,
+    humanRequiredAt: (row.human_required_at as string | null) ?? null,
   };
 }
 
@@ -212,6 +239,16 @@ async function send(
     kind: "template" | "knowledge_reply" | "followup";
     templateKey: string | null;
     expectedStages: readonly SalesStage[];
+    /**
+     * JURNALGA yoziladigan matn, mijozga ketadigan matndan boshqa
+     * bo'lsa (33-band).
+     *
+     * Yagona ishlatilishi — anketa havolasi: mijoz TO'LIQ havolani
+     * olishi shart, lekin xom token `sales_outbound_log.body` ga
+     * tushmasligi kerak. U yerda havola redaksiyalangan shaklda
+     * turadi va `intake_link_prefix` orqali topiladi.
+     */
+    logBody?: string;
   },
 ): Promise<boolean> {
   const decision = authorizeOutbound({
@@ -256,7 +293,7 @@ async function send(
     conversation_id: context.conversation.id,
     kind: input.kind,
     template_key: input.templateKey,
-    body: input.body,
+    body: input.logBody ?? input.body,
     stage_before: context.result.stageBefore,
     stage_after: context.stage,
     telegram_message_id: telegramMessageId,
@@ -289,8 +326,96 @@ async function send(
       .update({ first_response_at: new Date().toISOString() })
       .eq("id", context.conversation.id)
       .is("first_response_at", null);
+
+    /*
+     * SALOMLASHISH SESSIYASI (23-band).
+     *
+     * Javobda salom bo'lsa, sessiya SHU YERDA belgilanadi.
+     * Keyingi javobda `decideGreeting()` buni ko'radi va
+     * qayta salomlashishni taqiqlaydi. Jurnalga emas, suhbat
+     * qatoriga yoziladi: jurnal kesilishi mumkin, holat esa
+     * suhbat bilan yashaydi.
+     */
+    if (startsWithGreeting(input.body)) {
+      const nowIso = new Date().toISOString();
+      context.conversation.greetedAt = nowIso;
+      await admin
+        .from("sales_conversations")
+        .update({
+          greeted_at: nowIso,
+          greeting_session_started_at:
+            context.conversation.greetingSessionStartedAt ?? nowIso,
+        })
+        .eq("id", context.conversation.id);
+    }
   }
   return true;
+}
+
+/**
+ * Suhbat xotirasini saqlaydi.
+ *
+ * Har javobdan KEYIN chaqiriladi. Xotira yozilmasa javob
+ * baribir ketgan — shuning uchun xato javobni to'xtatmaydi,
+ * faqat qayd etiladi.
+ */
+async function persistMemory(
+  conversationId: string,
+  memory: ConversationMemory,
+): Promise<void> {
+  try {
+    const admin = createSupabaseAdminClient();
+    await admin
+      .from("sales_conversations")
+      .update({
+        memory: memory as unknown as Record<string, unknown>,
+        memory_updated_at: new Date().toISOString(),
+      })
+      .eq("id", conversationId);
+  } catch (err) {
+    console.error("SALES_MEMORY_PERSIST_FAILED", {
+      conversationId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Kuzatilgan signallardan xotirani yangilaydi va saqlaydi.
+ *
+ * BITTA JOY: xotira o'nlab tarmoqda alohida yangilansa, bittasi
+ * esdan chiqishi muqarrar va aynan o'sha holat yo'qolardi.
+ */
+async function syncMemory(
+  context: SendContext,
+  update: Parameters<typeof applyMemoryUpdate>[1],
+): Promise<void> {
+  const next = applyMemoryUpdate(context.conversation.memory, update);
+  context.conversation.memory = next;
+  if (!context.simulated) await persistMemory(context.conversation.id, next);
+}
+
+/**
+ * Suhbat qatoridagi to'lov holatini xotira holatiga moslaydi.
+ *
+ * Ikki nom tizimi ataylab: jadval ustuni eski qiymatlarni saqlaydi
+ * (`paid`), xotira esa 2-fazaning aniqroq holatlarini ishlatadi
+ * (30-band). Moslash BITTA joyda bo'lsin.
+ */
+function mapPaymentStatus(raw: string): PaymentState | undefined {
+  switch (raw) {
+    case "requested": return "requested";
+    case "evidence_received": return "evidence_received";
+    case "under_review": return "under_review";
+    // `paid` eski nom — u vakolatli tasdiqdan kelgan, shuning uchun
+    // `confirmed` ga moslanadi. Lekin bu yerda AVTORIZATSIYA
+    // berilmaydi: `advancePaymentState()` uni faqat oldinga siljishi
+    // sifatida qabul qiladi.
+    case "paid":
+    case "confirmed": return "confirmed";
+    case "rejected": return "rejected";
+    default: return undefined;
+  }
 }
 
 /* ------------------------------- follow-up ------------------------------- */
@@ -382,11 +507,73 @@ export async function handleIncomingMessage(
   input: HandleMessageInput,
 ): Promise<FlowRunResult | null> {
   const token = await claimConversation(input.conversationId);
-  // Qulf olinmadi — boshqa worker shu suhbat ustida ishlayapti.
-  if (!token) return null;
+
+  /*
+   * QULF BAND — ISH YO'QOLMAYDI (2-faza, 27-band).
+   *
+   * ILGARI bu yerda `return null` turardi va webhook 200 berardi.
+   * Ya'ni xabar bazaga yozilgan, lekin unga JAVOB BERISH ishi
+   * jimgina yo'qolardi. Mijoz ketma-ket uch savol yozsa —
+   * juda oddiy holat — ikkinchisi va uchinchisi qulfga urilib,
+   * hech qachon javob olmasligi mumkin edi.
+   *
+   * Endi ish bardoshli navbatga tushadi va cron uni oladi.
+   * Navbat bazada, shuning uchun funksiya o'lsa ham qoladi.
+   */
+  if (!token) {
+    if (input.simulated === true) return null;
+    try {
+      const { duplicate } = await enqueueJob({
+        conversationId: input.conversationId,
+        messageId: input.messageId,
+        kind: "reply",
+        reason: "suhbat qulfi band edi",
+      });
+      if (!duplicate) {
+        await logAudit({
+          actorId: null,
+          action: "sales.job.queued",
+          entityType: "sales_conversation",
+          entityId: input.conversationId,
+          metadata: { reason: "lock_busy" },
+        });
+      }
+    } catch (err) {
+      // Navbatga qo'yish ham ishlamasa — bu jiddiy, lekin webhook
+      // 500 qaytarsa Telegram update'ni qayta yuboraveradi va
+      // xabar ikki marta saqlanardi. Xatoni qayd etib, 200 beramiz.
+      console.error("SALES_ENQUEUE_FAILED", {
+        conversationId: input.conversationId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return null;
+  }
 
   try {
     return await runFlow(input);
+  } finally {
+    await releaseConversation(input.conversationId, token);
+  }
+}
+
+/**
+ * Navbatdagi ishni bajaradi — cron shu funksiyani chaqiradi.
+ *
+ * Qulf shu yerda ham olinadi: navbat "bitta suhbat, bitta ish"
+ * qoidasini ta'minlaydi, lekin webhook bilan poyga bo'lishi
+ * mumkin. Qulf olinmasa ish `waiting` bo'lib qaytadi va keyingi
+ * tikda qayta urinadi — YO'QOLMAYDI.
+ */
+export async function runQueuedJob(input: HandleMessageInput): Promise<{
+  result: FlowRunResult | null;
+  lockBusy: boolean;
+}> {
+  const token = await claimConversation(input.conversationId);
+  if (!token) return { result: null, lockBusy: true };
+
+  try {
+    return { result: await runFlow(input), lockBusy: false };
   } finally {
     await releaseConversation(input.conversationId, token);
   }
@@ -485,6 +672,9 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
     result.cancelledFollowups += await cancelPendingFollowups(conversation.id, "mijoz opt-out");
     result.notes.push(`opt-out: ${optOut.matched}`);
     conversation.optedOut = true;
+    // Opt-out XOTIRAGA ham yoziladi: u xabar oynasidan chiqib
+    // ketmasligi va keyingi har bir qarorda ko'rinishi kerak.
+    await syncMemory(context, { optOut: true, leadTemperature: "cold" });
     return result;
   }
 
@@ -493,6 +683,7 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
   if (handoff) {
     await escalateToHuman(context, handoff.trigger, input.text);
     result.notes.push(`odamga o‘tkazildi: ${handoff.trigger} (${handoff.matched})`);
+    await syncMemory(context, { humanTakeover: true });
     return result;
   }
 
@@ -533,6 +724,43 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
   if (detectedObjections.length > 0) {
     result.notes.push(`e’tiroz: ${detectedObjections.map((o) => o.kind).join(", ")}`);
   }
+
+  /*
+   * XOTIRANI YANGILASH (24–26-band).
+   *
+   * Mijozning savoli JAVOBSIZLAR ro'yxatiga qo'shiladi va javob
+   * berilganda olib tashlanadi. Shu sabab bot "siz so'ragan edingiz"
+   * ni eslaydi va bir savolni ikki marta so'ramaydi.
+   */
+  const minedQuestion = mineQuestion(input.text);
+  await syncMemory(context, {
+    stage: conversation.stage,
+    objections,
+    leadTemperature: score.temperature,
+    leadScoreReasons: score.reasons,
+    fullName: conversation.customerFullName,
+    paymentStatus: mapPaymentStatus(conversation.paymentStatus),
+    /*
+     * `payment_status = 'paid'` jadvalga FAQAT `confirmPayment()`
+     * orqali yoziladi, ya'ni u allaqachon vakolatli qaror. Shuning
+     * uchun xotiraga ko'chirishda ham vakolatli deb belgilanadi —
+     * aks holda `advancePaymentState()` uni rad etardi va to'lagan
+     * mijoz xotirada "to'lamagan" bo'lib qolardi.
+     */
+    paymentAuthorized:
+      conversation.paymentStatus === "paid" || conversation.paymentStatus === "confirmed",
+    intakeStatus: conversation.intakeId ? "link_sent" : undefined,
+    pendingQuestion:
+      minedQuestion && input.text
+        ? {
+            // XOM MATN EMAS: xotira modelga boradi, shuning uchun
+            // undagi telefon/karta redaksiyadan o'tishi shart (32-band).
+            text: redactPii(input.text).text.slice(0, 200),
+            askedAt: new Date().toISOString(),
+            intentKey: minedQuestion.intentKey,
+          }
+        : undefined,
+  });
 
   /* --------------------------- niyat aniqlash --------------------------- */
   let intent: ReplyIntent;
@@ -671,7 +899,10 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
       kind: "template",
       templateKey: null,
       expectedStages: [transition.to],
+      // Mijoz to'liq havolani oladi; jurnalda token qolmaydi.
+      logBody: redactPii(intakeLink).text,
     });
+    await syncMemory(context, { intakeStatus: "link_sent" });
   }
 
   for (const key of transition.templates) {
@@ -785,7 +1016,11 @@ async function answerFromKnowledge(
     return;
   }
 
-  const timeline = await loadRecentHistory(context.conversation.id, context.currentMessageId);
+  const timeline = await loadRecentHistory(
+    context.conversation.id,
+    context.currentMessageId,
+    context.conversation.memory,
+  );
   const history = timeline.turns;
 
   /*
@@ -799,13 +1034,62 @@ async function answerFromKnowledge(
    *     harakat qilsin. Takror tekshiruvi shunda OXIRGI himoya bo'lib
    *     qoladi, birinchisi emas: bloklangan javob mijozni kuttiradi.
    */
-  const commercial = buildCommercialBlock(await getCommercialFacts());
+  const commercialFacts = await getCommercialFacts();
+  const commercial = buildCommercialBlock(commercialFacts);
   const alreadySaid = buildAlreadySaidBlock(timeline.assistantTexts);
-  const extraContext = [commercial, alreadySaid].filter((block) => block !== "").join("\n\n");
+
+  /*
+   * SALOMLASHISH — SUHBAT HOLATI, USLUB EMAS (23-band).
+   *
+   * Uslub profili "salomlashish ulushi 42%" deb hisoblab, modelga
+   * HAR javobda salomlashishni buyurardi. Bot jurnalidagi ketma-ket
+   * besh javobning hammasi salom bilan boshlangan. Endi qaror
+   * suhbat sessiyasidan chiqadi; uslub faqat QANDAY salomlashishni
+   * aytadi.
+   */
+  const greeting = decideGreeting(
+    {
+      greetedAt: context.conversation.greetedAt,
+      sessionStartedAt: context.conversation.greetingSessionStartedAt,
+      lastCustomerMessageAt: null,
+    },
+    new Date(),
+  );
+
+  /*
+   * TUZILMALI XOTIRA (24–26-band).
+   *
+   * Bu blok xabar oynasidan QAT'IY NAZAR beriladi: suhbat 100
+   * xabarga yetsa ham, to'lov tasdiqlangani va javobsiz savol
+   * kontekstdan chiqib ketmaydi.
+   */
+  const memoryBlock = buildMemoryBlock({
+    memory: context.conversation.memory,
+    stage: context.stage,
+    summary: timeline.summary,
+    greetingInstruction: greetingInstruction(greeting, null),
+  });
+
+  const extraContext = [memoryBlock, commercial, alreadySaid]
+    .filter((block) => block !== "")
+    .join("\n\n");
+
+  /*
+   * FAKT MANBALARI raqam tekshiruvi uchun. Tijoriy sozlama SHU
+   * YERGA kiradi — narx bilim bazasida eskirgan bo'lsa ham,
+   * joriy qiymat bloklanmasligi kerak.
+   */
+  const verifiedFactTexts = [commercial, ...verifiedFactTextsFrom(context.conversation.memory)];
 
   let reply: Awaited<ReturnType<typeof generateTestReply>>;
   try {
-    reply = await generateTestReply({ message: trimmed, history, actorId: null, extraContext });
+    reply = await generateTestReply({
+      message: trimmed,
+      history,
+      actorId: null,
+      extraContext,
+      verifiedFactTexts,
+    });
   } catch (err) {
     // Model yiqildi yoki timeout. Mijoz buni bilishi shart emas.
     context.result.notes.push(
@@ -897,8 +1181,22 @@ async function answerFromKnowledge(
     context.result.notes.push(`ogohlantirish: ${quality.warnings.join(", ")}`);
   }
 
+  /*
+   * TAKRORIY SALOMLASHISHNI OLIB TASHLASH — OXIRGI TO'SIQ (23-band).
+   *
+   * Promt "qayta salomlashma" deydi, lekin model ba'zan baribir
+   * salom bilan boshlaydi — ayniqsa uslub namunalarida salom ko'p
+   * bo'lsa. Butun javobni bloklash mazmunli javobni yo'qotardi,
+   * shuning uchun faqat salom qismi kesiladi.
+   */
+  let body = reply.reply;
+  if (!greeting.shouldGreet && startsWithGreeting(body)) {
+    body = stripGreeting(body);
+    context.result.notes.push("takroriy salomlashish olib tashlandi");
+  }
+
   const sent = await send(context, {
-    body: reply.reply,
+    body,
     kind: "knowledge_reply",
     templateKey: null,
     // Bilim javobi har bosqichda mumkin.
@@ -908,6 +1206,20 @@ async function answerFromKnowledge(
   // Yuborilmagan bo'lsa sabab `refusals` da — u yerda sozlama yoki
   // rollout turadi va fallback ham o'sha to'siqqa urilardi.
   if (!sent) context.result.notes.push(`bilim javobi yuborilmadi (${silentReason})`);
+
+  /*
+   * JAVOB BERILGAN SAVOL XOTIRADAN CHIQADI.
+   *
+   * Aks holda u "javobsiz savol" bo'lib qolardi va bot keyingi
+   * javobda ham unga qaytaverardi.
+   */
+  if (sent) {
+    const answered = mineQuestion(trimmed);
+    await syncMemory(context, {
+      resolvedQuestionIntent: answered?.intentKey ?? null,
+      answeredTopic: answered?.intentKey ?? undefined,
+    });
+  }
 }
 
 /**
@@ -1092,19 +1404,39 @@ async function recordKnowledgeGap(
 async function loadRecentHistory(
   conversationId: string,
   excludeMessageId: string | null = null,
+  memory: ConversationMemory | null = null,
 ): Promise<{
   turns: Array<{ role: "customer" | "assistant"; text: string }>;
   assistantTexts: string[];
   explainedTemplates: string[];
+  /** Oynadan tashqaridagi qismning FAKTGA TAYANGAN xulosasi. */
+  summary: string | null;
 }> {
   const events = await loadConversationTimeline(conversationId, {
-    limit: 12,
+    limit: RECENT_WINDOW,
     excludeMessageId,
   });
+
+  /*
+   * AYLANMA XULOSA (25-band).
+   *
+   * Oyna oxirgi 12 xabar bilan chegaralangan. Undan oldingi qism
+   * MODEL BILAN emas, TUZILMALI XOTIRADAN quriladi — model
+   * ishlatilsa, u "mijoz qiziqqan ko'rinadi" kabi tekshirilmagan
+   * gaplarni qo'shib yuborardi va ular keyingi javoblarda FAKT
+   * bo'lib ishlatilardi.
+   */
+  const summary = memory ? buildRollingSummary({
+    memory,
+    summarizedMessageCount: 0,
+    totalMessages: events.length,
+  }).text : null;
+
   return {
     turns: toModelTurns(events),
     assistantTexts: assistantTexts(events),
     explainedTemplates: listExplainedTemplateKeys(events),
+    summary: summary && summary.trim() !== "" ? summary : null,
   };
 }
 
@@ -1142,7 +1474,32 @@ export async function onIntakeSubmitted(intakeId: string): Promise<FlowRunResult
 
   const conversationId = data.id as string;
   const token = await claimConversation(conversationId);
-  if (!token) return null;
+
+  /*
+   * ANKETA TOPSHIRILGANDA HAM ISH YO'QOLMAYDI (27-band).
+   *
+   * Bu yerda ham `return null` turardi. Xavf webhook'dagidan
+   * KATTAROQ: anketa topshirish paytida mijoz ko'pincha ayni
+   * vaqtda yozib ham turadi, ya'ni qulf band bo'lish ehtimoli
+   * yuqori. O'shanda tasdiq va to'lov so'rovi HECH QACHON
+   * ketmasdi va mijoz "yubordim, javob yo'q" holatida qolardi.
+   */
+  if (!token) {
+    try {
+      await enqueueJob({
+        conversationId,
+        messageId: null,
+        kind: "reply",
+        reason: "anketa topshirildi, suhbat qulfi band edi",
+      });
+    } catch (err) {
+      console.error("SALES_INTAKE_ENQUEUE_FAILED", {
+        conversationId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return null;
+  }
 
   try {
     const conversation = await loadConversation(conversationId);
@@ -1234,6 +1591,21 @@ export async function confirmPayment(input: {
     .update({ confirmed_at: now, confirmed_by: input.actorId })
     .eq("conversation_id", input.conversationId)
     .is("confirmed_at", null);
+
+  /*
+   * TASDIQ XOTIRAGA HAM YOZILADI (26 va 30-band).
+   *
+   * Bu yagona joy — `paymentAuthorized: true` faqat shu yerdan
+   * keladi. Mijozning "to'ladim" matni ham, chek skrinshoti ham
+   * bu holatni bera olmaydi.
+   */
+  await persistMemory(
+    input.conversationId,
+    applyMemoryUpdate(conversation.memory, {
+      paymentStatus: "confirmed",
+      paymentAuthorized: true,
+    }),
+  );
 
   await logAudit({
     actorId: input.actorId,
