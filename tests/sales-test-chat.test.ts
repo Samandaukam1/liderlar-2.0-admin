@@ -387,7 +387,14 @@ test("promt fakt to‘qishni ochiq taqiqlaydi", () => {
 
 test("generator javobni YARATILGANDAN KEYIN ham tekshiradi", () => {
   const source = readFileSync(join(ROOT, "src/lib/sales/test-chat.ts"), "utf8");
-  assert.match(source, /findUnsupportedNumbers\(reply, allowedTexts\)/);
+  /*
+   * 2-FAZA: tekshiruv SEMANTIK guardga o'tdi.
+   *
+   * Eski `findUnsupportedNumbers()` bir xonali sonlarni umuman
+   * ko'rmasdi, ya'ni manbasiz "2 kun" bemalol o'tib ketardi
+   * (31-band). Yangi guard sonni BIRLIGI bilan birga ko'radi.
+   */
+  assert.match(source, /findUnsupportedNumericClaims\(reply, allowedTexts\)/);
   assert.match(source, /unsupportedNumbers/);
 });
 
