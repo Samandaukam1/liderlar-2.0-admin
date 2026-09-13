@@ -7,6 +7,8 @@ import {
   saveFlowSettingsAction,
   saveLearningSettingsAction,
   saveRecencyBucketsAction,
+  saveSalesRolloutAction,
+  stopSalesAiAction,
 } from "@/lib/actions/sales";
 
 /**
@@ -202,6 +204,146 @@ export function FlowSettingsForm({
 
       <Button type="submit" className="mt-3" disabled={pending}>
         {pending ? "Saqlanmoqda…" : "Saqlash"}
+      </Button>
+    </form>
+  );
+}
+
+/* ---------------------- chiqarish bosqichi (28-band) --------------------- */
+
+const ROLLOUT_OPTIONS: Array<{ value: string; label: string; hint: string }> = [
+  { value: "off", label: "O‘chiq", hint: "Hech kimga yozilmaydi. Standart holat." },
+  { value: "test_only", label: "Faqat sinov", hint: "Faqat admin panelidagi sinov chatida." },
+  {
+    value: "allowlist",
+    label: "Tanlangan chatlar",
+    hint: "Faqat quyida ko‘rsatilgan chat id’lariga. Birinchi real bosqich shu.",
+  },
+  {
+    value: "percentage",
+    label: "Foiz bo‘yicha",
+    hint: "Suhbatlarning bir qismiga. Taqsimot barqaror: bitta mijoz doim bir tomonda qoladi.",
+  },
+  { value: "full", label: "To‘liq", hint: "Barcha mijozlarga. Faqat bosqichma-bosqich sinovdan keyin." },
+];
+
+export function RolloutForm({
+  mode,
+  allowlistChatIds,
+  percentage,
+}: {
+  mode: string;
+  allowlistChatIds: readonly number[];
+  percentage: number;
+}) {
+  const { toast } = useToast();
+  const [pending, startTransition] = useTransition();
+  const [selected, setSelected] = useState(mode);
+
+  function onSubmit(formData: FormData) {
+    startTransition(async () => {
+      const result = await saveSalesRolloutAction(formData);
+      if (result.ok) toast("success", "Saqlandi", result.message);
+      else toast("error", "Saqlanmadi", result.error);
+    });
+  }
+
+  return (
+    <form action={onSubmit} className="rounded-card border border-line bg-card p-5 shadow-card">
+      <h2 className="font-display text-base font-semibold text-ink">Chiqarish bosqichi</h2>
+      <p className="mt-1 mb-3 text-xs leading-relaxed text-ink-soft">
+        O‘chiq holatdan to‘g‘ridan-to‘g‘ri hamma mijozga o‘tilmaydi. Noto‘g‘ri
+        javob bir vaqtning o‘zida yuzlab odamga ketadi va uni qaytarib
+        bo‘lmaydi — shuning uchun oraliq bosqichlar bor.
+      </p>
+
+      <div className="space-y-2">
+        {ROLLOUT_OPTIONS.map((option) => (
+          <label
+            key={option.value}
+            className="flex items-start gap-3 rounded-card border border-line bg-surface p-3"
+          >
+            <input
+              type="radio"
+              name="mode"
+              value={option.value}
+              checked={selected === option.value}
+              onChange={() => setSelected(option.value)}
+              className="mt-0.5 h-4 w-4"
+            />
+            <span>
+              <span className="block text-sm font-bold text-ink">{option.label}</span>
+              <span className="mt-0.5 block text-xs text-ink-soft">{option.hint}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <Label htmlFor="allowlistChatIds">Tanlangan chat id’lari</Label>
+          <Textarea
+            id="allowlistChatIds"
+            name="allowlistChatIds"
+            rows={3}
+            defaultValue={allowlistChatIds.join("\n")}
+            placeholder="Har qatorda bitta"
+          />
+        </div>
+        <div>
+          <Label htmlFor="percentage">Foiz (0–100)</Label>
+          <Input
+            id="percentage"
+            name="percentage"
+            type="number"
+            min={0}
+            max={100}
+            defaultValue={percentage}
+          />
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <Button type="submit" disabled={pending}>
+          {pending ? "Saqlanmoqda…" : "Saqlash"}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * FAVQULODDA TO'XTATISH.
+ *
+ * Alohida forma va alohida tugma: uni sozlamalar orasidan qidirish
+ * kerak bo'lmasin. Ma'lumot va rollout sozlamasi buzilmaydi —
+ * faqat yangi avtomatik xabarlar to'xtaydi.
+ */
+export function EmergencyStopForm({ active }: { active: boolean }) {
+  const { toast } = useToast();
+  const [pending, startTransition] = useTransition();
+
+  function onSubmit() {
+    startTransition(async () => {
+      const result = await stopSalesAiAction();
+      if (result.ok) toast("success", "To‘xtatildi", result.message);
+      else toast("error", "Bajarilmadi", result.error);
+    });
+  }
+
+  return (
+    <form
+      action={onSubmit}
+      className="rounded-card border border-coral/40 bg-coral/5 p-5 shadow-card"
+    >
+      <h2 className="font-display text-base font-semibold text-ink">Favqulodda to‘xtatish</h2>
+      <p className="mt-1 mb-3 text-xs leading-relaxed text-ink-soft">
+        Yangi avtomatik xabarlar darhol to‘xtaydi. Suhbatlar, ishlar va
+        chiqarish sozlamasi o‘chirilmaydi — qayta yoqqanda qamrov joyida
+        turadi.
+      </p>
+      <Button type="submit" variant="danger" disabled={pending || !active}>
+        {pending ? "To‘xtatilmoqda…" : active ? "AI SOTUVNI TO‘XTATISH" : "Allaqachon o‘chiq"}
       </Button>
     </form>
   );

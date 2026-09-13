@@ -22,6 +22,7 @@
  */
 
 import type { SalesStage } from "./stages.ts";
+import { decideRollout, type RolloutSettings } from "./rollout.ts";
 
 /**
  * Muhr. Modul ichida yaratiladi va eksport QILINMAYDI, shuning uchun
@@ -51,6 +52,14 @@ export const OUTBOUND_REFUSAL_REASONS = [
   "unexpected_stage",
   "empty_body",
   "missing_chat",
+  // Mijoz "boshqa yozmang" degan — bu HAMMA NARSADAN ustun.
+  "opted_out",
+  // Chiqarish bosqichi (28-band): kod yoqiq, lekin bu suhbat hali
+  // qamrovda emas.
+  "rollout_off",
+  "rollout_test_only",
+  "rollout_not_allowlisted",
+  "rollout_outside_percentage",
 ] as const;
 export type OutboundRefusalReason = (typeof OUTBOUND_REFUSAL_REASONS)[number];
 
@@ -62,6 +71,11 @@ export const OUTBOUND_REFUSAL_LABELS: Record<OutboundRefusalReason, string> = {
   unexpected_stage: "Suhbat kutilgan bosqichda emas",
   empty_body: "Xabar matni bo‘sh",
   missing_chat: "Chat yoki ulanish identifikatori yo‘q",
+  opted_out: "Mijoz avtomatik aloqadan chiqqan",
+  rollout_off: "Chiqarish o‘chiq",
+  rollout_test_only: "Faqat sinov rejimi",
+  rollout_not_allowlisted: "Bu chat tanlangan ro‘yxatda yo‘q",
+  rollout_outside_percentage: "Bu suhbat foizli qamrovga kirmagan",
 };
 
 export interface OutboundContext {
@@ -82,6 +96,12 @@ export interface OutboundContext {
   connectionCanReply: boolean;
   /** Sinov rejimi: hamma tekshiruv ishlaydi, lekin Telegram'ga chiqmaydi. */
   simulated?: boolean;
+  /** Chiqarish bosqichi. */
+  rollout: RolloutSettings;
+  /** Suhbatga bir marta berilgan barqaror raqam (foizli chiqarish uchun). */
+  rolloutBucket: number | null;
+  /** Mijoz avtomatik aloqadan chiqqanmi. */
+  optedOut: boolean;
 }
 
 export type OutboundDecision =
@@ -93,7 +113,17 @@ export function authorizeOutbound(context: OutboundContext): OutboundDecision {
 
   if (context.body.trim() === "") return { allowed: false, reason: "empty_body" };
 
-  // Inson nazorati HAR NARSADAN ustun: sozlama yoqiq bo'lsa ham AI jim.
+  /*
+   * OPT-OUT ENG BIRINCHI — hatto sinov rejimidan ham oldin.
+   *
+   * "Boshqa yozmang" degan odamga yozish sozlama masalasi emas.
+   * Bu tekshiruv pastda tursa, sinov rejimidagi chaqiruv uni
+   * chetlab o'tardi va amalda bu jonli chatga chiqib ketishi mumkin
+   * edi (sinov va jonli yo'l bitta funksiyadan o'tadi).
+   */
+  if (context.optedOut) return { allowed: false, reason: "opted_out" };
+
+  // Inson nazorati: sozlama yoqiq bo'lsa ham AI jim.
   if (!context.aiEnabled) return { allowed: false, reason: "human_takeover" };
 
   if (
@@ -113,6 +143,23 @@ export function authorizeOutbound(context: OutboundContext): OutboundDecision {
   }
 
   if (!context.autoReplyEnabled) return { allowed: false, reason: "auto_reply_disabled" };
+
+  /*
+   * CHIQARISH BOSQICHI (28-band).
+   *
+   * Ikki kalit ataylab: `autoReplyEnabled` — "avto-javob umuman
+   * ruxsatmi" (favqulodda to'xtatish shu yerdan), `rollout` — "kimga".
+   * Bittasi bo'lganda favqulodda to'xtatish rollout sozlamasini
+   * yo'q qilardi va qayta yoqishda uni eslab qolish kerak bo'lardi.
+   */
+  const rollout = decideRollout({
+    settings: context.rollout,
+    chatId: context.chatId,
+    bucket: context.rolloutBucket,
+    simulated: false,
+  });
+  if (!rollout.allowed) return { allowed: false, reason: rollout.reason };
+
   if (!context.businessConnectionId || context.chatId == null) {
     return { allowed: false, reason: "missing_chat" };
   }

@@ -15,7 +15,13 @@ import {
 } from "@/lib/sales/telegram-sales-api";
 import { formatDate } from "@/lib/utils";
 import { SalesTabs, NoAutoReplyNotice } from "../sales-tabs";
-import { FlowSettingsForm, LearningSettingsForm, RecencyBucketsForm } from "./settings-forms";
+import {
+  EmergencyStopForm,
+  FlowSettingsForm,
+  LearningSettingsForm,
+  RecencyBucketsForm,
+  RolloutForm,
+} from "./settings-forms";
 
 export const metadata = { title: "AI Sotuv — Sozlamalar" };
 export const dynamic = "force-dynamic";
@@ -172,6 +178,19 @@ export default async function SalesSettingsPage() {
 
       {canManage ? (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {/* Favqulodda to'xtatish ENG TEPADA: uni sozlamalar orasidan
+              qidirish kerak bo'lgan payt — aynan uni tez bosish kerak
+              bo'lgan payt. */}
+          <div className="lg:col-span-2">
+            <EmergencyStopForm active={settings.flow.autoReplyEnabled} />
+          </div>
+          <div className="lg:col-span-2">
+            <RolloutForm
+              mode={settings.rollout.mode}
+              allowlistChatIds={settings.rollout.allowlistChatIds}
+              percentage={settings.rollout.percentage}
+            />
+          </div>
           <div className="lg:col-span-2">
             <FlowSettingsForm
               autoReplyEnabled={settings.flow.autoReplyEnabled}

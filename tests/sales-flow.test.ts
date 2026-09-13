@@ -207,6 +207,12 @@ const baseContext = (over: Partial<OutboundContext> = {}): OutboundContext => ({
   body: "matn",
   autoReplyEnabled: true,
   aiEnabled: true,
+  // Mavjud testlar chiqarish bosqichidan OLDIN yozilgan: ular
+  // ruxsatning boshqa qoidalarini tekshiradi, shuning uchun bu yerda
+  // rollout to'liq ochiq qilinadi va o'z testlari alohida yoziladi.
+  rollout: { mode: "full", allowlistChatIds: [], percentage: 100 },
+  rolloutBucket: 0,
+  optedOut: false,
   connectionEnabled: true,
   connectionCanReply: true,
   ...over,

@@ -57,7 +57,9 @@ export async function runFollowupTick(now: Date = new Date()): Promise<FollowupT
 
     const { data: conversation } = await admin
       .from("sales_conversations")
-      .select("id, business_connection_id, chat_id, sales_stage, ai_enabled")
+      .select(
+        "id, business_connection_id, chat_id, sales_stage, ai_enabled, opted_out_at, rollout_bucket",
+      )
       .eq("id", conversationId)
       .maybeSingle();
 
@@ -101,6 +103,12 @@ export async function runFollowupTick(now: Date = new Date()): Promise<FollowupT
       aiEnabled: conversation.ai_enabled !== false,
       connectionEnabled: connection?.isEnabled ?? false,
       connectionCanReply: connection?.canReply ?? false,
+      rollout: settings.rollout,
+      rolloutBucket:
+        typeof conversation.rollout_bucket === "number" ? conversation.rollout_bucket : null,
+      // Follow-up YUBORISHDAN OLDIN qayta tekshiriladi (20-band):
+      // rejalashtirilgandan keyin mijoz "yozmang" degan bo'lishi mumkin.
+      optedOut: conversation.opted_out_at != null,
     });
 
     if (!decision.allowed) {

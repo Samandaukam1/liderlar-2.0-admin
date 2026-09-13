@@ -20,6 +20,15 @@ import {
   type ReplyIntent,
   type SalesStage,
 } from "./stages.ts";
+import { detectObjections, mergeObjections } from "./objections.ts";
+import { computeLeadScore, type LeadTemperature } from "./lead-score.ts";
+import { detectOptOut, OPT_OUT_REPLY } from "./optout.ts";
+import { detectHandoff, buildHandoffSummary, type HandoffTrigger } from "./handoff.ts";
+import { detectMinor } from "./minor.ts";
+import { buildFallback, isFillerMessage, type FallbackReason } from "./fallback.ts";
+import { newRolloutBucket, type RolloutSettings } from "./rollout.ts";
+import { normalizeForMatch } from "../text-normalize.ts";
+import { checkReplyQuality } from "./reply-quality.ts";
 
 /**
  * SOTUV OQIMI DVIGATELI.
@@ -85,6 +94,14 @@ interface FlowConversation {
   customerFullName: string | null;
   intakeId: string | null;
   paymentStatus: string;
+  /** 0.3: sotuv aqli uchun holat. */
+  objections: string[];
+  leadScore: number;
+  leadScoreReasons: string[];
+  leadTemperature: LeadTemperature;
+  optedOut: boolean;
+  isMinor: boolean;
+  rolloutBucket: number | null;
 }
 
 async function loadConversation(conversationId: string): Promise<FlowConversation | null> {
@@ -92,22 +109,36 @@ async function loadConversation(conversationId: string): Promise<FlowConversatio
   const { data } = await admin
     .from("sales_conversations")
     .select(
-      "id, business_connection_id, chat_id, sales_stage, ai_enabled, customer_full_name, intake_id, payment_status",
+      "id, business_connection_id, chat_id, sales_stage, ai_enabled, customer_full_name, " +
+        "intake_id, payment_status, objections, lead_score, lead_score_reasons, " +
+        "lead_temperature, opted_out_at, is_minor, rollout_bucket",
     )
     .eq("id", conversationId)
     .maybeSingle();
 
   if (!data) return null;
-  const stage = data.sales_stage as string;
+  const row = data as unknown as Record<string, unknown>;
+  const stage = row.sales_stage as string;
+  const strings = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+
   return {
-    id: data.id as string,
-    businessConnectionId: data.business_connection_id as string,
-    chatId: data.chat_id as number,
+    id: row.id as string,
+    businessConnectionId: row.business_connection_id as string,
+    chatId: row.chat_id as number,
     stage: isSalesStage(stage) ? stage : "new",
-    aiEnabled: data.ai_enabled !== false,
-    customerFullName: (data.customer_full_name as string | null) ?? null,
-    intakeId: (data.intake_id as string | null) ?? null,
-    paymentStatus: (data.payment_status as string) ?? "none",
+    aiEnabled: row.ai_enabled !== false,
+    customerFullName: (row.customer_full_name as string | null) ?? null,
+    intakeId: (row.intake_id as string | null) ?? null,
+    paymentStatus: (row.payment_status as string) ?? "none",
+    objections: strings(row.objections),
+    leadScore: typeof row.lead_score === "number" ? row.lead_score : 0,
+    leadScoreReasons: strings(row.lead_score_reasons),
+    leadTemperature: (row.lead_temperature as LeadTemperature) ?? "cold",
+    // Sana bor — chiqqan. Bayroq emas, sana: qachon chiqqani ham kerak.
+    optedOut: row.opted_out_at != null,
+    isMinor: row.is_minor === true,
+    rolloutBucket: typeof row.rollout_bucket === "number" ? row.rollout_bucket : null,
   };
 }
 
@@ -144,6 +175,7 @@ interface SendContext {
   connectionEnabled: boolean;
   connectionCanReply: boolean;
   simulated: boolean;
+  rollout: RolloutSettings;
   result: FlowRunResult;
 }
 
@@ -171,6 +203,9 @@ async function send(
     connectionEnabled: context.connectionEnabled,
     connectionCanReply: context.connectionCanReply,
     simulated: context.simulated,
+    rollout: context.rollout,
+    rolloutBucket: context.conversation.rolloutBucket,
+    optedOut: context.conversation.optedOut,
   });
 
   if (!decision.allowed) {
@@ -216,6 +251,20 @@ async function send(
     simulated: decision.authorization.simulated,
     telegramMessageId,
   });
+
+  /*
+   * BIRINCHI JAVOB VAQTI — konversiyaning eng kuchli bashoratchisi.
+   *
+   * `is null` sharti bilan: faqat birinchi marta yoziladi va keyingi
+   * yuzlab xabar uni surib yubormaydi.
+   */
+  if (!decision.authorization.simulated) {
+    await admin
+      .from("sales_conversations")
+      .update({ first_response_at: new Date().toISOString() })
+      .eq("id", context.conversation.id)
+      .is("first_response_at", null);
+  }
   return true;
 }
 
@@ -353,6 +402,22 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
     "mijoz javob berdi",
   );
 
+  /*
+   * FOIZLI CHIQARISH UCHUN BARQAROR RAQAM.
+   *
+   * Bir marta beriladi va o'zgarmaydi. Har xabarda tasodif olinsa,
+   * bitta mijoz birinchi xabariga javob olib, ikkinchisiga olmay
+   * qolardi — texnik nosozlikdan ham yomonroq taassurot.
+   */
+  if (conversation.rolloutBucket == null) {
+    conversation.rolloutBucket = newRolloutBucket();
+    await adminClient()
+      .from("sales_conversations")
+      .update({ rollout_bucket: conversation.rolloutBucket })
+      .eq("id", conversation.id)
+      .is("rollout_bucket", null);
+  }
+
   const context: SendContext = {
     conversation,
     stage: conversation.stage,
@@ -360,8 +425,88 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
     connectionEnabled: connection?.isEnabled ?? false,
     connectionCanReply: connection?.canReply ?? false,
     simulated,
+    rollout: settings.rollout,
     result,
   };
+
+  /* ------------------------------ OPT-OUT ------------------------------- */
+  /*
+   * "Boshqa yozmang" — birinchi tekshiriladi va suhbat shu yerda
+   * tugaydi. Sababini so'rash, qaytarishga urinish, "bir daqiqa
+   * vaqtingiz bo'lsa" — hech biri yo'q (14-band).
+   */
+  const optOut = detectOptOut(input.text);
+  if (optOut.optedOut) {
+    await adminClient()
+      .from("sales_conversations")
+      .update({
+        opted_out_at: new Date().toISOString(),
+        opt_out_reason: optOut.matched,
+        lead_temperature: "cold",
+      })
+      .eq("id", conversation.id);
+
+    // Xayrlashuv xabari opt-out YOZILISHIDAN OLDINGI holat bilan
+    // yuboriladi: aks holda o'zimiz qo'ygan bayroq o'z javobimizni
+    // bloklab, mijoz javobsiz qolardi.
+    await send(context, {
+      body: OPT_OUT_REPLY,
+      kind: "template",
+      templateKey: "opt_out",
+      expectedStages: [],
+    });
+
+    result.cancelledFollowups += await cancelPendingFollowups(conversation.id, "mijoz opt-out");
+    result.notes.push(`opt-out: ${optOut.matched}`);
+    conversation.optedOut = true;
+    return result;
+  }
+
+  /* -------------------------- ODAMGA O'TKAZISH -------------------------- */
+  const handoff = detectHandoff(input.text);
+  if (handoff) {
+    await escalateToHuman(context, handoff.trigger, input.text);
+    result.notes.push(`odamga o‘tkazildi: ${handoff.trigger} (${handoff.matched})`);
+    return result;
+  }
+
+  /* ---------------------- e'tiroz, yosh, harorat ------------------------ */
+  const detectedObjections = detectObjections(input.text);
+  const objections = mergeObjections(conversation.objections, detectedObjections);
+
+  const minor = detectMinor(input.text);
+  const isMinor = conversation.isMinor || minor.isMinor;
+
+  const score = computeLeadScore({
+    stage: conversation.stage,
+    text: input.text,
+    previousScore: conversation.leadScore,
+    previousReasons: conversation.leadScoreReasons,
+    hasPaymentEvidence: conversation.paymentStatus === "evidence_received",
+    unansweredFollowups: await countUnansweredFollowups(conversation.id),
+    optedOut: false,
+  });
+
+  conversation.objections = objections;
+  conversation.isMinor = isMinor;
+  conversation.leadScore = score.score;
+  conversation.leadTemperature = score.temperature;
+  conversation.leadScoreReasons = score.reasons;
+
+  await adminClient()
+    .from("sales_conversations")
+    .update({
+      objections,
+      lead_score: score.score,
+      lead_temperature: score.temperature,
+      lead_score_reasons: score.reasons,
+      ...(isMinor ? { is_minor: true, minor_signal: minor.signal } : {}),
+    })
+    .eq("id", conversation.id);
+
+  if (detectedObjections.length > 0) {
+    result.notes.push(`e’tiroz: ${detectedObjections.map((o) => o.kind).join(", ")}`);
+  }
 
   /* --------------------------- niyat aniqlash --------------------------- */
   let intent: ReplyIntent;
@@ -386,12 +531,19 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
     // chetlab o'tsak, mijoz e'tiroz bildirganda JIM QOLARDIK — sotuv
     // suhbatida eng yomon javob shu. Bilim topilmasa baribir jim
     // qolamiz, lekin bu endi "bilmayman" qarori, "qaramadim" emas.
-    if (!TERMINAL_STAGES.includes(conversation.stage)) {
-      await answerFromKnowledge(context, input.text ?? "");
-    } else if (TERMINAL_STAGES.includes(conversation.stage)) {
-      result.notes.push("ssenariy tugagan bosqich — javob berilmadi");
+    if (TERMINAL_STAGES.includes(conversation.stage)) {
+      /*
+       * SSENARIY TUGAGAN, LEKIN MIJOZ YOZDI.
+       *
+       * Ilgari bu yerda jim qolinardi. To'lagan odam "rahmat" yoki
+       * "qachon chiqadi?" deb yozsa javobsiz qolardi — bu xizmat
+       * ko'rsatishning eng yomon nuqtasi, chunki u allaqachon pul
+       * to'lagan. Endi bilim bazasidan javob beriladi; u ham
+       * bo'lmasa — fallback.
+       */
+      await answerFromKnowledge(context, input.text ?? "", "terminal_stage");
     } else {
-      result.notes.push(`${conversation.stage} bosqichida "${intent}" uchun qadam yo‘q`);
+      await answerFromKnowledge(context, input.text ?? "", "no_transition");
     }
     return result;
   }
@@ -405,6 +557,9 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
   const isRePrompt = transition.to === conversation.stage;
   if (!isRePrompt && !isForwardTransition(conversation.stage, transition.to)) {
     result.notes.push("bosqich allaqachon o‘tilgan — takroriy o‘tish qilinmadi");
+    // Bosqich takrorlanmaydi, LEKIN mijoz javobsiz qolmaydi: u
+    // nimadir yozdi va javob kutyapti (3-band).
+    await answerFromKnowledge(context, input.text ?? "", "no_transition");
     return result;
   }
 
@@ -416,6 +571,17 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
     const name = validateFullName(input.text);
     if (!name.ok) {
       result.notes.push("F.I.Sh. yetarli emas — havola yaratilmadi");
+      // Mijoz bitta so'z yuborgan bo'lishi mumkin — qayta so'raymiz,
+      // jim qolmaymiz.
+      const template = getTemplate("request_full_name_again");
+      if (template) {
+        await send(context, {
+          body: template.body,
+          kind: "template",
+          templateKey: "request_full_name_again",
+          expectedStages: [],
+        });
+      }
       return result;
     }
 
@@ -429,6 +595,10 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
 
     if (!created.ok || !created.link) {
       result.notes.push(`anketa yaratilmadi: ${created.error ?? "noma’lum xato"}`);
+      // Texnik nosozlik — mijozning aybi emas va u buni bilishi shart
+      // emas, lekin javobsiz ham qolmasligi kerak. Odam aralashadi.
+      await sendFallback(context, "generation_failed");
+      await escalateToHuman(context, "technical_failure", input.text);
       return result;
     }
 
@@ -505,38 +675,284 @@ function followupMinutes(
 
 /* --------------------------- bilim bilan javob --------------------------- */
 
+/** Qisqa yordamchi — bu faylda Supabase klienti ko'p joyda kerak. */
+function adminClient() {
+  return createSupabaseAdminClient();
+}
+
 /**
  * Ssenariydan tashqari savolga javob.
  *
- * FAQAT TASDIQLANGAN bilim ishlatiladi (`generateTestReply` shuni
- * qiladi). Ikki holatda XABAR YUBORILMAYDI:
- *   · bilim topilmadi (MISSING_KNOWLEDGE) — fakt o'ylab topilmaydi;
- *   · javobda manbada yo'q son bor — model raqam to'qigan.
- * Ikkalasi ham suhbatda ko'rinadi va admin o'zi javob beradi.
+ * FAQAT TASDIQLANGAN bilim ishlatiladi va FAKT O'YLAB TOPILMAYDI.
+ * Lekin — 3-band — JIM HAM QOLINMAYDI.
+ *
+ * OLDIN QANDAY EDI: bilim topilmasa yoki model raqam to'qisa,
+ * funksiya `return` qilardi va mijoz javobsiz qolardi. Texnik
+ * jihatdan xavfsiz, sotuvda halokatli: mijoz savol berib javob
+ * olmaydi va ketadi. U bizning ehtiyotkorligimizni ko'rmaydi —
+ * e'tiborsizlikni ko'radi.
+ *
+ * ENDI: bilim yo'q bo'lsa AI buni TAN OLADI, aniqlashtirishni
+ * va'da qiladi va savol yozib qo'yiladi (`sales_knowledge_gaps`),
+ * ya'ni keyingi safar javob bo'ladi.
  */
-async function answerFromKnowledge(context: SendContext, question: string): Promise<void> {
-  if (question.trim() === "") return;
+async function answerFromKnowledge(
+  context: SendContext,
+  question: string,
+  silentReason: FallbackReason,
+): Promise<void> {
+  const trimmed = question.trim();
+
+  // Matnsiz xabar (stiker, ovozli). Bilim qidirishning ma'nosi yo'q,
+  // lekin javobsiz qoldirish ham mumkin emas.
+  if (trimmed === "") {
+    await sendFallback(context, "unclear_message");
+    return;
+  }
+
+  // "xa", "ok", "hmm" — bu javob, lekin mazmunsiz. Bilim bazasiga
+  // yuborish tokenni behuda sarflaydi va baribir javob topilmaydi.
+  if (isFillerMessage(trimmed)) {
+    await sendFallback(context, "unclear_message");
+    return;
+  }
 
   const history = await loadRecentHistory(context.conversation.id);
-  const reply = await generateTestReply({ message: question, history, actorId: null });
+
+  let reply: Awaited<ReturnType<typeof generateTestReply>>;
+  try {
+    reply = await generateTestReply({ message: trimmed, history, actorId: null });
+  } catch (err) {
+    // Model yiqildi yoki timeout. Mijoz buni bilishi shart emas.
+    context.result.notes.push(
+      `model xatosi: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    await sendFallback(context, "generation_failed");
+    return;
+  }
 
   if (reply.diagnostics.missingKnowledge) {
-    context.result.notes.push("MISSING_KNOWLEDGE — javob yuborilmadi");
-    return;
-  }
-  if (reply.diagnostics.unsupportedNumbers.length > 0) {
-    context.result.notes.push(
-      `javobda manbada yo‘q son (${reply.diagnostics.unsupportedNumbers.join(", ")}) — yuborilmadi`,
-    );
+    // Savol YOZIB QO'YILADI: har javobsiz savol keyingi bilim
+    // bazasining bir qatori (25-band).
+    await recordKnowledgeGap(context.conversation.id, trimmed, reply.reply);
+    context.result.notes.push("MISSING_KNOWLEDGE — fallback yuborildi");
+    await sendFallback(context, "missing_knowledge");
     return;
   }
 
-  await send(context, {
+  if (reply.diagnostics.unsupportedNumbers.length > 0) {
+    context.result.notes.push(
+      `javobda manbada yo‘q son (${reply.diagnostics.unsupportedNumbers.join(", ")})`,
+    );
+    await recordKnowledgeGap(context.conversation.id, trimmed, reply.reply);
+    await sendFallback(context, "unsupported_numbers");
+    return;
+  }
+
+  const quality = checkReplyQuality({
+    body: reply.reply,
+    unsupportedNumbers: reply.diagnostics.unsupportedNumbers,
+    // Chegirma bilimi tasdiqlangan bo'lsa, retrieval uni manba
+    // sifatida qaytargan bo'ladi.
+    discountApproved: reply.diagnostics.sources.some((source) =>
+      normalizeForMatch(`${source.title} ${source.body}`).includes("chegirma"),
+    ),
+    paymentStatus: context.conversation.paymentStatus,
+  });
+
+  if (!quality.ok) {
+    // Model taqiqlangan da'vo yozdi (kafolat, to'qilgan shoshilinchlik).
+    // Bu javob mijozga KETMAYDI.
+    context.result.notes.push(`sifat darvozasi: ${quality.blocked.join(", ")}`);
+    await sendFallback(context, "low_confidence");
+    await escalateToHuman(context, "repeated_misunderstanding", question);
+    return;
+  }
+  if (quality.warnings.length > 0) {
+    context.result.notes.push(`ogohlantirish: ${quality.warnings.join(", ")}`);
+  }
+
+  const sent = await send(context, {
     body: reply.reply,
     kind: "knowledge_reply",
     templateKey: null,
     // Bilim javobi har bosqichda mumkin.
     expectedStages: [],
+  });
+
+  // Yuborilmagan bo'lsa sabab `refusals` da — u yerda sozlama yoki
+  // rollout turadi va fallback ham o'sha to'siqqa urilardi.
+  if (!sent) context.result.notes.push(`bilim javobi yuborilmadi (${silentReason})`);
+}
+
+/**
+ * Fallback yuboradi va nechta yuborilganini hisoblaydi.
+ *
+ * Hisob kerak: uchinchisidan keyin AI o'zi tuzata olmasligi aniq va
+ * suhbat odamga o'tadi. "Tekshirib yozaman" degan va'dani cheksiz
+ * takrorlash aldashdan farq qilmaydi.
+ */
+async function sendFallback(context: SendContext, reason: FallbackReason): Promise<void> {
+  const previous = await countFallbacks(context.conversation.id);
+  const fallback = buildFallback({
+    reason,
+    stage: context.stage,
+    previousFallbackCount: previous,
+    isMinor: context.conversation.isMinor,
+  });
+
+  await send(context, {
+    body: fallback.body,
+    kind: "knowledge_reply",
+    templateKey: `fallback:${reason}`,
+    expectedStages: [],
+  });
+
+  if (fallback.requiresHuman) {
+    await escalateToHuman(context, "repeated_misunderstanding", null);
+  }
+}
+
+/** Shu suhbatda ilgari nechta fallback ketgan. */
+async function countFallbacks(conversationId: string): Promise<number> {
+  const { count } = await adminClient()
+    .from("sales_outbound_log")
+    .select("id", { count: "exact", head: true })
+    .eq("conversation_id", conversationId)
+    .like("template_key", "fallback:%");
+  return count ?? 0;
+}
+
+async function countUnansweredFollowups(conversationId: string): Promise<number> {
+  const { count } = await adminClient()
+    .from("sales_followups")
+    .select("id", { count: "exact", head: true })
+    .eq("conversation_id", conversationId)
+    .eq("status", "sent");
+  return count ?? 0;
+}
+
+/* ---------------------------- odamga o'tkazish --------------------------- */
+
+/**
+ * Suhbatni odamga topshiradi.
+ *
+ * IKKI ISH: AI shu suhbatda jim bo'ladi (`ai_enabled = false`) va
+ * KOORDINATOR UCHUN XULOSA yoziladi. Xulosasiz o'tkazish odamni
+ * nolga qaytaradi — u butun yozishmani o'qib chiqishi kerak bo'lardi.
+ */
+async function escalateToHuman(
+  context: SendContext,
+  trigger: HandoffTrigger,
+  lastQuestion: string | null,
+): Promise<void> {
+  const conversation = context.conversation;
+  const summary = buildHandoffSummary({
+    customerName: conversation.customerFullName,
+    region: null,
+    stage: context.stage,
+    temperature: conversation.leadTemperature,
+    objections: conversation.objections,
+    explained: await listExplainedTopics(conversation.id),
+    lastCustomerQuestion: lastQuestion,
+    trigger,
+    paymentStatus: conversation.paymentStatus,
+    intakeSubmitted: conversation.intakeId != null,
+  });
+
+  await adminClient()
+    .from("sales_conversations")
+    .update({
+      ai_enabled: false,
+      human_required_at: new Date().toISOString(),
+      human_required_reason: trigger,
+      handoff_reason: trigger,
+      handoff_summary: summary,
+    })
+    .eq("id", conversation.id);
+
+  conversation.aiEnabled = false;
+  context.result.notes.push(`human_required: ${trigger}`);
+
+  await logAudit({
+    actorId: null,
+    action: "sales.human_handoff",
+    entityType: "sales_conversation",
+    entityId: conversation.id,
+    severity: "warning",
+    metadata: { trigger, stage: context.stage },
+  });
+}
+
+/** AI qaysi mavzularni allaqachon tushuntirgan — takrorlamaslik uchun. */
+async function listExplainedTopics(conversationId: string): Promise<string[]> {
+  const { data } = await adminClient()
+    .from("sales_outbound_log")
+    .select("template_key")
+    .eq("conversation_id", conversationId)
+    .not("template_key", "is", null)
+    .limit(50);
+
+  const keys = new Set<string>();
+  for (const row of data ?? []) {
+    const key = row.template_key as string | null;
+    if (key && !key.startsWith("fallback:")) keys.add(key);
+  }
+  return [...keys];
+}
+
+/* --------------------------- bilim bo'shliqlari -------------------------- */
+
+/**
+ * Javobsiz qolgan savolni yozib qo'yadi (25-band).
+ *
+ * MODEL TAXMINI BILIM EMAS: bu yerga faqat SAVOL va AI nima
+ * deganini yoziladi. Javobni odam yozadi va tasdiqlaydi.
+ *
+ * Bir savol — bir qator: takror kelganda `ask_count` oshadi, ya'ni
+ * "eng ko'p so'ralgan javobsiz savol" degan ro'yxat o'zi paydo bo'ladi.
+ */
+async function recordKnowledgeGap(
+  conversationId: string,
+  question: string,
+  aiFallback: string | null,
+): Promise<void> {
+  const normalized = normalizeForMatch(question).replace(/\s+/g, " ").trim().slice(0, 500);
+  if (normalized === "") return;
+
+  const admin = adminClient();
+  const now = new Date().toISOString();
+
+  const { data: existing } = await admin
+    .from("sales_knowledge_gaps")
+    .select("id, ask_count, example_contexts")
+    .eq("normalized_question", normalized)
+    .maybeSingle();
+
+  if (existing) {
+    const contexts = Array.isArray(existing.example_contexts)
+      ? (existing.example_contexts as unknown[])
+      : [];
+    await admin
+      .from("sales_knowledge_gaps")
+      .update({
+        ask_count: ((existing.ask_count as number) ?? 1) + 1,
+        last_asked_at: now,
+        last_conversation_id: conversationId,
+        // Oxirgi 5 ta namuna yetarli: ko'proq saqlash qatorni
+        // shishiradi va hech kim o'qimaydi.
+        example_contexts: [...contexts.slice(-4), { at: now, question }],
+      })
+      .eq("id", existing.id as string);
+    return;
+  }
+
+  await admin.from("sales_knowledge_gaps").insert({
+    normalized_question: normalized,
+    question: question.slice(0, 1000),
+    last_conversation_id: conversationId,
+    ai_fallback: aiFallback?.slice(0, 1000) ?? null,
+    example_contexts: [{ at: now, question }],
   });
 }
 
@@ -640,6 +1056,7 @@ export async function onIntakeSubmitted(intakeId: string): Promise<FlowRunResult
       connectionEnabled: connection?.isEnabled ?? false,
       connectionCanReply: connection?.canReply ?? false,
       simulated: false,
+      rollout: settings.rollout,
       result,
     };
 

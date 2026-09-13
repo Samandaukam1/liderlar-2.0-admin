@@ -5,6 +5,7 @@ import {
   parseRecencyBuckets,
   type RecencyBucket,
 } from "./recency.ts";
+import { DEFAULT_ROLLOUT, parseRollout, type RolloutSettings } from "./flow/rollout.ts";
 
 /**
  * AI Sotuv sozlamalari — `sales_settings` (key -> jsonb).
@@ -52,6 +53,15 @@ export interface SalesSettings {
   learning: SalesLearningSettings;
   deepLearning: SalesDeepLearningSettings;
   flow: SalesFlowSettings;
+  /**
+   * Chiqarish bosqichi (28-band).
+   *
+   * `flow.autoReplyEnabled` bilan IKKALASI ham yoqiq bo'lishi shart:
+   * birinchisi "avto-javob umuman ruxsatmi", ikkinchisi "kimga".
+   * Ikki kalit ataylab: favqulodda to'xtatish bitta joydan ishlaydi
+   * va rollout sozlamasi yo'qolmaydi.
+   */
+  rollout: RolloutSettings;
 }
 
 export const DEFAULT_LEARNING_SETTINGS: SalesLearningSettings = {
@@ -147,7 +157,7 @@ export async function getSalesSettings(): Promise<SalesSettings> {
     const { data } = await admin
       .from("sales_settings")
       .select("key, value")
-      .in("key", ["recency_buckets", "learning", "deep_learning", "flow"]);
+      .in("key", ["recency_buckets", "learning", "deep_learning", "flow", "rollout"]);
 
     const map = new Map((data ?? []).map((row) => [row.key as string, row.value]));
     return {
@@ -155,6 +165,7 @@ export async function getSalesSettings(): Promise<SalesSettings> {
       learning: parseLearning(map.get("learning")),
       deepLearning: parseDeepLearning(map.get("deep_learning")),
       flow: parseFlow(map.get("flow")),
+      rollout: parseRollout(map.get("rollout")),
     };
   } catch {
     return {
@@ -164,6 +175,7 @@ export async function getSalesSettings(): Promise<SalesSettings> {
       // Baza yetib bo'lmasa avto-javob O'CHIQ qoladi — jim qolish
       // noto'g'ri javob yuborishdan xavfsizroq.
       flow: DEFAULT_FLOW_SETTINGS,
+      rollout: DEFAULT_ROLLOUT,
     };
   }
 }

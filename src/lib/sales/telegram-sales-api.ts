@@ -94,24 +94,89 @@ export interface SalesTelegramResult<T> {
  * Bot API chaqiruvi. Har chaqiruv oq ro'yxatdan o'tadi — shuning uchun
  * bu funksiya orqali mijozga xabar yuborib bo'lmaydi.
  */
+/**
+ * Qayta urinish siyosati (19-band).
+ *
+ * IKKI XIL XATO BOR va ularni ajratish shart:
+ *
+ *   · QAYTA URINSA BO'LADIGANI — 429 (rate limit), 5xx, tarmoq
+ *     uzilishi. Bular vaqtinchalik va qayta urinish TO'G'RI ish.
+ *   · QAYTA URINIB BO'LMAYDIGANI — 400 (noto'g'ri chat, bloklangan
+ *     bot, matn juda uzun). Bularni takrorlash faqat vaqt va
+ *     kvota sarflaydi, natija esa bir xil bo'ladi.
+ *
+ * 429 da Telegram `retry_after` ni O'ZI aytadi — uni hurmat qilmaslik
+ * keyingi javobni yanada uzoqroq bloklaydi.
+ */
+const MAX_SEND_ATTEMPTS = 3;
+const BASE_BACKOFF_MS = 500;
+/** Telegram aytgan kutish shundan uzun bo'lsa, bu so'rovda kutilmaydi. */
+const MAX_RETRY_AFTER_MS = 30_000;
+
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function callSalesTelegram<T>(
   method: string,
   body: Record<string, unknown> = {},
 ): Promise<SalesTelegramResult<T>> {
   assertAllowedSalesMethod(method);
 
-  const response = await fetch(`${TELEGRAM_API}/bot${salesBotToken()}/${method}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let lastDescription = "Telegram javob bermadi";
 
-  const raw = await response.text();
-  try {
-    return JSON.parse(raw) as SalesTelegramResult<T>;
-  } catch {
-    return { ok: false, description: `Telegram javobi JSON emas (HTTP ${response.status})` };
+  for (let attempt = 1; attempt <= MAX_SEND_ATTEMPTS; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch(`${TELEGRAM_API}/bot${salesBotToken()}/${method}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      // Tarmoq uzilishi — javob umuman kelmadi, ya'ni xabar yetgan
+      // yoki yetmagani noma'lum. Qayta urinamiz.
+      lastDescription = err instanceof Error ? err.message : String(err);
+      if (attempt === MAX_SEND_ATTEMPTS) break;
+      await sleep(BASE_BACKOFF_MS * 2 ** (attempt - 1));
+      continue;
+    }
+
+    const raw = await response.text();
+    let parsed: SalesTelegramResult<T> & { parameters?: { retry_after?: number } };
+    try {
+      parsed = JSON.parse(raw) as typeof parsed;
+    } catch {
+      lastDescription = `Telegram javobi JSON emas (HTTP ${response.status})`;
+      if (!isRetryableStatus(response.status) || attempt === MAX_SEND_ATTEMPTS) {
+        return { ok: false, description: lastDescription };
+      }
+      await sleep(BASE_BACKOFF_MS * 2 ** (attempt - 1));
+      continue;
+    }
+
+    if (parsed.ok) return parsed;
+
+    lastDescription = parsed.description ?? `HTTP ${response.status}`;
+
+    // Qayta urinib bo'lmaydigan xato — darhol qaytamiz.
+    if (!isRetryableStatus(response.status)) return parsed;
+    if (attempt === MAX_SEND_ATTEMPTS) return parsed;
+
+    // Telegram kutish vaqtini aytgan bo'lsa — aynan shuncha kutamiz.
+    const retryAfterMs = (parsed.parameters?.retry_after ?? 0) * 1000;
+    if (retryAfterMs > MAX_RETRY_AFTER_MS) {
+      // Juda uzoq: bu so'rovni ushlab turish serverless funksiyani
+      // timeout'ga olib boradi. Xato qaytariladi va yuqoridagi qatlam
+      // ishni keyinroq qayta oladi.
+      return parsed;
+    }
+    await sleep(retryAfterMs > 0 ? retryAfterMs : BASE_BACKOFF_MS * 2 ** (attempt - 1));
   }
+
+  return { ok: false, description: lastDescription };
 }
 
 export interface SalesBotInfo {

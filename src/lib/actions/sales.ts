@@ -15,7 +15,8 @@ import {
 import { generateTestReply, type TestChatResult } from "@/lib/sales/test-chat";
 import { confirmPayment, setHumanTakeover } from "@/lib/sales/flow/engine";
 import { simulateConversation, type SimulationRun } from "@/lib/sales/flow/simulate";
-import { saveSalesSetting } from "@/lib/sales/settings";
+import { getSalesSettings, saveSalesSetting } from "@/lib/sales/settings";
+import { ROLLOUT_MODES, ROLLOUT_MODE_LABELS } from "@/lib/sales/flow/rollout";
 import { parseRecencyBuckets } from "@/lib/sales/recency";
 import { redactPii, isRedacted } from "@/lib/sales/redact";
 import { LEARNING_JOB_KINDS, KNOWLEDGE_CATEGORIES } from "@/lib/sales/types";
@@ -609,6 +610,221 @@ export async function saveFlowSettingsAction(formData: FormData): Promise<SalesA
 
   revalidateSales();
   return { ok: true, message: "Sozlamalar saqlandi." };
+}
+
+/* ------------------------ bilim bo'shliqlari ----------------------------- */
+
+const answerGapSchema = z.object({
+  gapId: z.string().uuid(),
+  answer: z.string().trim().min(10, "Javob juda qisqa").max(4000),
+});
+
+/**
+ * Javobsiz savolga javob yozish (25-band).
+ *
+ * Javob TASDIQLANGAN bilim sifatida kiritiladi va retrieval uni
+ * darhol ishlata boshlaydi — shuning uchun bu yerga faqat odam
+ * yozgan matn tushadi. Model taxmini hech qachon avtomatik
+ * tasdiqlanmaydi.
+ */
+export async function answerKnowledgeGapAction(
+  formData: FormData,
+): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  const parsed = answerGapSchema.safeParse({
+    gapId: formData.get("gapId"),
+    answer: formData.get("answer"),
+  });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Forma xatosi" };
+  }
+
+  const admin = createSupabaseAdminClient();
+  const { data: gap } = await admin
+    .from("sales_knowledge_gaps")
+    .select("id, question, status")
+    .eq("id", parsed.data.gapId)
+    .maybeSingle();
+
+  if (!gap) return { ok: false, error: "Savol topilmadi." };
+  if (gap.status === "answered") return { ok: false, error: "Bu savolga allaqachon javob berilgan." };
+
+  // Qo'lda yozilgan javob ham redaksiyadan o'tadi: admin xom
+  // yozishmadan telefon yoki karta raqamini nusxalab qo'yishi mumkin.
+  const answer = redactPii(parsed.data.answer).text;
+  if (!isRedacted(answer)) {
+    return { ok: false, error: "Matnda shaxsiy ma’lumot qoldi — saqlanmadi." };
+  }
+
+  const { data: created, error } = await admin
+    .from("sales_knowledge")
+    .insert({
+      category: "other",
+      question: gap.question as string,
+      answer,
+      tags: [],
+      confidence: 1.0,
+      status: "approved",
+      source_type: "manual",
+      // Eng yuqori ustunlik: bu savol mijozlardan kelgan va javobi
+      // ataylab yozilgan.
+      priority: 90,
+      source_conversation_id: null,
+      dedupe_key: `gap:${parsed.data.gapId}`,
+      created_by: ctx.userId,
+      updated_by: ctx.userId,
+      reviewed_by: ctx.userId,
+      reviewed_at: new Date().toISOString(),
+    })
+    .select("id")
+    .maybeSingle();
+
+  if (error) return { ok: false, error: error.message };
+
+  await admin
+    .from("sales_knowledge_gaps")
+    .update({
+      status: "answered",
+      answer,
+      answered_by: ctx.userId,
+      answered_at: new Date().toISOString(),
+      knowledge_id: created?.id ?? null,
+    })
+    .eq("id", parsed.data.gapId);
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.knowledge_gap.answered",
+    entityType: "sales_knowledge_gaps",
+    entityId: parsed.data.gapId,
+    newValue: { knowledgeId: created?.id ?? null },
+  });
+
+  revalidateSales();
+  return { ok: true, message: "Javob bilim bazasiga qo‘shildi." };
+}
+
+/** Savolni yopish — javob yozmasdan. Bilim bazasiga hech narsa tushmaydi. */
+export async function ignoreKnowledgeGapAction(
+  formData: FormData,
+): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+  const gapId = String(formData.get("gapId") ?? "");
+  if (!z.string().uuid().safeParse(gapId).success) {
+    return { ok: false, error: "Noto‘g‘ri identifikator" };
+  }
+
+  const admin = createSupabaseAdminClient();
+  const { error } = await admin
+    .from("sales_knowledge_gaps")
+    .update({ status: "ignored", answered_by: ctx.userId, answered_at: new Date().toISOString() })
+    .eq("id", gapId);
+  if (error) return { ok: false, error: error.message };
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.knowledge_gap.ignored",
+    entityType: "sales_knowledge_gaps",
+    entityId: gapId,
+  });
+
+  revalidateSales();
+  return { ok: true, message: "Savol yopildi." };
+}
+
+/* ------------------------- chiqarish bosqichi ---------------------------- */
+
+const rolloutSchema = z.object({
+  mode: z.enum(ROLLOUT_MODES),
+  allowlistChatIds: z.array(z.number().int()).max(500),
+  percentage: z.number().int().min(0).max(100),
+});
+
+/**
+ * Chiqarish bosqichini o'zgartirish (28-band).
+ *
+ * OFF dan to'g'ridan-to'g'ri FULL ga sakrash — eng qimmat xato turi:
+ * noto'g'ri javob bir vaqtning o'zida yuzlab odamga ketadi va uni
+ * qaytarib bo'lmaydi. Shuning uchun har o'zgarish audit'ga yoziladi
+ * va qamrov kengayishi `warning` darajasida belgilanadi.
+ */
+export async function saveSalesRolloutAction(formData: FormData): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  // Chat id'lar matn maydonida, har qatorda bittadan yoki vergul bilan.
+  const rawIds = String(formData.get("allowlistChatIds") ?? "");
+  const allowlistChatIds = rawIds
+    .split(/[\s,]+/)
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isSafeInteger(value) && value !== 0);
+
+  const parsed = rolloutSchema.safeParse({
+    mode: String(formData.get("mode") ?? "off"),
+    allowlistChatIds,
+    percentage: Number(formData.get("percentage") ?? 0),
+  });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Forma xatosi" };
+  }
+
+  const previous = await getSalesSettings();
+
+  try {
+    await saveSalesSetting("rollout", parsed.data, ctx.userId);
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Saqlanmadi." };
+  }
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.settings.rollout",
+    entityType: "sales_settings",
+    entityId: "rollout",
+    oldValue: previous.rollout,
+    newValue: parsed.data,
+    // Qamrov kengayishi — diqqat talab qiladigan o'zgarish.
+    severity: parsed.data.mode === "full" || parsed.data.mode === "percentage" ? "warning" : "info",
+  });
+
+  revalidateSales();
+  return { ok: true, message: `Chiqarish rejimi: ${ROLLOUT_MODE_LABELS[parsed.data.mode]}` };
+}
+
+/**
+ * FAVQULODDA TO'XTATISH (23-band).
+ *
+ * Bitta bosish — yangi avtomatik xabarlar to'xtaydi. Ishlar,
+ * ma'lumotlar va rollout sozlamasi BUZILMAYDI: faqat `autoReplyEnabled`
+ * o'chadi. Shuning uchun qayta yoqishda qamrovni eslab qolish kerak
+ * emas — u joyida turadi.
+ */
+export async function stopSalesAiAction(): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  const previous = await getSalesSettings();
+  try {
+    await saveSalesSetting(
+      "flow",
+      { ...previous.flow, autoReplyEnabled: false },
+      ctx.userId,
+    );
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "To‘xtatilmadi." };
+  }
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.emergency_stop",
+    entityType: "sales_settings",
+    entityId: "flow",
+    oldValue: { autoReplyEnabled: previous.flow.autoReplyEnabled },
+    newValue: { autoReplyEnabled: false },
+    severity: "critical",
+  });
+
+  revalidateSales();
+  return { ok: true, message: "AI sotuv to‘xtatildi. Yangi avtomatik xabar yuborilmaydi." };
 }
 
 /** Sinov: ssenariyni bazasiz va Telegramsiz o‘ynab ko‘rish. */
