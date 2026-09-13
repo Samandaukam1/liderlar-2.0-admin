@@ -25,6 +25,10 @@ export const PII_KINDS = [
   "card",
   "document",
   "phone",
+  /* --- 2-faza (8, 32 va 33-band) --- */
+  "intake_link",
+  "telegram_id",
+  "telegram_username",
 ] as const;
 export type PiiKind = (typeof PII_KINDS)[number];
 
@@ -35,6 +39,9 @@ export const PII_PLACEHOLDERS: Record<PiiKind, string> = {
   card: "[karta raqami]",
   document: "[hujjat raqami]",
   phone: "[telefon]",
+  intake_link: "[anketa havolasi]",
+  telegram_id: "[telegram id]",
+  telegram_username: "[telegram foydalanuvchi]",
 };
 
 interface Rule {
@@ -44,6 +51,17 @@ interface Rule {
   replace?: (match: string) => string;
   /** Yolg'on moslikni rad etadi (masalan "+5 000 000 so'm" — telefon emas). */
   guard?: (match: string) => boolean;
+}
+
+/**
+ * Moslik ichida ALLAQACHON qo'yilgan o'rin egasi bormi.
+ *
+ * Ba'zi qoidalar `label: qiymat` shaklini almashtiradi va natija
+ * (`token: [maxfiy]`) o'sha qoidaga qayta tushadi. Tekshirmasak,
+ * redaksiyadan o'tgan matn ham "PII bor" deb baholanardi.
+ */
+function isPlaceholder(match: string): boolean {
+  return Object.values(PII_PLACEHOLDERS).some((placeholder) => match.includes(placeholder));
 }
 
 /** Moslikdagi raqamlar soni — telefon uzunligini tekshirish uchun. */
@@ -69,6 +87,11 @@ const RULES: Rule[] = [
     kind: "secret",
     pattern: /\b(token|secret|password|parol|api[_-]?key|apikey|kalit)\b\s*[:=]\s*\S{4,}/gi,
     replace: (match) => `${match.split(/[\s:=]/)[0]}: ${PII_PLACEHOLDERS.secret}`,
+    // O'Z NATIJASINI QAYTA USHLAMASIN. `token: [maxfiy]` ham shu
+    // naqshga to'g'ri keladi, ya'ni redaksiyadan o'tgan matn
+    // "hali ham PII bor" deb baholanardi va `isRedacted()` doim
+    // `false` qaytarardi — bilim yozuvi umuman saqlanmasdi.
+    guard: (match) => !isPlaceholder(match),
   },
   // Uzun hex — imzo, xesh, sessiya identifikatori.
   { kind: "secret", pattern: /\b[A-Fa-f0-9]{32,}\b/g },
@@ -83,6 +106,27 @@ const RULES: Rule[] = [
   { kind: "card", pattern: /(?<!\d)\d{4}[ \-]?\d{4}[ \-]?\d{4}[ \-]?\d{4}(?!\d)/g },
   // JSHSHIR / PINFL (14 xona).
   { kind: "document", pattern: /(?<!\d)\d{14}(?!\d)/g },
+
+  /*
+   * --- 3b. BELGILANGAN TELEGRAM IDENTIFIKATORI ---
+   *
+   * TELEFON QOIDALARIDAN OLDIN turishi SHART. Telegram
+   * identifikatori odatda 9–10 xonali va ko'pi "9" bilan
+   * boshlanadi — ya'ni u O'zbekiston operator kodi naqshiga
+   * to'g'ri keladi va telefon deb maskalanardi. Natijada
+   * `telegram_id` toifasi hech qachon ishlamasdi.
+   *
+   * Yorliq (`telegram id:`) talab qilinadi: usiz yalang son
+   * narx ham bo'lishi mumkin.
+   */
+  {
+    kind: "telegram_id",
+    pattern: /\b(telegram\s*id|chat\s*id|user\s*id)\b\s*[:=]?\s*\d{5,}/gi,
+    replace: (match) => {
+      const label = match.match(/^[A-Za-z\s]+/)?.[0]?.trim() ?? "id";
+      return `${label}: ${PII_PLACEHOLDERS.telegram_id}`;
+    },
+  },
 
   // --- 4. Telefon ---
   // +998 XX XXX XX XX (ajratgichlar ixtiyoriy).
@@ -106,6 +150,68 @@ const RULES: Rule[] = [
 
   // --- 5. Hujjat seriyasi: AA1234567 ---
   { kind: "document", pattern: /\b[A-Z]{2}[ \-]?\d{7}\b/g },
+
+  /* ==================== 2-FAZA QO'SHIMCHALARI ====================== */
+
+  /*
+   * --- 6. ANKETA HAVOLASI (33-band) ---
+   *
+   * `https://.../anketa/<32 bayt base64url>` — bu BIR MARTALIK
+   * KIRISH KALITI. Kim havolani ko'rsa, o'sha mijozning anketasini
+   * ochadi. Auditda aniqlangan: `send(intakeLink)` matni
+   * `sales_outbound_log.body` ga xom holda yozilardi, ya'ni kalit
+   * keng o'qiladigan jurnalda qolardi.
+   *
+   * Havolaning O'ZI o'chirilmaydi — yo'l saqlanadi, faqat TOKEN
+   * almashtiriladi. Shunda admin qaysi havola ekanini ko'radi,
+   * lekin uni ISHLATA OLMAYDI.
+   */
+  {
+    kind: "intake_link",
+    pattern: /(https?:\/\/[^\s/]+\/(?:anketa|intake)\/)[A-Za-z0-9_-]{16,}/gi,
+    replace: (match) => {
+      const base = match.match(/^https?:\/\/[^\s/]+\/(?:anketa|intake)\//i)?.[0] ?? "";
+      return `${base}${PII_PLACEHOLDERS.intake_link}`;
+    },
+  },
+  // Bearer token URL ichida (`?token=...`, `&access_token=...`).
+  {
+    kind: "secret",
+    pattern: /([?&](?:token|access_token|key|secret|auth)=)[A-Za-z0-9._~-]{12,}/gi,
+    replace: (match) => {
+      const prefix = match.match(/^[?&][A-Za-z_]+=/)?.[0] ?? "";
+      return `${prefix}${PII_PLACEHOLDERS.secret}`;
+    },
+    guard: (match) => !isPlaceholder(match),
+  },
+
+  /*
+   * --- 7. TELEGRAM IDENTIFIKATORI ---
+   *
+   * FAQAT TELEGRAM KONTEKSTIDA. Yalang 9–10 xonali son narx
+   * ham bo'lishi mumkin ("100 000 000 so'm"), shuning uchun
+   * qoida `tg://user?id=` yoki "telegram id" kabi ANIQ belgini
+   * talab qiladi. Belgisiz sonni ushlash biznes faktini
+   * buzardi.
+   */
+  {
+    kind: "telegram_id",
+    pattern: /tg:\/\/user\?id=\d{5,}/gi,
+  },
+  // t.me havolasi — foydalanuvchi nomini ochadi.
+  { kind: "telegram_username", pattern: /\b(?:https?:\/\/)?t\.me\/[A-Za-z0-9_]{4,}/gi },
+
+  /*
+   * --- 8. @foydalanuvchi ---
+   *
+   * Eng oxirida: `@` bilan boshlangan blok email qoidasidan
+   * keyin turishi SHART, aks holda "ism@domen.uz" ning
+   * domen qismi foydalanuvchi nomi deb olinardi.
+   *
+   * Telegram nomi kamida 5 belgi bo'ladi; qisqa `@` bloklari
+   * (masalan `@1`) qoidaga tushmaydi.
+   */
+  { kind: "telegram_username", pattern: /(?<![\w.])@[A-Za-z][A-Za-z0-9_]{4,31}\b/g },
 ];
 
 export interface RedactionResult {

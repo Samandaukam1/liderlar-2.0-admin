@@ -8,8 +8,29 @@
  *
  * BALL MIJOZGA HECH QACHON KO'RSATILMAYDI.
  *
+ * ── OG'IRLIKLAR EVRISTIK (34-band) ────────────────────────────────
+ *
+ * Quyidagi ballar STATISTIK OPTIMALLASHTIRILMAGAN. Ular
+ * tajribaga asoslangan taxmin va shundayligicha belgilanadi.
+ * Ularni "o'lchangan" deb ko'rsatish yolg'on ishonch berardi:
+ * qaysi signal haqiqatan konversiyaga olib kelishini aytish
+ * uchun tasdiqlangan sotuvlar bo'yicha yetarli namuna kerak,
+ * o'lchangan holatda esa `completed` sotuv soni juda kichik.
+ *
+ * Admin panelida bu ochiq yoziladi.
+ *
  * SOF MODUL.
  */
+
+/**
+ * Og'irliklarning kelib chiqishi — adminda ko'rsatiladi.
+ * Yetarli tasdiqlangan sotuv to'planganda `evidence_based`
+ * ga o'tkazish mumkin, lekin buni KOD emas, o'lchov hal qiladi.
+ */
+export const LEAD_WEIGHT_BASIS = "heuristic" as const;
+export const LEAD_WEIGHT_BASIS_NOTE =
+  "Og‘irliklar evristik — tajribaga asoslangan taxmin. Statistik " +
+  "optimallashtirilmagan va konversiya sababi sifatida talqin qilinmasin.";
 
 import { normalizeForIntent } from "../text-normalize.ts";
 import type { SalesStage } from "./stages.ts";

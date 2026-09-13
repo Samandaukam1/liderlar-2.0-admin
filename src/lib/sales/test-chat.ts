@@ -8,9 +8,9 @@ import {
   getActiveStyleProfile,
 } from "./repository.ts";
 import { guessIntentFromText } from "./intents.ts";
+import { findUnsupportedNumericClaims } from "./number-guard.ts";
 import {
   computeConfidence,
-  findUnsupportedNumbers,
   isMissingKnowledge,
   selectKnowledge,
   selectPatterns,
@@ -120,6 +120,14 @@ export async function generateTestReply(options: {
    * himoyalardan o'tadi.
    */
   extraContext?: string | null;
+  /**
+   * TASDIQLANGAN FAKT MATNLARI — raqam tekshiruvi uchun.
+   *
+   * Joriy tijoriy sozlama (narx, muddat) va real tranzaksiya
+   * holati shu yerdan keladi. Uslub namunalari BU RO'YXATGA
+   * KIRMAYDI: ular fakt manbai emas (38-band).
+   */
+  verifiedFactTexts?: readonly string[];
 }): Promise<TestChatResult> {
   const startedAt = Date.now();
   const model = resolveModel("sales");
@@ -200,13 +208,31 @@ export async function generateTestReply(options: {
   });
 
   /* --------------------- 4. GALLYUTSINATSIYA TO‘SIG‘I ------------------ */
-  // Promt qanchalik qattiq bo'lmasin, model ba'zan raqam to'qiydi.
-  // Shuning uchun javob YARATILGANDAN KEYIN ham tekshiriladi.
+  /*
+   * Promt qanchalik qattiq bo'lmasin, model ba'zan raqam to'qiydi.
+   * Shuning uchun javob YARATILGANDAN KEYIN ham tekshiriladi.
+   *
+   * ── 2-FAZA: IKKI TUZATISH (31 va 38-band) ──────────────────────
+   *
+   * 1. NAMUNALAR ENDI FAKT MANBAI EMAS. Ilgari
+   *    `patterns.map(p => p.responseExample)` ruxsat etilgan
+   *    raqamlar to'plamiga qo'shilardi. Ya'ni sotuvchi bir yil
+   *    oldin "38 ming" deb yozgan bo'lsa, o'sha son BUGUN ham
+   *    "tasdiqlangan" bo'lib ko'rinardi. Promt esa namunalarni
+   *    faqat USLUB deb ta'riflaydi — ya'ni kod va promt bir-biriga
+   *    zid edi. Endi fakt manbai faqat tasdiqlangan bilim va
+   *    joriy tijoriy sozlama.
+   *
+   * 2. SEMANTIK TEKSHIRUV. Eski `findUnsupportedNumbers()` bir
+   *    xonali sonlarni umuman ko'rmasdi, ya'ni manbasiz "2 kun"
+   *    bemalol o'tib ketardi.
+   */
   const allowedTexts = [
     ...selection.items.map((entry) => `${entry.item.question ?? ""} ${entry.item.answer}`),
-    ...patterns.map((pattern) => pattern.responseExample),
+    ...(options.verifiedFactTexts ?? []),
   ];
-  const unsupportedNumbers = findUnsupportedNumbers(reply, allowedTexts);
+  const unsupportedClaims = findUnsupportedNumericClaims(reply, allowedTexts);
+  const unsupportedNumbers = unsupportedClaims.map((claim) => claim.phrase);
 
   const diagnostics: TestChatDiagnostics = {
     intentKey: intent?.key ?? null,
