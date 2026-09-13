@@ -56,6 +56,18 @@ interface IntentRule extends QuestionIntent {
    * g'olib bo'ladi, shuning uchun aniqroq qoida yuqorida turadi.
    */
   patterns: readonly RegExp[];
+  /**
+   * MAVZU NOMI SAVOL EMAS.
+   *
+   * Ba'zi qoidalar shunchaki mavzu so'zini qidiradi ("instagram",
+   * "google"). Mijoz "Instagramdan ko'rdim" deb yozsa, bu MAVZUNI
+   * eslatish, savol emas. O'lchov buni tasdiqladi: `instagram`
+   * bo'yicha 121 moslikning atigi 59 tasi savolga o'xshardi —
+   * ya'ni reyting deyarli ikki barobar shishib ketardi.
+   *
+   * Shunday qoidalar uchun so'roq belgisi QO'SHIMCHA talab qilinadi.
+   */
+  requireQuestionMarker?: boolean;
 }
 
 /* ---------------------------- niyat lug'ati ----------------------------- */
@@ -90,13 +102,23 @@ const INTENT_RULES: readonly IntentRule[] = [
       /\bto['’ʻ]?lov\s+qanaqa\b/i,
       /\bqa(y|)erga\s+(to['’ʻ]?la|tasha|pul)/i,
       /\bqa(t|y)ga\s+ta(sh|shl)a/i,
-      /\bkarta\s+raqam/i,
-      /\bkarta\s+raqami?\b/i,
       /\bqaysi\s+kartaga\b/i,
       /\bpulni\s+qanday\b/i,
       /\bpulni\s+qa(y|t)erga\b/i,
-      /\bhisob\s+raqam/i,
     ],
+  },
+  {
+    /*
+     * "karta raqam" YOLG'IZ O'ZI savol emas: "karta raqamiga
+     * tashladim" — bu bajarilgan ish haqida xabar. Shuning uchun
+     * bu shakl so'roq belgisini talab qiladi.
+     */
+    key: "payment_method",
+    label: "To‘lovni qanday qilaman",
+    kind: "question",
+    category: "payment",
+    patterns: [/\bkarta\s+raqam/i, /\bhisob\s+raqam/i],
+    requireQuestionMarker: true,
   },
   {
     key: "payment_total",
@@ -413,6 +435,7 @@ const INTENT_RULES: readonly IntentRule[] = [
     kind: "question",
     category: "benefit",
     patterns: [/\bgoogle\b/i, /\bindeks/i, /\bqidiruvda\s+chiq/i, /\bgugl/i],
+    requireQuestionMarker: true,
   },
   {
     key: "eligibility",
@@ -435,6 +458,7 @@ const INTENT_RULES: readonly IntentRule[] = [
     kind: "question",
     category: "distribution",
     patterns: [/\binstagram/i, /\binstagramga\s+quy/i, /\bstoriesga\b/i],
+    requireQuestionMarker: true,
   },
 
   /* ---------- TAHRIR ---------- */
@@ -516,8 +540,11 @@ export function mineQuestion(text: string | null | undefined): MinedQuestion | n
 
   const normalized = normalizeForIntent(raw);
 
+  const questionLike = looksLikeQuestion(raw);
+
   for (const rule of INTENT_RULES) {
     if (!rule.patterns.some((pattern) => pattern.test(normalized))) continue;
+    if (rule.requireQuestionMarker && !questionLike) continue;
     return {
       intentKey: rule.key,
       intentLabel: rule.label,
@@ -572,8 +599,11 @@ export function mineQuestions(text: string | null | undefined): MinedQuestion[] 
   const matched: MinedQuestion[] = [];
   const seen = new Set<string>();
 
+  const questionLike = looksLikeQuestion(raw);
+
   for (const rule of INTENT_RULES) {
     if (!rule.patterns.some((pattern) => pattern.test(normalized))) continue;
+    if (rule.requireQuestionMarker && !questionLike) continue;
     if (seen.has(rule.key)) continue;
     seen.add(rule.key);
     matched.push({
