@@ -234,3 +234,34 @@ test("uslub namunalari FAKT MANBAI emas", () => {
   );
   assert.match(testChat, /verifiedFactTexts/);
 });
+
+/* ==================== YETKAZISH VA BOSQICH TARTIBI ==================== */
+
+test("ANIQ yetkazish xatosida bosqich ORQAGA qaytariladi", () => {
+  /*
+   * 29-BAND. Bosqich yuborishdan oldin suriladi (avtorizatsiya
+   * yangi bosqichni kutadi), lekin Telegram aniq xato qaytarsa
+   * mijoz hech narsa olmagan — u hali eski bosqichda. Bosqichni
+   * oldinga qoldirish suhbatni mijoz KO'RMAGAN holatga o'tkazardi.
+   */
+  assert.match(engine, /const allFailed = /);
+  assert.match(engine, /bosqich .* qaytarildi|qaytarildi/);
+  // Yetkazilmagan qadamga eslatma rejalashtirilmaydi.
+  assert.match(engine, /allFailed && !isRePrompt/);
+});
+
+test("NOMA’LUM yetkazish qaytarilmaydi ham, qayta yuborilmaydi ham", () => {
+  assert.match(engine, /anyUnknown/);
+  assert.match(engine, /qayta yuborilmadi/);
+});
+
+test("siyosat rad etgani XATO deb sanalmaydi", () => {
+  // Rollout o'chiq bo'lsa biz ATAYLAB jim qolamiz — bu yetkazish
+  // xatosi emas va bosqichni qaytarmasligi kerak.
+  assert.match(engine, /outcome !== "refused"/);
+});
+
+test("yuborish natijasi to‘rt holatga ajratilgan", () => {
+  assert.match(engine, /export type SendOutcome = "sent" \| "refused" \| "failed" \| "unknown"/);
+  assert.match(engine, /deliveryUnknown/);
+});

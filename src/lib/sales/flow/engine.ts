@@ -187,6 +187,23 @@ async function loadConversation(conversationId: string): Promise<FlowConversatio
 
 /* ------------------------------- yuborish -------------------------------- */
 
+/**
+ * Yuborish natijasi (29-band).
+ *
+ * TO'RT HOLAT, va ular ATAYLAB ajratilgan:
+ *
+ *   · `sent`     — Telegram qabul qildi;
+ *   · `refused`  — siyosat ruxsat bermadi (rollout, opt-out). Bu
+ *                  XATO EMAS: biz ataylab jim qoldik;
+ *   · `failed`   — Telegram ANIQ xato qaytardi, mijoz olmadi;
+ *   · `unknown`  — timeout/uzilish. Yetkazilgani NOMA'LUM.
+ *
+ * Oxirgi ikkitasini aralashtirish qimmatga tushadi: `failed` da
+ * bosqichni oldinga surish yolg'on holat yaratadi, `unknown` da esa
+ * qayta yuborish mijozga IKKINCHI nusxani jo'natadi.
+ */
+export type SendOutcome = "sent" | "refused" | "failed" | "unknown";
+
 export interface SentMessage {
   templateKey: string | null;
   body: string;
@@ -250,7 +267,7 @@ async function send(
      */
     logBody?: string;
   },
-): Promise<boolean> {
+): Promise<SendOutcome> {
   const decision = authorizeOutbound({
     conversationId: context.conversation.id,
     businessConnectionId: context.conversation.businessConnectionId,
@@ -274,17 +291,21 @@ async function send(
     if (!context.result.refusals.includes(decision.reason)) {
       context.result.refusals.push(decision.reason);
     }
-    return false;
+    return "refused";
   }
 
   let telegramMessageId: number | null = null;
   let error: string | null = null;
+  // Uzilish/timeout ANIQ xatodan ajratiladi: birinchisida xabar
+  // yetgan bo'lishi MUMKIN, ikkinchisida aniq yetmagan.
+  let deliveryUnknown = false;
   try {
     const sendResult = await sendSalesMessage(decision.authorization, input.body);
     telegramMessageId = sendResult.telegramMessageId;
     if (!sendResult.ok) error = sendResult.error;
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
+    deliveryUnknown = /timeout|aborted|ETIMEDOUT|ECONNRESET|fetch failed/i.test(error);
   }
 
   // Yuborilgan (yoki urinilgan) HAR xabar jurnalga tushadi.
@@ -302,8 +323,14 @@ async function send(
   });
 
   if (error) {
+    if (deliveryUnknown) {
+      context.result.notes.push(
+        `yetkazilgani NOMA’LUM (qayta yuborilmadi): ${error}`,
+      );
+      return "unknown";
+    }
     context.result.notes.push(`yuborilmadi: ${error}`);
-    return false;
+    return "failed";
   }
 
   context.result.sent.push({
@@ -349,7 +376,7 @@ async function send(
         .eq("id", context.conversation.id);
     }
   }
-  return true;
+  return "sent";
 }
 
 /**
@@ -893,15 +920,19 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
 
   /* ------------------------- shablonlarni yuborish ----------------------- */
   // Havola shablondan OLDIN yuboriladi: ko'rsatma havolaga tegishli.
+  const outcomes: SendOutcome[] = [];
+
   if (intakeLink) {
-    await send(context, {
-      body: intakeLink,
-      kind: "template",
-      templateKey: null,
-      expectedStages: [transition.to],
-      // Mijoz to'liq havolani oladi; jurnalda token qolmaydi.
-      logBody: redactPii(intakeLink).text,
-    });
+    outcomes.push(
+      await send(context, {
+        body: intakeLink,
+        kind: "template",
+        templateKey: null,
+        expectedStages: [transition.to],
+        // Mijoz to'liq havolani oladi; jurnalda token qolmaydi.
+        logBody: redactPii(intakeLink).text,
+      }),
+    );
     await syncMemory(context, { intakeStatus: "link_sent" });
   }
 
@@ -911,12 +942,58 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
       result.notes.push(`shablon topilmadi: ${key}`);
       continue;
     }
-    await send(context, {
-      body: template.body,
-      kind: "template",
-      templateKey: key,
-      expectedStages: [transition.to],
-    });
+    outcomes.push(
+      await send(context, {
+        body: template.body,
+        kind: "template",
+        templateKey: key,
+        expectedStages: [transition.to],
+      }),
+    );
+  }
+
+  /* ------------------ YETKAZILMAGAN BOSQICH ORQAGA QAYTADI --------------- */
+  /*
+   * 29-BAND: "Do not falsely advance stage before delivery is known."
+   *
+   * Bosqich yuborishdan OLDIN suriladi — bu ataylab, chunki
+   * `send()` avtorizatsiyasi yangi bosqichni kutadi. Lekin
+   * Telegram ANIQ xato qaytarsa, mijoz hech narsa olmagan:
+   * u hali eski bosqichda turibdi. Bosqichni oldinga qoldirish
+   * suhbatni mijoz ko'rmagan holatga o'tkazardi va keyingi
+   * xabari butunlay boshqa ma'noda talqin qilinardi.
+   *
+   * FAQAT ANIQ XATODA qaytariladi:
+   *   · `refused` — biz ataylab jim qoldik, holat haqiqiy;
+   *   · `unknown` — xabar yetgan bo'lishi MUMKIN, qaytarish ham,
+   *     qayta yuborish ham xato bo'lardi. Qayd etiladi va odam
+   *     ko'radi.
+   */
+  const attempted = outcomes.filter((outcome) => outcome !== "refused");
+  const allFailed = attempted.length > 0 && attempted.every((outcome) => outcome === "failed");
+  const anyUnknown = attempted.some((outcome) => outcome === "unknown");
+
+  if (allFailed && !isRePrompt) {
+    await moveStage(
+      { ...conversation, stage: transition.to },
+      result.stageBefore,
+      { intent, messageId: input.messageId },
+    );
+    conversation.stage = result.stageBefore;
+    context.stage = result.stageBefore;
+    result.stageAfter = result.stageBefore;
+    result.notes.push(
+      `yetkazilmadi — bosqich ${transition.to} dan ${result.stageBefore} ga qaytarildi`,
+    );
+    // Yetkazilmagan qadam uchun eslatma rejalashtirilmaydi: u
+    // mijoz ko'rmagan xabarga javob so'ragan bo'lardi.
+    return result;
+  }
+
+  if (anyUnknown) {
+    result.notes.push(
+      "yetkazilgani noma’lum — bosqich qoldirildi, qayta yuborilmadi, tekshiruv kerak",
+    );
   }
 
   /* --------------------------- follow-up rejasi -------------------------- */
@@ -1195,13 +1272,14 @@ async function answerFromKnowledge(
     context.result.notes.push("takroriy salomlashish olib tashlandi");
   }
 
-  const sent = await send(context, {
+  const outcome = await send(context, {
     body,
     kind: "knowledge_reply",
     templateKey: null,
     // Bilim javobi har bosqichda mumkin.
     expectedStages: [],
   });
+  const sent = outcome === "sent";
 
   // Yuborilmagan bo'lsa sabab `refusals` da — u yerda sozlama yoki
   // rollout turadi va fallback ham o'sha to'siqqa urilardi.
