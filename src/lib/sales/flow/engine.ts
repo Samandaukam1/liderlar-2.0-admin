@@ -28,7 +28,16 @@ import { detectMinor } from "./minor.ts";
 import { buildFallback, isFillerMessage, type FallbackReason } from "./fallback.ts";
 import { newRolloutBucket, type RolloutSettings } from "./rollout.ts";
 import { normalizeForMatch } from "../text-normalize.ts";
-import { checkReplyQuality } from "./reply-quality.ts";
+import { buildCorrectionInstruction, checkReplyQuality } from "./reply-quality.ts";
+import { buildAlreadySaidBlock } from "./repetition.ts";
+import { getCommercialFacts } from "../commercial.ts";
+import { buildCommercialBlock } from "../commercial-facts.ts";
+import {
+  benefitsAlreadySent,
+  CANONICAL_BENEFITS_TEMPLATE_KEY,
+  CANONICAL_BENEFITS_TEXT,
+  isGeneralBenefitsQuestion,
+} from "./canonical-benefits.ts";
 
 /**
  * SOTUV OQIMI DVIGATELI.
@@ -703,6 +712,33 @@ async function answerFromKnowledge(
 ): Promise<void> {
   const trimmed = question.trim();
 
+  /*
+   * KANONIK FOYDALAR MATNI (12-band).
+   *
+   * Mijoz umumiy "menga nima beradi?" savolini bersa, rasmiy matn
+   * AYNAN shu holida ketadi — modelga qayta yozdirilmaydi: unda
+   * oferta havolasi va o'n to'rtta aniq va'da bor, va har safar
+   * boshqacha yozilsa bu har safar boshqacha va'da demakdir.
+   *
+   * BIR MARTA. Mijoz keyin yana so'rasa, butun matn qayta kelmaydi:
+   * uch yarim ming belgilik xabarni ikkinchi marta o'qish hech kim
+   * qilmaydigan ish va uni yuborish "men sizni tinglamadim" degan
+   * xabar beradi. O'rniga aniq savoliga qisqa javob boradi.
+   */
+  if (isGeneralBenefitsQuestion(trimmed)) {
+    const alreadySent = await listExplainedTopics(context.conversation.id);
+    if (!benefitsAlreadySent(alreadySent)) {
+      await send(context, {
+        body: CANONICAL_BENEFITS_TEXT,
+        kind: "template",
+        templateKey: CANONICAL_BENEFITS_TEMPLATE_KEY,
+        expectedStages: [],
+      });
+      return;
+    }
+    context.result.notes.push("kanonik foydalar allaqachon yuborilgan — qisqa javob");
+  }
+
   // Matnsiz xabar (stiker, ovozli). Bilim qidirishning ma'nosi yo'q,
   // lekin javobsiz qoldirish ham mumkin emas.
   if (trimmed === "") {
@@ -719,9 +755,26 @@ async function answerFromKnowledge(
 
   const history = await loadRecentHistory(context.conversation.id);
 
+  /*
+   * SUHBAT KONTEKSTI — javobdan OLDIN quriladi (4- va 10-band).
+   *
+   * Ikki blok modelga qo'shiladi:
+   *   · TIJORIY FAKTLAR — narx va muddat YAGONA manbadan. Bilim
+   *     bazasidagi eski narx yozuvi bo'lsa ham, haqiqiy qiymat shu
+   *     yerdan keladi.
+   *   · ALLAQACHON AYTILGANLAR — model o'zi ham takrorlamaslikka
+   *     harakat qilsin. Takror tekshiruvi shunda OXIRGI himoya bo'lib
+   *     qoladi, birinchisi emas: bloklangan javob mijozni kuttiradi.
+   */
+  const commercial = buildCommercialBlock(await getCommercialFacts());
+  const alreadySaid = buildAlreadySaidBlock(
+    history.filter((turn) => turn.role === "assistant").map((turn) => turn.text),
+  );
+  const extraContext = [commercial, alreadySaid].filter((block) => block !== "").join("\n\n");
+
   let reply: Awaited<ReturnType<typeof generateTestReply>>;
   try {
-    reply = await generateTestReply({ message: trimmed, history, actorId: null });
+    reply = await generateTestReply({ message: trimmed, history, actorId: null, extraContext });
   } catch (err) {
     // Model yiqildi yoki timeout. Mijoz buni bilishi shart emas.
     context.result.notes.push(
@@ -749,21 +802,64 @@ async function answerFromKnowledge(
     return;
   }
 
-  const quality = checkReplyQuality({
-    body: reply.reply,
-    unsupportedNumbers: reply.diagnostics.unsupportedNumbers,
-    // Chegirma bilimi tasdiqlangan bo'lsa, retrieval uni manba
-    // sifatida qaytargan bo'ladi.
-    discountApproved: reply.diagnostics.sources.some((source) =>
-      normalizeForMatch(`${source.title} ${source.body}`).includes("chegirma"),
-    ),
-    paymentStatus: context.conversation.paymentStatus,
-  });
+  const previousReplies = history
+    .filter((turn) => turn.role === "assistant")
+    .map((turn) => turn.text);
+
+  const discountApproved = reply.diagnostics.sources.some((source) =>
+    normalizeForMatch(`${source.title} ${source.body}`).includes("chegirma"),
+  );
+
+  const runQuality = (body: string) =>
+    checkReplyQuality({
+      body,
+      unsupportedNumbers: reply.diagnostics.unsupportedNumbers,
+      discountApproved,
+      paymentStatus: context.conversation.paymentStatus,
+      previousAssistantMessages: previousReplies,
+    });
+
+  let quality = runQuality(reply.reply);
+
+  /*
+   * BIR MARTA QAYTA YARATISH (31-band).
+   *
+   * Til yoki takror buzilgan bo'lsa, javobning MAZMUNI odatda
+   * to'g'ri — faqat ifodasi xato. Bunday holatda darhol fallbackka
+   * o'tish mijozga foydali javobni yo'qotardi. Shuning uchun bir
+   * marta tuzatish ko'rsatmasi bilan qayta so'raymiz.
+   *
+   * FAQAT BIR MARTA: ikkinchi urinish ham yiqilsa, model bu savolni
+   * uddalay olmayapti degani. Cheksiz urinish ham pul sarflaydi,
+   * ham mijozni kuttiradi.
+   */
+  if (!quality.ok) {
+    context.result.notes.push(`sifat darvozasi: ${quality.blocked.join(", ")}`);
+    const correction = buildCorrectionInstruction(quality.blocked);
+    try {
+      const retry = await generateTestReply({
+        message: `${trimmed}\n\n${correction}`,
+        history,
+        actorId: null,
+        extraContext,
+      });
+      if (retry.diagnostics.unsupportedNumbers.length === 0) {
+        const retryQuality = runQuality(retry.reply);
+        if (retryQuality.ok) {
+          reply = retry;
+          quality = retryQuality;
+          context.result.notes.push("qayta yaratish muvaffaqiyatli");
+        }
+      }
+    } catch (err) {
+      context.result.notes.push(
+        `qayta yaratish yiqildi: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   if (!quality.ok) {
-    // Model taqiqlangan da'vo yozdi (kafolat, to'qilgan shoshilinchlik).
-    // Bu javob mijozga KETMAYDI.
-    context.result.notes.push(`sifat darvozasi: ${quality.blocked.join(", ")}`);
+    // Ikkinchi urinish ham o'tmadi. Bu javob mijozga KETMAYDI.
     await sendFallback(context, "low_confidence");
     await escalateToHuman(context, "repeated_misunderstanding", question);
     return;

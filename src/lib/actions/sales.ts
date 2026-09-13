@@ -660,7 +660,9 @@ export async function answerKnowledgeGapAction(
   const { data: created, error } = await admin
     .from("sales_knowledge")
     .insert({
-      category: "other",
+      // 'faq' — haqiqiy kategoriya. Ilgari bu yerda 'other' turgan edi
+      // va u CHECK cheklovidan o'tmasdi: javob saqlanmasdi.
+      category: "faq",
       question: gap.question as string,
       answer,
       tags: [],

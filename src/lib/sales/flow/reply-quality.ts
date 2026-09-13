@@ -13,6 +13,8 @@
  */
 
 import { normalizeForMatch } from "../text-normalize.ts";
+import { checkOutboundLanguage } from "./language-guard.ts";
+import { checkRepetition } from "./repetition.ts";
 
 export const QUALITY_VIOLATIONS = [
   "guaranteed_ranking",
@@ -27,6 +29,9 @@ export const QUALITY_VIOLATIONS = [
   "unsupported_number",
   "empty",
   "too_long",
+  // Til va takror — 7, 8 va 9-bandlar.
+  "not_uzbek",
+  "repeated_message",
 ] as const;
 export type QualityViolation = (typeof QUALITY_VIOLATIONS)[number];
 
@@ -43,6 +48,8 @@ export const QUALITY_VIOLATION_LABELS: Record<QualityViolation, string> = {
   unsupported_number: "Manbada yo‘q son",
   empty: "Javob bo‘sh",
   too_long: "Javob juda uzun",
+  not_uzbek: "Javob o‘zbekcha emas",
+  repeated_message: "Oldingi javobning takrori",
 };
 
 /** Bloklanadigan buzilishlar — qolganlari ogohlantirish. */
@@ -57,6 +64,11 @@ const BLOCKING: readonly QualityViolation[] = [
   "human_impersonation",
   "unsupported_number",
   "empty",
+  // Inglizcha javob mijozga KETMAYDI: bu xizmatning tili emas va
+  // u bir qarashda "bu bot" degan xulosa beradi.
+  "not_uzbek",
+  // Takror ham bloklanadi: u xabarni o'qishga arzimas qilib qo'yadi.
+  "repeated_message",
 ];
 
 interface Pattern {
@@ -120,6 +132,17 @@ export interface QualityInput {
   paymentStatus: string;
   /** Telegram bitta xabarda shuncha belgi qabul qiladi. */
   maxChars?: number;
+  /**
+   * Shu chatda AI ilgari yozgan xabarlar — takrorni aniqlash uchun.
+   * Bo'sh bo'lsa takror tekshiruvi o'tkazib yuboriladi.
+   */
+  previousAssistantMessages?: readonly string[];
+  /**
+   * Kanonik shablon (oferta matni) tekshiruvdan CHETDA qoladi:
+   * u ataylab aynan shu holida yuboriladi va uni "takror" yoki
+   * "juda uzun" deb bloklash taklifning o'zini yo'q qilardi.
+   */
+  exactTemplate?: boolean;
 }
 
 export interface QualityResult {
@@ -135,6 +158,15 @@ export function checkReplyQuality(input: QualityInput): QualityResult {
   const warnings: QualityViolation[] = [];
   const body = input.body ?? "";
   const normalized = normalizeForMatch(body);
+
+  // Kanonik shablon — tahririyat yozgan rasmiy matn. Uni model
+  // yaratmagan, shuning uchun model xatolarini qidirishning ma'nosi
+  // yo'q; bo'shligini tekshirish yetarli.
+  if (input.exactTemplate) {
+    return body.trim() === ""
+      ? { ok: false, blocked: ["empty"], warnings: [] }
+      : { ok: true, blocked: [], warnings: [] };
+  }
 
   const add = (violation: QualityViolation) => {
     const bucket = BLOCKING.includes(violation) ? blocked : warnings;
@@ -158,6 +190,17 @@ export function checkReplyQuality(input: QualityInput): QualityResult {
 
   if (input.unsupportedNumbers.length > 0) add("unsupported_number");
 
+  // TIL — 7 va 8-band. Atoqli otlar (Google, Instagram) tekshiruvdan
+  // oldin olib tashlanadi, ya'ni ular javobni bloklamaydi.
+  const language = checkOutboundLanguage(body);
+  if (!language.ok) add("not_uzbek");
+
+  // TAKROR — 9-band. Aynan bir xil matn emas, MA'NO darajasida.
+  const previous = input.previousAssistantMessages ?? [];
+  if (previous.length > 0 && checkRepetition(body, previous).repeated) {
+    add("repeated_message");
+  }
+
   return { ok: blocked.length === 0, blocked, warnings };
 }
 
@@ -177,5 +220,22 @@ export function buildCorrectionInstruction(violations: readonly QualityViolation
     "to‘lovni tasdiqlangan deb aytma va o‘zingni odam deb ko‘rsatma.",
     "Faqat tasdiqlangan ma’lumotga tayan. Bilmasang — bilmasligingni ayt.",
   );
+
+  // Til buzilgan bo'lsa, sababni ALOHIDA aytamiz: "qaytadan yoz" degan
+  // umumiy ko'rsatma modelni yana o'sha tilda yozishdan to'xtatmaydi.
+  if (violations.includes("not_uzbek")) {
+    lines.push(
+      "",
+      "JAVOBING O‘ZBEKCHA EMAS EDI. Faqat o‘zbek tilida (lotin yozuvida) yoz.",
+      "Mijoz boshqa tilda yozgan bo‘lsa ham javob o‘zbekcha bo‘ladi.",
+    );
+  }
+  if (violations.includes("repeated_message")) {
+    lines.push(
+      "",
+      "JAVOBING OLDINGISINING TAKRORI EDI. Faktlar o‘zgarmaydi, lekin",
+      "ifodani butunlay boshqacha tuz va qisqaroq yoz.",
+    );
+  }
   return lines.join("\n");
 }

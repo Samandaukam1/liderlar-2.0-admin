@@ -109,6 +109,17 @@ export async function generateTestReply(options: {
   message: string;
   history: readonly TestChatTurn[];
   actorId: string | null;
+  /**
+   * Suhbatga xos qo'shimcha kontekst — tijoriy faktlar, allaqachon
+   * aytilganlar, sotuv holati.
+   *
+   * NEGA PARAMETR: bu modul sinov oynasi uchun ham, jonli suhbat
+   * uchun ham ishlatiladi. Sinovda suhbat konteksti yo'q, jonlisida
+   * bor. Ikkita alohida generator yasash o'rniga kontekst tashqaridan
+   * beriladi — shunda ikkala yo'l ham AYNAN bir xil promt va bir xil
+   * himoyalardan o'tadi.
+   */
+  extraContext?: string | null;
 }): Promise<TestChatResult> {
   const startedAt = Date.now();
   const model = resolveModel("sales");
@@ -170,6 +181,7 @@ export async function generateTestReply(options: {
     patterns,
     style,
     missingKnowledge,
+    extraContext: options.extraContext ?? null,
   });
 
   const completion = await getOpenAI().chat.completions.create({

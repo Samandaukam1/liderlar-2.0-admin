@@ -14,6 +14,7 @@
 
 import type { StyleProfile } from "./style.ts";
 import type { RetrievablePattern, ScoredKnowledge } from "./retrieval.ts";
+import { isUzbekGreeting, UZBEK_ONLY_RULE } from "./flow/language-guard.ts";
 
 export interface TestChatTurn {
   role: "customer" | "assistant";
@@ -35,8 +36,18 @@ export function buildStyleInstructions(profile: StyleProfile | null): string[] {
   if (profile.address.form === "siz") lines.push("Mijozga DOIM “siz” deb murojaat qil.");
   else if (profile.address.form === "sen") lines.push("Mijozga “sen” deb murojaat qil.");
 
-  if (profile.greeting.usageRate >= 0.4 && profile.greeting.top.length > 0) {
-    lines.push(`Salomlashish bilan boshla, masalan: “${profile.greeting.top[0].phrase}”.`);
+  /*
+   * SALOMLASHUV NAMUNASI FILTRLANADI.
+   *
+   * Bu yer "Hi" muammosining eng kutilmagan manbai edi: uslub profili
+   * real yozishmalardan salomlashuv namunalarini oladi va admin bir
+   * marta "Hi" deb yozgan bo'lsa, u namuna bo'lib tushardi. Keyin
+   * promt modelga AYNAN inglizcha salomlashishni BUYURARDI — ya'ni
+   * o'rganish tizimining o'zi muammoni kuchaytirardi.
+   */
+  const uzbekGreeting = profile.greeting.top.find((entry) => isUzbekGreeting(entry.phrase));
+  if (profile.greeting.usageRate >= 0.4 && uzbekGreeting) {
+    lines.push(`Salomlashish bilan boshla, masalan: “${uzbekGreeting.phrase}”.`);
   } else if (profile.greeting.usageRate < 0.15) {
     lines.push("Ortiqcha salomlashmasdan, to‘g‘ridan-to‘g‘ri mavzuga o‘t.");
   }
@@ -93,6 +104,8 @@ export interface SystemPromptInput {
   patterns: readonly RetrievablePattern[];
   style: StyleProfile | null;
   missingKnowledge: boolean;
+  /** Suhbatga xos kontekst: tijoriy faktlar, allaqachon aytilganlar. */
+  extraContext?: string | null;
 }
 
 export const TEST_CHAT_ROLE =
@@ -141,13 +154,38 @@ export function buildTestChatSystemPrompt(input: SystemPromptInput): string {
     sections.push(["YOZISH USLUBI:", ...styleLines.map((line) => `- ${line}`)].join("\n"));
   }
 
+  /* --------------------------- SUHBAT KONTEKSTI ------------------------ */
+  /*
+   * Bu blok QOIDALARDAN OLDIN turadi — u faktlar qatoriga kiradi,
+   * ko'rsatma emas. Tijoriy ma'lumot (narx, muddat) aynan shu yerdan
+   * keladi va u bilim bazasidagi eski yozuvdan USTUN: narx bitta
+   * joydan o'qilishi kerak (20-band).
+   */
+  const extra = (input.extraContext ?? "").trim();
+  if (extra !== "") sections.push(extra);
+
   /* ------------------------------ QOIDALAR ----------------------------- */
+  /*
+   * QOIDALAR TARTIBI MUHIM.
+   *
+   * "O'zbek tilida yoz" ilgari ro'yxatning OXIRGI bandi edi — eng kam
+   * e'tibor beriladigan joy. Model esa oxirgi navbat tilini aks
+   * ettirishga juda kuchli moyil: mijoz "hi" deb yozsa, "Hi" qaytardi.
+   * Bitta kuchsiz jumla bu moyillikni yenga olmasdi.
+   *
+   * Endi til qoidasi BIRINCHI va u aynan shu holatni — mijoz boshqa
+   * tilda yozgan holatni — nomma-nom aytadi.
+   */
   const rules = [
+    UZBEK_ONLY_RULE,
     "Yuqoridagi bilimda BO‘LMAGAN faktni aytma: narx, muddat, sana, foiz, " +
       "shart yoki kafolatni O‘YLAB TOPMA.",
     "Oldingi javoblarni so‘zma-so‘z ko‘chirma — mazmunni saqlab, tabiiy qayta yoz.",
+    "Bir xil gapni ikki marta aytma. Mijoz allaqachon eshitgan narsani " +
+      "qayta tushuntirsang, “yuqorida aytganimdek” deb qisqa ayt.",
     "Faqat mijozga yoziladigan matnni qaytar: izoh, sarlavha yoki tushuntirish qo‘shma.",
-    "O‘zbek tilida yoz.",
+    "Har javobni “Albatta”, “Ajoyib” yoki “Tushunarli” bilan boshlash ODAT QILMA.",
+    "Rasmiy-kitobiy uslubdan qoch. Tirik sotuvchi kabi tabiiy yoz.",
   ];
 
   if (input.missingKnowledge) {
