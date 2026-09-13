@@ -37,6 +37,30 @@ export const OBJECTION_KINDS = [
   "GOOGLE_INDEXING",
   "WIKIPEDIA",
   "SOCIAL_VERIFICATION",
+  /*
+   * 2-FAZA QO'SHIMCHASI (17-band).
+   *
+   * Auditda ko'rilgan, lekin toifasi bo'lmagan e'tirozlar. Ular
+   * ilgari `OTHER` ga tushardi yoki umuman yo'qolardi — ya'ni
+   * eng ko'p uchraydigan sotuvdan keyingi muammolar (rasm
+   * o'xshamasligi, internet, anketa nosozligi) statistikada
+   * KO'RINMASDI va ularga strategiya yozib bo'lmasdi.
+   */
+  "THOUGHT_FREE",
+  "WHY_PAY",
+  "INSTALLMENT",
+  "NOT_ENOUGH_ACHIEVEMENTS",
+  "PHOTO_PROBLEM",
+  "PHOTO_PRIVACY",
+  "PHOTO_LOOKS_DIFFERENT",
+  "TECHNICAL_PROBLEM",
+  "INTERNET_PROBLEM",
+  "NO_TIME",
+  "ARTICLE_QUESTION",
+  "GRANT_VALUE",
+  "SCAM_CONCERN",
+  "LICENSE",
+  "STOP",
   "OTHER",
 ] as const;
 
@@ -64,6 +88,21 @@ export const OBJECTION_LABELS: Record<ObjectionKind, string> = {
   GOOGLE_INDEXING: "Google’da chiqishi",
   WIKIPEDIA: "Wikipedia",
   SOCIAL_VERIFICATION: "Ko‘k belgi / tasdiq",
+  THOUGHT_FREE: "Bepul deb o‘ylagan",
+  WHY_PAY: "Nega pul to‘lashim kerak",
+  INSTALLMENT: "Bo‘lib to‘lash so‘rayapti",
+  NOT_ENOUGH_ACHIEVEMENTS: "Yutug‘im yetarli emas",
+  PHOTO_PROBLEM: "Rasm bilan muammo",
+  PHOTO_PRIVACY: "Rasm maxfiyligi",
+  PHOTO_LOOKS_DIFFERENT: "Rasm o‘xshamadi",
+  TECHNICAL_PROBLEM: "Texnik nosozlik",
+  INTERNET_PROBLEM: "Internet muammosi",
+  NO_TIME: "Vaqtim yo‘q",
+  ARTICLE_QUESTION: "Maqola bo‘yicha savol",
+  GRANT_VALUE: "Grant/stipendiyaga foydasi",
+  SCAM_CONCERN: "Firibgarlikdan xavotir",
+  LICENSE: "Litsenziya so‘rayapti",
+  STOP: "Yozmang",
   OTHER: "Boshqa e’tiroz",
 };
 
@@ -185,6 +224,83 @@ const RULES: readonly ObjectionRule[] = [
     kind: "SOCIAL_VERIFICATION",
     phrases: ["ko'k belgi", "kok belgi", "galochka", "tasdiqlangan akkaunt", "verified", "sinigi"],
   },
+
+  /* ---------------- 2-faza: auditda ko'rilgan e'tirozlar ---------------- */
+  {
+    kind: "THOUGHT_FREE",
+    phrases: ["bepul deb o'ylagandim", "tekin deb", "bepul emasmi", "tekin emasmi", "pullikmi"],
+  },
+  {
+    kind: "WHY_PAY",
+    phrases: [
+      "nega pul", "nimaga pul", "nega pullik", "pul qayerga ketadi",
+      "sizlarga nima foyda", "nima uchun to'layman",
+    ],
+  },
+  {
+    kind: "INSTALLMENT",
+    phrases: ["bo'lib to'lasa", "bolib tolasa", "qismlarga", "rassrochka", "bo'lib to'lash mumkinmi"],
+  },
+  {
+    kind: "NOT_ENOUGH_ACHIEVEMENTS",
+    phrases: [
+      "yutuqlarim yo'q", "yutugim yoq", "unchalik ko'p yutuq", "hali endi talaba",
+      "men to'g'ri kelamanmi", "mos kelamanmi",
+    ],
+  },
+  {
+    kind: "PHOTO_PROBLEM",
+    phrases: [
+      "rasm yuklanmayapti", "rasmni tahrirlay olmayapman", "gemini qilib bermayapti",
+      "rasm ketmayapti", "surat yuklanmadi",
+    ],
+  },
+  {
+    kind: "PHOTO_PRIVACY",
+    phrases: ["rasmimni yuboraolmayman", "rasmimni yubora olmayman", "hammaga ham rasmimni", "rasmim tarqal"],
+  },
+  {
+    kind: "PHOTO_LOOKS_DIFFERENT",
+    phrases: [
+      "rasmim o'xshamabdi", "o'xshamadi", "oxshamabdi", "yuzimni o'zgartir",
+      "o'zgartirib yuboribdi", "bu men emas", "juda uzgartrb",
+    ],
+  },
+  {
+    kind: "TECHNICAL_PROBLEM",
+    phrases: [
+      "ishlamayapti", "ochilmayapti", "saqlanmayapti", "xatolik chiqdi",
+      "qabul qilmadi", "link eskirgan", "havola ishlamayapti",
+    ],
+  },
+  {
+    kind: "INTERNET_PROBLEM",
+    phrases: ["internet yaxshi ishlamayapti", "internetim", "aloqa yo'q", "trafik yo'q"],
+  },
+  {
+    kind: "NO_TIME",
+    phrases: ["vaqtim yo'q", "bandman", "ishdan chiqib", "uyga borvolay", "keyinroq yozaman"],
+  },
+  {
+    kind: "ARTICLE_QUESTION",
+    phrases: ["maqola yozolmayman", "maqolani kim yozadi", "maqola yozasizlarmi", "men maqola beraman"],
+  },
+  {
+    kind: "GRANT_VALUE",
+    phrases: ["grant", "kontraktdan", "stipendiyaga", "ijtimoiy faollik", "ball beriladi"],
+  },
+  {
+    kind: "SCAM_CONCERN",
+    phrases: ["firibgarlik", "aldab", "pulni olib qochib", "pulimni yeb", "obman"],
+  },
+  {
+    kind: "LICENSE",
+    phrases: ["litsenziya berilganmi", "litsenziyangiz", "ruxsatnoma", "guvohnomangiz bormi"],
+  },
+  {
+    kind: "STOP",
+    phrases: ["boshqa yozmang", "yozmang", "bezovta qilmang", "obuna bekor", "unsubscribe", "otpishis"],
+  },
 ];
 
 export interface DetectedObjection {
@@ -242,9 +358,17 @@ export function mergeObjections(
   return [...set];
 }
 
-/** Eng muhim e'tiroz — javob shunga qaratiladi. */
+/**
+ * Eng muhim e'tiroz — javob shunga qaratiladi.
+ *
+ * TARTIB QOIDASI: mijozning ALOQANI TO'XTATISH talabi eng yuqorida,
+ * undan keyin ishonch va maxfiylik, keyin pul. Sabab oddiy: "boshqa
+ * yozmang" degan odamga narx tushuntirish eng qo'pol xato bo'lardi.
+ */
 const PRIORITY: readonly ObjectionKind[] = [
+  "STOP",
   "NOT_INTERESTED",
+  "SCAM_CONCERN",
   "TRUST",
   "IS_IT_REAL",
   "PRIVACY",
@@ -263,7 +387,20 @@ const PRIORITY: readonly ObjectionKind[] = [
   "SOCIAL_VERIFICATION",
   "CERTIFICATE",
   "TIME",
+  "PHOTO_LOOKS_DIFFERENT",
+  "PHOTO_PRIVACY",
+  "PHOTO_PROBLEM",
   "PHOTO_REQUIREMENT",
+  "TECHNICAL_PROBLEM",
+  "INTERNET_PROBLEM",
+  "LICENSE",
+  "THOUGHT_FREE",
+  "WHY_PAY",
+  "INSTALLMENT",
+  "NOT_ENOUGH_ACHIEVEMENTS",
+  "GRANT_VALUE",
+  "ARTICLE_QUESTION",
+  "NO_TIME",
   "HOW_FOUND_ME",
   "OTHER",
 ];
