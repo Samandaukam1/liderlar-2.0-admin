@@ -17,6 +17,7 @@ export const SALES_TABS = [
   { key: "responses", label: "Javoblar", href: "/ai-sotuv/javoblar" },
   { key: "knowledge", label: "Knowledge Base", href: "/ai-sotuv/knowledge" },
   { key: "gaps", label: "Javobsiz savollar", href: "/ai-sotuv/savollar" },
+  { key: "intelligence", label: "Sotuv aqli", href: "/ai-sotuv/aql" },
   { key: "style", label: "Uslub", href: "/ai-sotuv/uslub" },
   { key: "sandbox", label: "🧪 Sinov", href: "/ai-sotuv/sinov" },
   { key: "settings", label: "Sozlamalar", href: "/ai-sotuv/sozlamalar" },

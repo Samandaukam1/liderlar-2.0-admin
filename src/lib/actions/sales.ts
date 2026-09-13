@@ -20,6 +20,14 @@ import { ROLLOUT_MODES, ROLLOUT_MODE_LABELS } from "@/lib/sales/flow/rollout";
 import { parseRecencyBuckets } from "@/lib/sales/recency";
 import { redactPii, isRedacted } from "@/lib/sales/redact";
 import { LEARNING_JOB_KINDS, KNOWLEDGE_CATEGORIES } from "@/lib/sales/types";
+import {
+  activateStyleProfile,
+  advanceMiningRun,
+  startMiningRun,
+  type RunKind,
+  type RunStatus,
+} from "@/lib/sales/mining/learning-run";
+import { FACT_KINDS } from "@/lib/sales/knowledge-validity";
 
 /**
  * AI Sotuv server action'lari.
@@ -44,6 +52,9 @@ const SALES_PATHS = [
   "/ai-sotuv/knowledge",
   "/ai-sotuv/uslub",
   "/ai-sotuv/sozlamalar",
+  // 2-faza sahifalari
+  "/ai-sotuv/savollar",
+  "/ai-sotuv/aql",
 ];
 
 function revalidateSales(): void {
@@ -850,4 +861,375 @@ export async function simulateSalesFlowAction(
 
   // Sof funksiya: na baza, na Telegram, na AI.
   return { ok: true, run: simulateConversation(parsed.data) };
+}
+
+/* ======================================================================== */
+/*  2-FAZA — SOTUV AQLI (qazish, FAQ, e'tiroz, ziddiyat, uslub)             */
+/* ======================================================================== */
+
+export interface MiningRunActionResult extends SalesActionResult {
+  runId?: string;
+  status?: RunStatus;
+}
+
+/**
+ * Qazish yugurishini BOSHLAYDI.
+ *
+ * ADMIN BOSHLAYDI, SAHIFA YUKLASH EMAS (7-band): butun tarixni
+ * har sahifa ochilganda qayta o'qish sekin, qimmat va natijani
+ * beqaror qiladi.
+ */
+export async function startMiningRunAction(
+  formData: FormData,
+): Promise<MiningRunActionResult> {
+  const ctx = await requirePermission("sales.learn");
+
+  const kindRaw = String(formData.get("kind") ?? "incremental");
+  const kind: RunKind = kindRaw === "full_rebuild" ? "full_rebuild" : "incremental";
+
+  const started = await startMiningRun({ kind, actorId: ctx.userId });
+  if (!started.ok || !started.runId) {
+    return { ok: false, error: started.error ?? "Yugurishni boshlab bo‘lmadi." };
+  }
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.mining.start",
+    entityType: "sales_mining_run",
+    entityId: started.runId,
+    metadata: { kind },
+  });
+
+  // Birinchi qadam darhol bajariladi — admin natijani kuta boshlaydi.
+  const advanced = await advanceMiningRun(started.runId);
+  revalidateSales();
+  return { ok: advanced.ok, runId: started.runId, status: advanced.status, error: advanced.error };
+}
+
+/** Yugurishni davom ettiradi (vaqt byudjeti tugagan bo'lsa). */
+export async function advanceMiningRunAction(
+  formData: FormData,
+): Promise<MiningRunActionResult> {
+  await requirePermission("sales.learn");
+
+  const runId = String(formData.get("runId") ?? "");
+  if (!z.string().uuid().safeParse(runId).success) {
+    return { ok: false, error: "Yugurish identifikatori noto‘g‘ri." };
+  }
+
+  const advanced = await advanceMiningRun(runId);
+  if (advanced.status === "completed" || advanced.status === "failed") revalidateSales();
+  return { ok: advanced.ok, runId, status: advanced.status, error: advanced.error };
+}
+
+/** Yugurishni bekor qiladi — yarim natija saqlanadi, qamrov `partial`. */
+export async function cancelMiningRunAction(formData: FormData): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.learn");
+  const runId = String(formData.get("runId") ?? "");
+  if (!z.string().uuid().safeParse(runId).success) {
+    return { ok: false, error: "Yugurish identifikatori noto‘g‘ri." };
+  }
+
+  const admin = createSupabaseAdminClient();
+  await admin
+    .from("sales_mining_runs")
+    .update({
+      status: "cancelled",
+      finished_at: new Date().toISOString(),
+      coverage_status: "partial",
+      coverage_note: "Admin bekor qildi — natijalar to‘liq emas.",
+    })
+    .eq("id", runId)
+    .in("status", ["queued", "running"]);
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.mining.cancel",
+    entityType: "sales_mining_run",
+    entityId: runId,
+  });
+
+  revalidateSales();
+  return { ok: true, message: "Yugurish bekor qilindi." };
+}
+
+/**
+ * FAQ qoralamasini tasdiqlash / rad etish.
+ *
+ * TASDIQLASH JAVOBNI TALAB QILADI: javobsiz FAQ tasdiqlangan
+ * bo'lsa, bot uni topadi va bo'sh javob yuborardi (14-band).
+ */
+export async function reviewFaqAction(formData: FormData): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  const id = String(formData.get("id") ?? "");
+  const decision = String(formData.get("decision") ?? "");
+  const answer = String(formData.get("answer") ?? "").trim();
+
+  if (!z.string().uuid().safeParse(id).success) {
+    return { ok: false, error: "FAQ identifikatori noto‘g‘ri." };
+  }
+  if (decision !== "approve" && decision !== "reject") {
+    return { ok: false, error: "Noma’lum qaror." };
+  }
+
+  const admin = createSupabaseAdminClient();
+
+  if (decision === "reject") {
+    await admin
+      .from("sales_faq")
+      .update({ status: "rejected", approved: false })
+      .eq("id", id);
+    await logAudit({
+      actorId: ctx.userId,
+      action: "sales.faq.reject",
+      entityType: "sales_faq",
+      entityId: id,
+    });
+    revalidateSales();
+    return { ok: true, message: "FAQ rad etildi." };
+  }
+
+  if (answer === "") {
+    return {
+      ok: false,
+      error: "Javobsiz FAQ tasdiqlanmaydi — mijozga aytiladigan javobni yozing.",
+    };
+  }
+
+  // Javob mijozga ketadi, shuning uchun u ham redaksiyadan o'tadi.
+  const redacted = redactPii(answer);
+  if (!isRedacted(redacted.text)) {
+    return { ok: false, error: "Javobda shaxsiy ma’lumot qoldi — tekshiring." };
+  }
+
+  await admin
+    .from("sales_faq")
+    .update({
+      status: "approved",
+      approved: true,
+      answer_status: "approved_answer",
+      canonical_answer: redacted.text,
+      approved_by: ctx.userId,
+      approved_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.faq.approve",
+    entityType: "sales_faq",
+    entityId: id,
+    severity: "warning",
+  });
+
+  revalidateSales();
+  return { ok: true, message: "FAQ tasdiqlandi." };
+}
+
+/**
+ * Bilim ziddiyatini HAL QILADI.
+ *
+ * G'olib yozuv tanlanadi; qolganlari `superseded` bo'ladi va
+ * javobda ishlatilmaydi. Hech narsa O'CHIRILMAYDI (10-band).
+ */
+export async function resolveKnowledgeConflictAction(
+  formData: FormData,
+): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  const conflictId = String(formData.get("conflictId") ?? "");
+  const winnerId = String(formData.get("winnerId") ?? "");
+  const note = String(formData.get("note") ?? "").trim().slice(0, 500);
+
+  if (!z.string().uuid().safeParse(conflictId).success) {
+    return { ok: false, error: "Ziddiyat identifikatori noto‘g‘ri." };
+  }
+  if (!z.string().uuid().safeParse(winnerId).success) {
+    return { ok: false, error: "To‘g‘ri javobni tanlang." };
+  }
+
+  const admin = createSupabaseAdminClient();
+  const { data: conflict } = await admin
+    .from("sales_knowledge_conflicts")
+    .select("id, members, topic_key")
+    .eq("id", conflictId)
+    .maybeSingle();
+
+  if (!conflict) return { ok: false, error: "Ziddiyat topilmadi." };
+
+  const memberIds = Array.isArray(conflict.members)
+    ? (conflict.members as Array<{ id?: unknown }>)
+        .map((member) => (typeof member.id === "string" ? member.id : null))
+        .filter((value): value is string => value != null)
+    : [];
+
+  if (!memberIds.includes(winnerId)) {
+    return { ok: false, error: "Tanlangan javob shu ziddiyatga tegishli emas." };
+  }
+
+  const now = new Date().toISOString();
+  const losers = memberIds.filter((memberId) => memberId !== winnerId);
+
+  // G'olib yana ishlatiladigan bo'ladi.
+  await admin
+    .from("sales_knowledge")
+    .update({ conflict_status: "resolved", conflict_group: null })
+    .eq("id", winnerId);
+
+  // Qolganlari O'CHIRILMAYDI — `superseded` bo'ladi va tarixda qoladi.
+  if (losers.length > 0) {
+    await admin
+      .from("sales_knowledge")
+      .update({
+        conflict_status: "resolved",
+        superseded_at: now,
+        supersedes_id: winnerId,
+      })
+      .in("id", losers);
+  }
+
+  await admin
+    .from("sales_knowledge_conflicts")
+    .update({
+      status: "resolved",
+      winner_knowledge_id: winnerId,
+      resolution_note: note || null,
+      resolved_by: ctx.userId,
+      resolved_at: now,
+    })
+    .eq("id", conflictId);
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.knowledge.conflict.resolve",
+    entityType: "sales_knowledge_conflict",
+    entityId: conflictId,
+    newValue: { winnerId, superseded: losers.length },
+    severity: "warning",
+  });
+
+  revalidateSales();
+  return { ok: true, message: `Ziddiyat hal qilindi, ${losers.length} ta yozuv almashtirildi.` };
+}
+
+/**
+ * Bilimning TURINI va amal qilish muddatini belgilaydi.
+ *
+ * Bu mijozga nima aytilishini bevosita o'zgartiradi, shuning uchun
+ * `sales.manage` va audit yozuvi bilan.
+ */
+export async function classifyKnowledgeAction(formData: FormData): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  const id = String(formData.get("id") ?? "");
+  const factKind = String(formData.get("factKind") ?? "");
+  const validUntilRaw = String(formData.get("validUntil") ?? "").trim();
+
+  if (!z.string().uuid().safeParse(id).success) {
+    return { ok: false, error: "Bilim identifikatori noto‘g‘ri." };
+  }
+  if (!(FACT_KINDS as readonly string[]).includes(factKind)) {
+    return { ok: false, error: "Noma’lum bilim turi." };
+  }
+
+  let validUntil: string | null = null;
+  if (validUntilRaw !== "") {
+    const parsed = Date.parse(validUntilRaw);
+    if (!Number.isFinite(parsed)) return { ok: false, error: "Tugash sanasi noto‘g‘ri." };
+    validUntil = new Date(parsed).toISOString();
+  }
+
+  /*
+   * MUDDATLI TAKLIF SANASIZ QABUL QILINMAYDI.
+   *
+   * Aynan shu tekshiruv "chegirma faqat bugun" ning bir yil
+   * davomida aytilishiga yo'l qo'ymaydi.
+   */
+  if ((factKind === "temporary_offer" || factKind === "customer_specific_offer") && !validUntil) {
+    return {
+      ok: false,
+      error: "Muddatli taklif uchun tugash sanasi majburiy — usiz javobda ishlatilmaydi.",
+    };
+  }
+
+  const admin = createSupabaseAdminClient();
+  await admin
+    .from("sales_knowledge")
+    .update({
+      fact_kind: factKind,
+      valid_until: validUntil,
+      never_expires: factKind === "permanent_fact" && !validUntil,
+    })
+    .eq("id", id);
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.knowledge.classify",
+    entityType: "sales_knowledge",
+    entityId: id,
+    newValue: { factKind, validUntil },
+    severity: "warning",
+  });
+
+  revalidateSales();
+  return { ok: true, message: "Bilim turi saqlandi." };
+}
+
+/**
+ * Uslub QORALAMASINI faollashtiradi.
+ *
+ * ALOHIDA, ODAM QILADIGAN QADAM (22-band). Auditda ko'rilgan
+ * "hi" li profil aynan avtomatik faollashuv tufayli jonli botga
+ * tushgan edi.
+ */
+export async function activateStyleProfileAction(
+  formData: FormData,
+): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  const profileId = String(formData.get("profileId") ?? "");
+  if (!z.string().uuid().safeParse(profileId).success) {
+    return { ok: false, error: "Profil identifikatori noto‘g‘ri." };
+  }
+
+  const result = await activateStyleProfile({ profileId, actorId: ctx.userId });
+  if (!result.ok) return { ok: false, error: result.error };
+
+  revalidateSales();
+  return { ok: true, message: "Uslub profili faollashtirildi." };
+}
+
+/** E'tiroz strategiyasini tasdiqlaydi. */
+export async function reviewObjectionAction(formData: FormData): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  const id = String(formData.get("id") ?? "");
+  const decision = String(formData.get("decision") ?? "");
+  if (!z.string().uuid().safeParse(id).success) {
+    return { ok: false, error: "E’tiroz identifikatori noto‘g‘ri." };
+  }
+  if (decision !== "approve" && decision !== "reject") {
+    return { ok: false, error: "Noma’lum qaror." };
+  }
+
+  const admin = createSupabaseAdminClient();
+  await admin
+    .from("sales_objections")
+    .update({
+      status: decision === "approve" ? "approved" : "rejected",
+      approved_by: decision === "approve" ? ctx.userId : null,
+      approved_at: decision === "approve" ? new Date().toISOString() : null,
+    })
+    .eq("id", id);
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: `sales.objection.${decision}`,
+    entityType: "sales_objection",
+    entityId: id,
+  });
+
+  revalidateSales();
+  return { ok: true, message: decision === "approve" ? "Strategiya tasdiqlandi." : "Rad etildi." };
 }
