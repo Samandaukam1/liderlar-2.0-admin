@@ -4,6 +4,7 @@ import { parseSalesUpdate } from "@/lib/sales/update-parser";
 import { isValidWebhookSecret } from "@/lib/sales/webhook-auth";
 import { handleIncomingMessage } from "@/lib/sales/flow/engine";
 import { recordPaymentEvidence } from "@/lib/sales/flow/payment-evidence";
+import { classifyIncomingAttachment } from "@/lib/sales/flow/attachment-service";
 import {
   getConnection,
   ingestBusinessMessage,
@@ -105,16 +106,42 @@ async function handleSalesUpdate(update: unknown): Promise<void> {
       if (!result.stored || !result.conversationId) return;
       if (parsed.message.direction !== "incoming") return;
 
-      // Chek (rasm/hujjat) bo'lsa avval saqlanadi — oqim uni ko'rishi
-      // uchun yozuv allaqachon joyida bo'lishi kerak.
+      /*
+       * BIRIKMA — SO'ROQSIZ CHEK EMAS.
+       *
+       * Ilgari har kiruvchi rasm yoki hujjat to'lov isboti deb
+       * saqlanardi va suhbatga `evidence_received` qo'yilardi.
+       * Amalda mijozlar eng ko'p MAQOLA UCHUN PORTRET yuboradi;
+       * anketa xatosi skrinshoti va diplom ham shu yo'ldan o'tardi.
+       *
+       * Portretni chek deb belgilash ikki zarar beradi: to'lov
+       * voronkasi yolg'on ko'rsatkich beradi va AI mijozga to'lov
+       * kelgandek javob yozishi mumkin.
+       *
+       * Endi birikma avval TASNIFLANADI. Shubhada — saqlanmaydi.
+       */
       if (parsed.message.fileId) {
-        const evidence = await recordPaymentEvidence({
+        const attachment = await classifyIncomingAttachment({
           conversationId: result.conversationId,
-          messageId: result.messageId,
-          fileId: parsed.message.fileId,
           messageType: parsed.message.messageType,
+          caption: parsed.message.text,
         });
-        if (evidence.error) console.warn(`[sales-webhook] chek: ${evidence.error}`);
+
+        if (attachment.treatAsPayment) {
+          const evidence = await recordPaymentEvidence({
+            conversationId: result.conversationId,
+            messageId: result.messageId,
+            fileId: parsed.message.fileId,
+            messageType: parsed.message.messageType,
+          });
+          if (evidence.error) console.warn(`[sales-webhook] chek: ${evidence.error}`);
+          console.log(`[sales-webhook] birikma chek deb saqlandi: ${attachment.reason}`);
+        } else {
+          console.log(
+            `[sales-webhook] birikma "${attachment.kind}" — chek sifatida saqlanmadi ` +
+              `(${attachment.reason})`,
+          );
+        }
       }
 
       const flow = await handleIncomingMessage({

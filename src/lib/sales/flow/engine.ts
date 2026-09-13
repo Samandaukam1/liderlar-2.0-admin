@@ -9,6 +9,7 @@ import { getConnection } from "../repository.ts";
 import { generateTestReply } from "../test-chat.ts";
 import { sendSalesMessage } from "../telegram-sales-api.ts";
 import { classifyReply, isPaymentEvidenceType } from "./classify.ts";
+import { classifyAttachment } from "./attachment-intent.ts";
 import { validateFullName } from "./full-name.ts";
 import { authorizeOutbound, type OutboundRefusalReason } from "./outbound-guard.ts";
 import { FOLLOWUP_TEMPLATES, getTemplate } from "./templates.ts";
@@ -30,6 +31,12 @@ import { newRolloutBucket, type RolloutSettings } from "./rollout.ts";
 import { normalizeForMatch } from "../text-normalize.ts";
 import { buildCorrectionInstruction, checkReplyQuality } from "./reply-quality.ts";
 import { buildAlreadySaidBlock } from "./repetition.ts";
+import { loadConversationTimeline } from "../timeline.ts";
+import {
+  assistantTexts,
+  listExplainedTemplateKeys,
+  toModelTurns,
+} from "../timeline-merge.ts";
 import { getCommercialFacts } from "../commercial.ts";
 import { buildCommercialBlock } from "../commercial-facts.ts";
 import {
@@ -185,6 +192,15 @@ interface SendContext {
   connectionCanReply: boolean;
   simulated: boolean;
   rollout: RolloutSettings;
+  /**
+   * Joriy kiruvchi xabar — tarixdan CHIQARIB TASHLANADI.
+   *
+   * U bazaga allaqachon yozilgan, keyin esa generatorga yana
+   * `message` sifatida beriladi. Chiqarilmasa, savol modelga ikki
+   * marta borardi va model uni takror deb o'ylab, boshqacha javob
+   * berishga urinardi.
+   */
+  currentMessageId: string | null;
   result: FlowRunResult;
 }
 
@@ -435,6 +451,7 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
     connectionCanReply: connection?.canReply ?? false,
     simulated,
     rollout: settings.rollout,
+    currentMessageId: input.messageId,
     result,
   };
 
@@ -519,8 +536,23 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
 
   /* --------------------------- niyat aniqlash --------------------------- */
   let intent: ReplyIntent;
+  /*
+   * BIRIKMA — SO'ROQSIZ CHEK EMAS (master spec 6-band).
+   *
+   * Webhook allaqachon tasniflagan; bu yerda xuddi shu qoida
+   * qo'llanadi, ya'ni ikkala yo'l bir xil qaror qabul qiladi.
+   * Portret yuborgan mijozni to'lov bosqichiga surish — voronkani
+   * buzadi va mijozga to'lov kelgandek javob berilishiga olib keladi.
+   */
   if (isPaymentEvidenceType(input.messageType)) {
-    intent = "payment_evidence";
+    const attachment = classifyAttachment({
+      messageType: input.messageType,
+      caption: input.text,
+      stage: conversation.stage,
+      paymentStatus: conversation.paymentStatus,
+    });
+    result.notes.push(`birikma: ${attachment.kind} (${attachment.reason})`);
+    intent = attachment.treatAsPayment ? "payment_evidence" : "other";
   } else if (conversation.stage === "need_full_name") {
     // Bu bosqichda har qanday matn F.I.Sh. bo'lishga da'vogar.
     intent = validateFullName(input.text).ok ? "full_name" : "other";
@@ -726,8 +758,8 @@ async function answerFromKnowledge(
    * xabar beradi. O'rniga aniq savoliga qisqa javob boradi.
    */
   if (isGeneralBenefitsQuestion(trimmed)) {
-    const alreadySent = await listExplainedTopics(context.conversation.id);
-    if (!benefitsAlreadySent(alreadySent)) {
+    const sentSoFar = await loadRecentHistory(context.conversation.id, context.currentMessageId);
+    if (!benefitsAlreadySent(sentSoFar.explainedTemplates)) {
       await send(context, {
         body: CANONICAL_BENEFITS_TEXT,
         kind: "template",
@@ -753,7 +785,8 @@ async function answerFromKnowledge(
     return;
   }
 
-  const history = await loadRecentHistory(context.conversation.id);
+  const timeline = await loadRecentHistory(context.conversation.id, context.currentMessageId);
+  const history = timeline.turns;
 
   /*
    * SUHBAT KONTEKSTI — javobdan OLDIN quriladi (4- va 10-band).
@@ -767,9 +800,7 @@ async function answerFromKnowledge(
    *     qoladi, birinchisi emas: bloklangan javob mijozni kuttiradi.
    */
   const commercial = buildCommercialBlock(await getCommercialFacts());
-  const alreadySaid = buildAlreadySaidBlock(
-    history.filter((turn) => turn.role === "assistant").map((turn) => turn.text),
-  );
+  const alreadySaid = buildAlreadySaidBlock(timeline.assistantTexts);
   const extraContext = [commercial, alreadySaid].filter((block) => block !== "").join("\n\n");
 
   let reply: Awaited<ReturnType<typeof generateTestReply>>;
@@ -802,9 +833,7 @@ async function answerFromKnowledge(
     return;
   }
 
-  const previousReplies = history
-    .filter((turn) => turn.role === "assistant")
-    .map((turn) => turn.text);
+  const previousReplies = timeline.assistantTexts;
 
   const discountApproved = reply.diagnostics.sources.some((source) =>
     normalizeForMatch(`${source.title} ${source.body}`).includes("chegirma"),
@@ -1052,26 +1081,31 @@ async function recordKnowledgeGap(
   });
 }
 
+/**
+ * Suhbat tarixi — YAGONA TIMELINE dan (master spec 1-band).
+ *
+ * Ilgari bu funksiya faqat `sales_messages` ni o'qirdi va AI
+ * javoblari (`sales_outbound_log` da) kontekstga UMUMAN tushmasdi.
+ * Natijada takror tekshiruvi bo'sh ro'yxat olardi — ya'ni u hech
+ * qachon ishlamagan.
+ */
 async function loadRecentHistory(
   conversationId: string,
-): Promise<Array<{ role: "customer" | "assistant"; text: string }>> {
-  const admin = createSupabaseAdminClient();
-  const { data } = await admin
-    .from("sales_messages")
-    .select("direction, text, sent_at")
-    .eq("conversation_id", conversationId)
-    .is("deleted_at", null)
-    .not("text", "is", null)
-    .order("sent_at", { ascending: false })
-    .limit(10);
-
-  return (data ?? [])
-    .reverse()
-    .map((row) => ({
-      role: row.direction === "incoming" ? ("customer" as const) : ("assistant" as const),
-      text: (row.text as string) ?? "",
-    }))
-    .filter((turn) => turn.text.trim() !== "");
+  excludeMessageId: string | null = null,
+): Promise<{
+  turns: Array<{ role: "customer" | "assistant"; text: string }>;
+  assistantTexts: string[];
+  explainedTemplates: string[];
+}> {
+  const events = await loadConversationTimeline(conversationId, {
+    limit: 12,
+    excludeMessageId,
+  });
+  return {
+    turns: toModelTurns(events),
+    assistantTexts: assistantTexts(events),
+    explainedTemplates: listExplainedTemplateKeys(events),
+  };
 }
 
 /* ============================ TASHQI HODISALAR =========================== */
@@ -1153,6 +1187,7 @@ export async function onIntakeSubmitted(intakeId: string): Promise<FlowRunResult
       connectionCanReply: connection?.canReply ?? false,
       simulated: false,
       rollout: settings.rollout,
+      currentMessageId: null,
       result,
     };
 

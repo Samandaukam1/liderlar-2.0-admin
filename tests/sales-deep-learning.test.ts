@@ -14,6 +14,7 @@ import {
 } from "../src/lib/sales/dialog.ts";
 import {
   detectOutcome,
+  isFunnelProgress,
   isSuccessfulOutcome,
   SALES_OUTCOMES,
 } from "../src/lib/sales/outcome.ts";
@@ -265,11 +266,32 @@ test("davom etgan va uzilgan suhbat farqlanadi", () => {
   assert.equal(fresh.outcome, "unknown");
 });
 
-test("muvaffaqiyat ta’rifi: davom etgan suhbat sotuv emas", () => {
-  assert.equal(isSuccessfulOutcome("paid"), true);
-  assert.equal(isSuccessfulOutcome("application_sent"), true);
+test("SOTUV faqat tasdiqlangan to‘lov — voronka siljishi emas", () => {
+  /*
+   * BU TEST ILGARI TESKARISINI TASDIQLAGAN EDI.
+   *
+   * `application_sent` va `payment_requested` "muvaffaqiyat"
+   * hisoblanardi. Oqibati: har qanday konversiya hisoboti haqiqiy
+   * sonidan bir necha barobar yuqori chiqardi, va aynan shu son
+   * bo‘yicha "qaysi javob yaxshi ishlaydi" deb baholanardi —
+   * tizim o‘zini yolg‘on ma’lumot bilan o‘rgatardi.
+   *
+   * `paid` ham chiqarildi: uni mijozning "to‘ladim" degan MATNI
+   * qo‘zg‘atishi mumkin, matn esa moliyaviy tasdiq emas.
+   */
+  assert.equal(isSuccessfulOutcome("completed"), true);
+  assert.equal(isSuccessfulOutcome("paid"), false);
+  assert.equal(isSuccessfulOutcome("application_sent"), false);
+  assert.equal(isSuccessfulOutcome("payment_requested"), false);
   assert.equal(isSuccessfulOutcome("continued"), false);
   assert.equal(isSuccessfulOutcome("unknown"), false);
+
+  // Voronka siljishi ALOHIDA o‘lchov sifatida saqlanadi.
+  assert.equal(isFunnelProgress("application_sent"), true);
+  assert.equal(isFunnelProgress("payment_requested"), true);
+  assert.equal(isFunnelProgress("completed"), true);
+  assert.equal(isFunnelProgress("continued"), false);
+
   assert.equal(SALES_OUTCOMES.length, 7);
 });
 
@@ -295,8 +317,9 @@ const patternObservation = (
 test("bir xil javob variantga yig‘iladi, chastota va natija sanaladi", () => {
   const patterns = aggregatePatterns(
     [
-      patternObservation("38 ming so‘m.", "paid", "c1"),
-      patternObservation("38 ming so‘m", "paid", "c2"),
+      // `completed` — vakolatli tasdiqdan o‘tgan yagona holat.
+      patternObservation("38 ming so‘m.", "completed", "c1"),
+      patternObservation("38 ming so‘m", "completed", "c2"),
       patternObservation("38 ming so‘m.", "dropped", "c3"),
       patternObservation("Narxlar ro‘yxatini yuboraman.", "unknown", "c4"),
     ],

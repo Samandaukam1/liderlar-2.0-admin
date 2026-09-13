@@ -228,8 +228,40 @@ function countMatches(text: string, pattern: RegExp): number {
  * Lug'atdagi qaysi iboralar matnda uchraganini qaytaradi.
  * Lug'at iboralari ham normallashtiriladi — ular ham qo'lda yozilgan.
  */
+/**
+ * Lug'atdagi iboralarni SO'Z CHEGARASI bilan qidiradi.
+ *
+ * ILGARI `includes()` EDI VA BU "Hi" MUAMMOSINING HAQIQIY MANBAI:
+ *
+ *   "yaxshi".includes("hi")      → true
+ *   "yaxshimisiz".includes("hi") → true
+ *   "shior".includes("hi")       → true
+ *   "tanishib".includes("hi")    → true
+ *   "chiqdi".includes("hi")      → true
+ *
+ * Ya'ni sotuvchining eng oddiy o'zbekcha so'zlari inglizcha "hi"
+ * salomlashuvi deb sanalardi. Jonli profilda salomlashish ulushi
+ * 42% ga chiqib ketgan va eng yuqori ibora "hi" bo'lib qolgan;
+ * prompt esa modelga AYNAN "hi" bilan boshlashni buyurardi.
+ *
+ * Lug'atdan "hi" ni olib tashlash YETARLI EMAS: xuddi shu xato
+ * boshqa qisqa iboralarda ham takrorlanadi ("ok" — "oktabr" ichida,
+ * "rahmat" — "rahmatli" ichida). Sabab qidirish usulida edi.
+ *
+ * Ko'p so'zli iboralar ("assalomu alaykum") ham to'g'ri ishlaydi:
+ * chegara butun ibora atrofida qo'yiladi, ichidagi bo'shliqlar
+ * saqlanadi.
+ */
 function matchedPhrases(lowerText: string, dictionary: readonly string[]): string[] {
-  return dictionary.filter((phrase) => lowerText.includes(normalizeForMatch(phrase)));
+  return dictionary.filter((phrase) => {
+    const normalized = normalizeForMatch(phrase);
+    if (normalized === "") return false;
+    const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(
+      `(?:^|[^\\p{L}\\p{N}])${escaped}(?:[^\\p{L}\\p{N}]|$)`,
+      "u",
+    ).test(lowerText);
+  });
 }
 
 function topPhrases(

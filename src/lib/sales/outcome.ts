@@ -40,18 +40,48 @@ export const SALES_OUTCOME_LABELS: Record<SalesOutcome, string> = {
 };
 
 /**
- * Muvaffaqiyat sifatida hisoblanadigan natijalar. `continued` bu yerda
- * YO'Q: suhbat davom etgani hali sotuv emas.
+ * VORONKA BOSQICHLARI — sotuv EMAS.
+ *
+ * Bular oldinga siljish belgilari: mijoz anketa yubordi, unga to'lov
+ * so'rovi ketdi. Ular foydali o'lchov, lekin ularning birortasi ham
+ * PUL KELGANINI bildirmaydi.
  */
-export const SUCCESSFUL_OUTCOMES: readonly SalesOutcome[] = [
+export const FUNNEL_PROGRESS_OUTCOMES: readonly SalesOutcome[] = [
   "application_sent",
   "payment_requested",
-  "paid",
-  "completed",
 ];
 
+/**
+ * HAQIQIY SOTUV — faqat tasdiqlangan to'lov (2-faza 30-band).
+ *
+ * ILGARI BU RO'YXATDA `application_sent` VA `payment_requested` HAM
+ * BOR EDI. Oqibati og'ir: "to'lov so'raldi" degan holat "sotildi"
+ * bilan bir qatorda turgani uchun har qanday hisobot konversiyani
+ * bir necha barobar oshirib ko'rsatardi. Shu son asosida esa qaysi
+ * javob yaxshi ishlayotgani baholanardi — ya'ni tizim o'zini
+ * o'zi yolg'on ma'lumot bilan o'rgatardi.
+ *
+ * `paid` ham shubhali edi: uni mijozning "to'ladim" degan MATNI
+ * qo'zg'atishi mumkin. Matn moliyaviy tasdiq emas. Shuning uchun
+ * u ham asosiy konversiyadan chiqarildi va faqat `completed` —
+ * vakolatli tasdiqdan o'tgan holat — sotuv hisoblanadi.
+ */
+export const SALE_CONFIRMED_OUTCOMES: readonly SalesOutcome[] = ["completed"];
+
+/**
+ * Eski nom — mavjud chaqiruvlar buzilmasin uchun saqlanadi, lekin
+ * endi FAQAT tasdiqlangan sotuvni bildiradi.
+ */
+export const SUCCESSFUL_OUTCOMES: readonly SalesOutcome[] = SALE_CONFIRMED_OUTCOMES;
+
+/** Tasdiqlangan sotuvmi. Voronka siljishi bu funksiyada `false`. */
 export function isSuccessfulOutcome(outcome: SalesOutcome): boolean {
-  return SUCCESSFUL_OUTCOMES.includes(outcome);
+  return SALE_CONFIRMED_OUTCOMES.includes(outcome);
+}
+
+/** Oldinga siljishmi (sotuv bo'lmasa ham). */
+export function isFunnelProgress(outcome: SalesOutcome): boolean {
+  return FUNNEL_PROGRESS_OUTCOMES.includes(outcome) || isSuccessfulOutcome(outcome);
 }
 
 /* ------------------------------- belgilar ------------------------------- */
