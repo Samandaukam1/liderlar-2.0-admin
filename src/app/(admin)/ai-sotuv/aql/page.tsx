@@ -22,6 +22,7 @@ import { LEAD_WEIGHT_BASIS_NOTE } from "@/lib/sales/flow/lead-score";
 import { SalesTabs, NoAutoReplyNotice } from "../sales-tabs";
 import { MiningRunner } from "./mining-runner";
 import { ConflictResolver } from "./conflict-resolver";
+import { StyleActivator } from "./style-activator";
 
 export const metadata = { title: "AI Sotuv — Sotuv aqli" };
 export const dynamic = "force-dynamic";
@@ -363,6 +364,17 @@ export default async function SalesIntelligencePage() {
                       .map(([reason, count]) => `${reason} ${count}`)
                       .join(", ")}
                   </p>
+                ) : null}
+                {profile.coverageNote ? (
+                  <p className="mt-0.5 text-ink-soft">{profile.coverageNote}</p>
+                ) : null}
+                {canManage && !profile.isActive && profile.status === "draft" ? (
+                  <div className="mt-2">
+                    <StyleActivator
+                      profileId={profile.id}
+                      humanMessageCount={profile.humanMessageCount}
+                    />
+                  </div>
                 ) : null}
               </li>
             ))}
