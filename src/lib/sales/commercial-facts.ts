@@ -29,6 +29,22 @@ export interface CommercialFacts {
   paymentDetails: string | null;
   /** Xizmat muddati, masalan "1 yil". */
   servicePeriod: string | null;
+
+  /* ---- 2-faza: tuzilmali tijoriy shartlar (11-band) ---- */
+  currency: string | null;
+  billingPeriod: string | null;
+  discountStart: string | null;
+  /**
+   * Bo'lib to'lash MUMKINMI.
+   *
+   * `null` ATAYLAB uchinchi holat: "ha" va "yo'q" dan tashqari
+   * "TASDIQLANMAGAN" ham bor. Auditda aynan shu savolda ziddiyat
+   * topilgan — bilim bazasida "mumkin", chatda "mumkin emas".
+   * `null` bo'lsa bot javob to'qimaydi, aniqlashtirishni aytadi.
+   */
+  installmentAvailable: boolean | null;
+  installmentTerms: string | null;
+  additionalFeePolicy: string | null;
 }
 
 export const EMPTY_COMMERCIAL: CommercialFacts = {
@@ -38,6 +54,12 @@ export const EMPTY_COMMERCIAL: CommercialFacts = {
   offerExpiresAt: null,
   paymentDetails: null,
   servicePeriod: null,
+  currency: null,
+  billingPeriod: null,
+  discountStart: null,
+  installmentAvailable: null,
+  installmentTerms: null,
+  additionalFeePolicy: null,
 };
 
 function money(value: unknown): number | null {
@@ -65,6 +87,14 @@ export function parseCommercial(value: unknown): CommercialFacts {
     offerExpiresAt: isoDate(raw.offerExpiresAt),
     paymentDetails: text(raw.paymentDetails),
     servicePeriod: text(raw.servicePeriod),
+    currency: text(raw.currency),
+    billingPeriod: text(raw.billingPeriod) ?? text(raw.servicePeriod),
+    discountStart: isoDate(raw.discountStart),
+    // Faqat ANIQ boolean qabul qilinadi; yo'q qiymat `null` bo'lib
+    // qoladi va "noma'lum" ma'nosini saqlaydi.
+    installmentAvailable: typeof raw.installmentAvailable === "boolean" ? raw.installmentAvailable : null,
+    installmentTerms: text(raw.installmentTerms),
+    additionalFeePolicy: text(raw.additionalFeePolicy),
   };
 }
 
@@ -113,6 +143,33 @@ export function buildCommercialBlock(facts: CommercialFacts, now: Date = new Dat
           "“bugun tugaydi” yoki boshqa muddatni AYTMA.",
       );
     }
+    any = true;
+  }
+
+  /*
+   * BO'LIB TO'LASH — UCH HOLAT (10 va 11-band).
+   *
+   * Auditda shu savolda ziddiyat topilgan: tasdiqlangan bilimda
+   * "chegirmasiz narxda mumkin", yaqindagi chatda oddiy "yo'q".
+   * Sozlamada qiymat bo'lmasa, bot IKKALASINI ham aytmaydi.
+   */
+  if (facts.installmentAvailable === true) {
+    lines.push(
+      `Bo‘lib to‘lash: MUMKIN${facts.installmentTerms ? ` — ${facts.installmentTerms}` : ""}`,
+    );
+    any = true;
+  } else if (facts.installmentAvailable === false) {
+    lines.push("Bo‘lib to‘lash: mumkin emas.");
+    any = true;
+  } else {
+    lines.push(
+      "Bo‘lib to‘lash sharti TASDIQLANMAGAN — “mumkin” ham, “mumkin emas” ham DEMA; " +
+        "aniqlab beraman deb javob ber.",
+    );
+  }
+
+  if (facts.additionalFeePolicy) {
+    lines.push(`Qo‘shimcha to‘lov: ${facts.additionalFeePolicy}`);
     any = true;
   }
 

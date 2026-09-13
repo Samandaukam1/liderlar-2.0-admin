@@ -1,6 +1,13 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
+  evaluateValidity,
+  type ConflictStatus,
+  type ExclusionReason,
+  type FactKind,
+  type KnowledgeValidity,
+} from "./knowledge-validity.ts";
+import {
   shouldApplyMessage,
   type ParsedBusinessMessage,
   type ParsedConnection,
@@ -630,6 +637,12 @@ export interface KnowledgeListItem {
   sourceExcerpt: string | null;
   createdAt: string;
   reviewedAt: string | null;
+  /* --- 2-faza: amal qilish muddati (ixtiyoriy, eski chaqiruvlar uchun) --- */
+  factKind?: FactKind;
+  /** Mijozga fakt sifatida aytilishi mumkinmi. */
+  usableAsFact?: boolean;
+  /** Mumkin bo'lmasa — nega. Adminda shu sabab ko'rsatiladi. */
+  exclusionReason?: ExclusionReason | null;
 }
 
 export async function listKnowledge(options: {
@@ -1091,34 +1104,84 @@ export async function getDeepLearningCoverage(): Promise<DeepLearningCoverage> {
  * qattiq filtrlaydi va boshqa joyda ishlatilmaydi.
  * ======================================================================== */
 
-export async function listApprovedKnowledge(limit = 500): Promise<KnowledgeListItem[]> {
+/**
+ * MIJOZGA AYTILISHI MUMKIN bo'lgan bilimlar.
+ *
+ * ── 2-FAZA: AMAL QILISH MUDDATI DARVOZASI (9–10-band) ──────────────
+ *
+ * Ilgari bu funksiya `status = 'approved'` bo'lgan HAMMA narsani
+ * qaytarardi. Auditda tasdiqlangan bilim ichida "chegirma faqat
+ * bugun", "maqola yarim soatda chiqadi", "sertifikatni birozdan
+ * so'ng yuboramiz" kabi BIR MARTALIK gaplar topilgan. Ular
+ * universal javobga aylanib qolgan edi.
+ *
+ * Endi har yozuv `evaluateValidity()` dan o'tadi. O'tmagani
+ * qaytarilmaydi — LEKIN O'CHIRILMAYDI: adminda sababi bilan
+ * ko'rinadi va odam tasniflaydi.
+ *
+ * `includeInvalid` faqat ADMIN ko'rinishi uchun: mijozga
+ * javob yaratishda u HECH QACHON `true` bo'lmasligi kerak.
+ */
+export async function listApprovedKnowledge(
+  limit = 500,
+  options: { now?: Date; conversationId?: string | null; includeInvalid?: boolean } = {},
+): Promise<KnowledgeListItem[]> {
   const admin = createSupabaseAdminClient();
   const { data } = await admin
     .from("sales_knowledge")
     .select(
-      "id, category, question, answer, status, confidence, tags, source_type, priority, source_conversation_id, source_message_id, source_excerpt, created_at, reviewed_at",
+      "id, category, question, answer, status, confidence, tags, source_type, priority, source_conversation_id, source_message_id, source_excerpt, created_at, reviewed_at, fact_kind, valid_from, valid_until, never_expires, scope, scope_ref, conflict_status, superseded_at",
     )
     .eq("status", "approved")
     .is("archived_at", null)
     .order("confidence", { ascending: false })
     .limit(limit);
 
-  return (data ?? []).map((row) => ({
-    id: row.id as string,
-    category: row.category as KnowledgeCategory,
-    sourceType: ((row.source_type as string) ?? "ai_extracted") as "manual" | "ai_extracted",
-    priority: (row.priority as number) ?? 0,
-    question: (row.question as string | null) ?? null,
-    answer: row.answer as string,
-    status: row.status as KnowledgeStatus,
-    confidence: Number(row.confidence ?? 0),
-    tags: (row.tags as string[]) ?? [],
-    sourceConversationId: (row.source_conversation_id as string | null) ?? null,
-    sourceMessageId: (row.source_message_id as string | null) ?? null,
-    sourceExcerpt: (row.source_excerpt as string | null) ?? null,
-    createdAt: row.created_at as string,
-    reviewedAt: (row.reviewed_at as string | null) ?? null,
-  }));
+  const now = options.now ?? new Date();
+  const rows: KnowledgeListItem[] = [];
+
+  for (const row of data ?? []) {
+    const validity = {
+      status: row.status as string,
+      factKind: ((row.fact_kind as string) ?? "unclassified") as FactKind,
+      validFrom: (row.valid_from as string | null) ?? null,
+      validUntil: (row.valid_until as string | null) ?? null,
+      neverExpires: row.never_expires === true,
+      scope: ((row.scope as string) ?? "all") as KnowledgeValidity["scope"],
+      scopeRef: (row.scope_ref as string | null) ?? null,
+      conflictStatus: ((row.conflict_status as string) ?? "none") as ConflictStatus,
+      supersededAt: (row.superseded_at as string | null) ?? null,
+    };
+
+    const verdict = evaluateValidity(validity, {
+      now,
+      conversationId: options.conversationId ?? null,
+    });
+
+    if (!verdict.usableAsFact && options.includeInvalid !== true) continue;
+
+    rows.push({
+      id: row.id as string,
+      category: row.category as KnowledgeCategory,
+      sourceType: ((row.source_type as string) ?? "ai_extracted") as "manual" | "ai_extracted",
+      priority: (row.priority as number) ?? 0,
+      question: (row.question as string | null) ?? null,
+      answer: row.answer as string,
+      status: row.status as KnowledgeStatus,
+      confidence: Number(row.confidence ?? 0),
+      tags: (row.tags as string[]) ?? [],
+      sourceConversationId: (row.source_conversation_id as string | null) ?? null,
+      sourceMessageId: (row.source_message_id as string | null) ?? null,
+      sourceExcerpt: (row.source_excerpt as string | null) ?? null,
+      createdAt: row.created_at as string,
+      reviewedAt: (row.reviewed_at as string | null) ?? null,
+      factKind: validity.factKind,
+      usableAsFact: verdict.usableAsFact,
+      exclusionReason: verdict.reason,
+    });
+  }
+
+  return rows;
 }
 
 export async function listApprovedPatterns(limit = 500): Promise<ResponsePatternRow[]> {
