@@ -248,6 +248,18 @@ export const SALES_ALLOWED_UPDATES = [
   "business_message",
   "edited_business_message",
   "deleted_business_messages",
+  /*
+   * 0.3: operator yo'li.
+   *
+   * Moderator botga TO'G'RIDAN-TO'G'RI yozganda oddiy `message`
+   * keladi, business chatdan emas. Anketa havolasi tugmasi shu
+   * yo'ldan ishlaydi. `callback_query` esa jins tanlash uchun.
+   *
+   * MIJOZ SUHBATIGA TA'SIRI YO'Q: bu updatelar boshqa yo'lda
+   * ishlanadi va ular orqali mijozga yozib bo'lmaydi.
+   */
+  "message",
+  "callback_query",
 ] as const;
 
 export async function setSalesWebhook(url: string): Promise<SalesTelegramResult<boolean>> {
@@ -332,4 +344,113 @@ export async function getSalesFileUrl(fileId: string): Promise<string | null> {
   const res = await callSalesTelegram<{ file_path?: string }>("getFile", { file_id: fileId });
   if (!res.ok || !res.result?.file_path) return null;
   return `${TELEGRAM_API}/file/bot${salesBotToken()}/${res.result.file_path}`;
+}
+
+/* ======================== OPERATOR YO'LI (0.3) =========================== */
+
+/**
+ * TAHRIRIYAT CHATIGA yuborish — MIJOZGA EMAS.
+ *
+ * NEGA ALOHIDA FUNKSIYA: sotuv botiga anketa havolasi tugmasi
+ * qo'shildi va u moderatorning o'z chatiga javob yozishi kerak.
+ * `ALLOWED_SALES_BOT_METHODS` ro'yxatiga `sendMessage` ni qo'shish
+ * eng oson yo'l bo'lardi va eng xavflisi ham: shunda har qanday kod
+ * bo'lagi mijozga yozib yuborishi mumkin bo'lardi va butun
+ * capability himoyasi ma'nosini yo'qotardi.
+ *
+ * IKKI TUZILMAVIY KAFOLAT:
+ *
+ *   1. Bu funksiya `business_connection_id` NI UMUMAN QABUL
+ *      QILMAYDI. Telegram Business chatiga usiz yozib bo'lmaydi,
+ *      ya'ni bu yo'l mijoz suhbatiga texnik jihatdan yeta olmaydi.
+ *   2. `chat_id` tahririyat ro'yxatidan tekshiriladi. Ro'yxat
+ *      `site_settings` da va unda mijoz chat id'si bo'lmaydi.
+ *
+ * Ikkalasi birga: "tasodifan mijozga ketdi" degan holat mumkin emas.
+ */
+export async function sendSalesOperatorMessage(
+  chatId: number,
+  text: string,
+  options: {
+    inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>;
+    forceReply?: boolean;
+  } = {},
+): Promise<{ ok: boolean; messageId: number | null; error: string | null }> {
+  if (!(await isSalesOperatorChat(chatId))) {
+    // Ro'yxatda yo'q chat — bu operator emas. Yuborilmaydi.
+    return { ok: false, messageId: null, error: "chat tahririyat ro‘yxatida emas" };
+  }
+
+  const replyMarkup = options.forceReply
+    ? { force_reply: true, input_field_placeholder: "Ism familiya" }
+    : options.inlineKeyboard
+      ? { inline_keyboard: options.inlineKeyboard }
+      : undefined;
+
+  return operatorCall("sendMessage", {
+    chat_id: chatId,
+    text,
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+  });
+}
+
+/** Operator chatidagi xabarni qayta yozadi — tugmalarni olib tashlash uchun. */
+export async function editSalesOperatorMessage(
+  chatId: number,
+  messageId: number,
+  text: string,
+): Promise<{ ok: boolean; messageId: number | null; error: string | null }> {
+  if (!(await isSalesOperatorChat(chatId))) {
+    return { ok: false, messageId: null, error: "chat tahririyat ro‘yxatida emas" };
+  }
+  return operatorCall("editMessageText", {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    reply_markup: { inline_keyboard: [] },
+  });
+}
+
+/** Bosilgan tugmadagi kutish belgisini o'chiradi. */
+export async function answerSalesCallback(
+  callbackQueryId: string,
+  text?: string,
+): Promise<void> {
+  await operatorCall("answerCallbackQuery", {
+    callback_query_id: callbackQueryId,
+    ...(text ? { text, show_alert: false } : {}),
+  });
+}
+
+/** Chat tahririyat ro'yxatidami. */
+async function isSalesOperatorChat(chatId: number): Promise<boolean> {
+  const { getPostDeliveryChatIds } = await import("@/lib/post-studio/delivery-recipients");
+  const configured = await getPostDeliveryChatIds();
+  // Ro'yxat BO'SH bo'lsa hech kim operator emas. Post yetkazishda
+  // bo'sh ro'yxat "hammaga" degani edi; bu yerda teskarisi xavfsiz.
+  return configured.includes(chatId);
+}
+
+async function operatorCall(
+  method: "sendMessage" | "editMessageText" | "answerCallbackQuery",
+  body: Record<string, unknown>,
+): Promise<{ ok: boolean; messageId: number | null; error: string | null }> {
+  try {
+    const response = await fetch(`${TELEGRAM_API}/bot${salesBotToken()}/${method}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const parsed = (await response.json()) as {
+      ok?: boolean;
+      description?: string;
+      result?: { message_id?: number };
+    };
+    if (!parsed.ok) {
+      return { ok: false, messageId: null, error: parsed.description ?? `HTTP ${response.status}` };
+    }
+    return { ok: true, messageId: parsed.result?.message_id ?? null, error: null };
+  } catch (err) {
+    return { ok: false, messageId: null, error: err instanceof Error ? err.message : String(err) };
+  }
 }

@@ -311,16 +311,25 @@ test("mijozga xabar yuboradigan har qanday metod bloklanadi", () => {
   }
 });
 
-test("Telegram’dan faqat 0.1 doirasidagi update’lar so‘raladi", () => {
+test("update ro‘yxati: mijoz oqimi + operator oqimi", () => {
+  /*
+   * `message` va `callback_query` 0.3 DA QO'SHILDI — moderator
+   * botga to'g'ridan-to'g'ri yozib anketa havolasi olishi uchun.
+   *
+   * BU MIJOZGA YOZISH YO'LINI OCHMAYDI. Ular butunlay boshqa
+   * yo'lda (`operator-router.ts`) ishlanadi va u yerdagi transport
+   * `business_connection_id` ni qabul qilmaydi — Telegram Business
+   * chatiga usiz yozib bo'lmaydi. Chat id esa tahririyat
+   * ro'yxatidan tekshiriladi.
+   */
   assert.deepEqual([...SALES_ALLOWED_UPDATES], [
     "business_connection",
     "business_message",
     "edited_business_message",
     "deleted_business_messages",
+    "message",
+    "callback_query",
   ]);
-  // Oddiy `message` ro'yxatda yo'q — botga yozilgan xabarga javob berish
-  // imkoniyati Telegram tomonida ham yopiladi.
-  assert.ok(!(SALES_ALLOWED_UPDATES as readonly string[]).includes("message"));
 });
 
 /* ------------------- manba darajasidagi avto-javob tekshiruvi ------------- */

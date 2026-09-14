@@ -20,6 +20,7 @@ import {
   FlowSettingsForm,
   LearningSettingsForm,
   RecencyBucketsForm,
+  RefreshWebhookForm,
   RolloutForm,
 } from "./settings-forms";
 
@@ -199,6 +200,7 @@ export default async function SalesSettingsPage() {
               followupLaterMinutes={settings.flow.followupLaterMinutes}
             />
           </div>
+          <RefreshWebhookForm />
           <RecencyBucketsForm buckets={settings.recencyBuckets} />
           <LearningSettingsForm
             batchSize={settings.learning.batchSize}

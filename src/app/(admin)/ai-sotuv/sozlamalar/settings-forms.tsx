@@ -7,6 +7,7 @@ import {
   saveFlowSettingsAction,
   saveLearningSettingsAction,
   saveRecencyBucketsAction,
+  refreshSalesWebhookAction,
   saveSalesRolloutAction,
   stopSalesAiAction,
 } from "@/lib/actions/sales";
@@ -344,6 +345,42 @@ export function EmergencyStopForm({ active }: { active: boolean }) {
       </p>
       <Button type="submit" variant="danger" disabled={pending || !active}>
         {pending ? "To‘xtatilmoqda…" : active ? "AI SOTUVNI TO‘XTATISH" : "Allaqachon o‘chiq"}
+      </Button>
+    </form>
+  );
+}
+
+/**
+ * Webhook'ni qayta ro'yxatdan o'tkazish.
+ *
+ * `allowed_updates` Telegram tomonida saqlanadi va faqat `setWebhook`
+ * chaqirilganda yangilanadi. Kodga yangi update turi qo'shilgani
+ * bilan Telegram uni yubormaydi — va hech qayerda xato ham chiqmaydi,
+ * shunchaki hech narsa kelmaydi. Shuning uchun tugma ko'rinadigan
+ * joyda turadi.
+ */
+export function RefreshWebhookForm() {
+  const { toast } = useToast();
+  const [pending, startTransition] = useTransition();
+
+  function onSubmit() {
+    startTransition(async () => {
+      const result = await refreshSalesWebhookAction();
+      if (result.ok) toast("success", "Yangilandi", result.message);
+      else toast("error", "Bajarilmadi", result.error);
+    });
+  }
+
+  return (
+    <form action={onSubmit} className="rounded-card border border-line bg-card p-5 shadow-card">
+      <h2 className="font-display text-base font-semibold text-ink">Webhook</h2>
+      <p className="mt-1 mb-3 text-xs leading-relaxed text-ink-soft">
+        Botga yangi imkoniyat qo‘shilganda (masalan anketa havolasi tugmasi)
+        Telegram’dagi ro‘yxatni yangilash kerak. Kutib turgan xabarlar
+        o‘chirilmaydi.
+      </p>
+      <Button type="submit" variant="secondary" disabled={pending}>
+        {pending ? "Yangilanmoqda…" : "Webhook’ni yangilash"}
       </Button>
     </form>
   );

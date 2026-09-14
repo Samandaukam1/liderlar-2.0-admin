@@ -17,6 +17,8 @@ import { confirmPayment, setHumanTakeover } from "@/lib/sales/flow/engine";
 import { simulateConversation, type SimulationRun } from "@/lib/sales/flow/simulate";
 import { getSalesSettings, saveSalesSetting } from "@/lib/sales/settings";
 import { ROLLOUT_MODES, ROLLOUT_MODE_LABELS } from "@/lib/sales/flow/rollout";
+import { SALES_ALLOWED_UPDATES, setSalesWebhook } from "@/lib/sales/telegram-sales-api";
+import { getSiteUrl } from "@/lib/site-url";
 import { parseRecencyBuckets } from "@/lib/sales/recency";
 import { redactPii, isRedacted } from "@/lib/sales/redact";
 import { LEARNING_JOB_KINDS, KNOWLEDGE_CATEGORIES } from "@/lib/sales/types";
@@ -621,6 +623,51 @@ export async function saveFlowSettingsAction(formData: FormData): Promise<SalesA
 
   revalidateSales();
   return { ok: true, message: "Sozlamalar saqlandi." };
+}
+
+/* --------------------------- webhook qayta ro'yxat ----------------------- */
+
+/**
+ * Sotuv boti webhook'ini QAYTA ro'yxatdan o'tkazadi.
+ *
+ * NEGA KERAK: `allowed_updates` ro'yxati Telegram tomonida saqlanadi
+ * va u FAQAT `setWebhook` chaqirilganda yangilanadi. Kodga yangi
+ * update turi qo'shilgani bilan Telegram uni yubormaydi.
+ *
+ * Amalda bu shunday ko'rinardi: moderator sotuv botiga yozadi, bot
+ * javob bermaydi, va hech qayerda xato ham chiqmaydi — chunki
+ * update umuman kelmaydi. Shuning uchun bu tugma aniq va ko'rinadigan
+ * joyda turadi.
+ *
+ * `drop_pending_updates` ISHLATILMAYDI: kutib turgan mijoz
+ * xabarlarini o'chirib yuborardi.
+ */
+export async function refreshSalesWebhookAction(): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  const url = `${getSiteUrl().replace(/\/+$/, "")}/api/telegram-sales/webhook`;
+  try {
+    const result = await setSalesWebhook(url);
+    if (!result.ok) {
+      return { ok: false, error: result.description ?? "Telegram rad etdi" };
+    }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Ro‘yxatdan o‘tmadi" };
+  }
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.webhook.refresh",
+    entityType: "sales_settings",
+    entityId: "webhook",
+    newValue: { allowedUpdates: [...SALES_ALLOWED_UPDATES] },
+  });
+
+  revalidateSales();
+  return {
+    ok: true,
+    message: `Webhook yangilandi (${SALES_ALLOWED_UPDATES.length} ta update turi).`,
+  };
 }
 
 /* ------------------------ bilim bo'shliqlari ----------------------------- */

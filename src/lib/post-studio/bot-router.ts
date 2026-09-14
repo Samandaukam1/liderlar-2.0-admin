@@ -50,6 +50,15 @@ import {
   removeFromBlacklistBySlug,
   BLACKLIST_REASON_CONTRACT,
 } from "@/lib/intake/blacklist.ts";
+import { createIntakeLinkFromBot, handleIntakeNameStep } from "@/lib/intake/intake-link-bot";
+import {
+  INTAKE_LINK_BUTTON_LABEL,
+  INTAKE_LINK_COMMAND,
+  INTAKE_LINK_NAME_PROMPT,
+  isIntakeLinkNamePrompt,
+  parseIntakeGenderCallback,
+  parseNameFromGenderPrompt,
+} from "@/lib/intake/intake-link-messages";
 import {
   buildCrmListPage,
   CRM_LIST_BY_BUTTON,
@@ -106,6 +115,7 @@ export const EDITORIAL_HELP_REPLY = [
   "/kutayotganlar — kutayotganlar ro‘yxati",
   "/toldirayotganlar — to‘ldirayotganlar ro‘yxati",
   "/qora — qora ro‘yxatga ism kiritish",
+  "/anketa — nomzodga anketa havolasi yaratish",
 ].join("\n");
 
 export const NOT_AUTHORIZED_REPLY =
@@ -127,7 +137,12 @@ export interface TelegramUpdate {
     id: string;
     from?: TelegramFrom;
     data?: string;
-    message?: { chat?: { id?: number }; message_id?: number };
+    /**
+     * `text` kerak: anketa oqimida ism BOT XABARINING MATNIDA
+     * saqlanadi va callback kelganda o'sha yerdan o'qiladi. Chat
+     * holati bazada saqlanmaydi.
+     */
+    message?: { chat?: { id?: number }; message_id?: number; text?: string };
   };
 }
 
@@ -155,6 +170,7 @@ function keyboardFor(editorial: boolean): string[][] | undefined {
     [PUBLISHED_BUTTON_LABEL],
     [WAITING_BUTTON_LABEL, FILLING_BUTTON_LABEL],
     [BLACKLIST_ADD_BUTTON_LABEL],
+    [INTAKE_LINK_BUTTON_LABEL],
   ];
 }
 
@@ -263,6 +279,34 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
       inlineKeyboard: payload.keyboard.length > 0 ? payload.keyboard : undefined,
     });
     console.log("[telegram-webhook] sendMessage success command=undo");
+    return;
+  }
+
+  /*
+   * ANKETA HAVOLASI — IKKI QADAM, HOLATSIZ.
+   *
+   * Qora ro'yxat oqimi bilan bir xil naqsh: savol `force_reply`
+   * bilan ketadi, javob `reply_to_message` orqali taniladi. Chat
+   * holati bazada saqlanmaydi — saqlansa, yarim tashlab ketilgan
+   * suhbat keyingi har qanday xabarni ism deb o'qib yuborardi.
+   */
+  if (command === INTAKE_LINK_COMMAND || text === INTAKE_LINK_BUTTON_LABEL) {
+    if (!editorial) return deny(chatId, keyboard);
+    await sendTelegramMessage(chatId, INTAKE_LINK_NAME_PROMPT, { forceReply: true });
+    console.log("[telegram-webhook] sendMessage success command=intake-link-prompt");
+    return;
+  }
+
+  if (isIntakeLinkNamePrompt(message?.reply_to_message?.text)) {
+    // Javob ham qayta tekshiriladi: savol boshqa chatga uzatilishi
+    // va u yerdan javob berilishi mumkin.
+    if (!editorial) return deny(chatId, keyboard);
+    const step = handleIntakeNameStep(text);
+    await sendTelegramMessage(chatId, step.text, {
+      ...(step.keyboard ? { inlineKeyboard: step.keyboard } : {}),
+      ...(step.askAgain ? { forceReply: true } : {}),
+    });
+    console.log(`[telegram-webhook] anketa ism qadami: ok=${step.ok}`);
     return;
   }
 
@@ -443,6 +487,45 @@ async function handleCallbackQuery(
    * bilan yoziladi: `editMessageText` rasm ostida "there is no text in the
    * message to edit" bilan rad etiladi va tugma joyida qolib ketardi.
    */
+  /*
+   * ANKETA HAVOLASI — jins tanlandi.
+   *
+   * Ism BOT XABARINING MATNIDAN o'qiladi. Havola yaratilgach xabar
+   * tahrirlanadi va ism belgisi undan yo'qoladi — shuning uchun
+   * ikkinchi marta bosilsa ism topilmaydi va ikkinchi anketa
+   * YARATILMAYDI.
+   */
+  const gender = parseIntakeGenderCallback(query.data);
+  if (gender) {
+    if (chatId == null || !(await isEditorialChat(chatId))) {
+      await safeAnswerCallback(query.id, "Ruxsat yo‘q");
+      return;
+    }
+    const fullName = parseNameFromGenderPrompt(query.message?.text ?? null);
+    if (!fullName) {
+      await safeAnswerCallback(query.id, "Havola allaqachon yaratilgan");
+      return;
+    }
+
+    await safeAnswerCallback(query.id, "Yaratilmoqda…");
+    const outcome = await createIntakeLinkFromBot({
+      fullName,
+      gender,
+      origin: "post_bot",
+    });
+
+    const messageId = query.message?.message_id ?? null;
+    if (messageId != null) {
+      // Tugmalar OLIB TASHLANADI: qayta bosilsa tushunarsiz natija
+      // bo'lardi, va yuqoridagi ism belgisi ham yo'qoladi.
+      await editTelegramMessageText(chatId, messageId, outcome.text);
+    } else {
+      await sendTelegramMessage(chatId, outcome.text);
+    }
+    console.log(`[telegram-webhook] anketa havolasi: ok=${outcome.ok}`);
+    return;
+  }
+
   const channelPostId = parseChannelConfirmCallback(query.data);
   if (channelPostId) {
     if (chatId == null || !(await isEditorialChat(chatId))) {

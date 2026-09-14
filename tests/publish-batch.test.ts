@@ -706,13 +706,14 @@ test("editorial actions are refused outside the configured chats", () => {
 
   // Every callback kind re-checks it as well. The count rises with each new
   // inline action — a fifth was added when the blacklist entry gained its
-  // "remove" button, and a sixth by the "kanalga qo'yildi" confirmation, which
-  // records an editorial decision against a candidate's post.
+  // "remove" button, a sixth by the "kanalga qo'yildi" confirmation, and a
+  // seventh by the intake-link gender choice — that one creates a real
+  // candidate record, so it must never be reachable from a stray chat.
   const callbacks = ROUTER.match(/async function handleCallbackQuery[\s\S]*?\n}/)?.[0] ?? "";
   assert.equal(
     (callbacks.match(/await isEditorialChat\(chatId\)/g) ?? []).length,
-    6,
-    "CRM pagination, channel confirm, blacklist add, blacklist remove, undo and payment callbacks are each guarded",
+    7,
+    "CRM pagination, intake link, channel confirm, blacklist add, blacklist remove, undo and payment callbacks are each guarded",
   );
 });
 

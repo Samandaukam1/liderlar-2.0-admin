@@ -6,6 +6,10 @@ import { handleIncomingMessage } from "@/lib/sales/flow/engine";
 import { recordPaymentEvidence } from "@/lib/sales/flow/payment-evidence";
 import { classifyIncomingAttachment } from "@/lib/sales/flow/attachment-service";
 import {
+  handleOperatorCallback,
+  handleOperatorMessage,
+} from "@/lib/sales/operator-router";
+import {
   getConnection,
   ingestBusinessMessage,
   markMessagesDeleted,
@@ -75,6 +79,20 @@ export async function POST(request: NextRequest) {
 }
 
 async function handleSalesUpdate(update: unknown): Promise<void> {
+  /*
+   * OPERATOR YO'LI — MIJOZ YO'LIDAN OLDIN VA UNDAN AJRALGAN.
+   *
+   * Moderator botga to'g'ridan-to'g'ri yozganda oddiy `message`
+   * keladi (business chatdan emas). `parseSalesUpdate` bunday
+   * updatelarni "ignored" deb tashlab yuboradi, shuning uchun ular
+   * shu yerda, undan oldin ushlanadi.
+   *
+   * Bu yo'l mijoz suhbatiga TEGMAYDI: `operator-router` faqat
+   * tahririyat ro'yxatidagi chatga va faqat `business_connection_id`
+   * siz yozadigan transportdan foydalanadi.
+   */
+  if (await routeOperatorUpdate(update)) return;
+
   // Yo'nalishni aniqlashda eng ishonchli manba — ulanish egasining id'si.
   // Shuning uchun avval ulanish o'qiladi (xabarning o'zidan olinadigan
   // zaxira qoida `resolveDirection` ichida).
@@ -166,6 +184,49 @@ async function handleSalesUpdate(update: unknown): Promise<void> {
     case "ignored":
       console.log(`[sales-webhook] e’tiborsiz: ${parsed.reason}`);
   }
+}
+
+/**
+ * Moderatorning o'z chatidagi xabari yoki tugmasi.
+ *
+ * `true` qaytsa — update ishlandi va mijoz oqimiga tushmaydi.
+ */
+async function routeOperatorUpdate(update: unknown): Promise<boolean> {
+  if (!update || typeof update !== "object") return false;
+  const raw = update as Record<string, unknown>;
+
+  const callback = raw.callback_query as
+    | {
+        id?: string;
+        data?: string;
+        message?: { chat?: { id?: number }; message_id?: number; text?: string };
+      }
+    | undefined;
+  if (callback?.id) {
+    return handleOperatorCallback({
+      id: callback.id,
+      chatId: callback.message?.chat?.id ?? null,
+      messageId: callback.message?.message_id ?? null,
+      messageText: callback.message?.text ?? null,
+      data: callback.data ?? null,
+    });
+  }
+
+  // FAQAT oddiy `message`. Business xabarlar boshqa kalitlarda
+  // keladi va ular bu yerga umuman tushmaydi.
+  const message = raw.message as
+    | { chat?: { id?: number }; text?: string; reply_to_message?: { text?: string } }
+    | undefined;
+  const chatId = message?.chat?.id;
+  if (message && typeof chatId === "number") {
+    return handleOperatorMessage({
+      chatId,
+      text: message.text ?? null,
+      replyToText: message.reply_to_message?.text ?? null,
+    });
+  }
+
+  return false;
 }
 
 /** Ulanish id'si uch xil update shaklida uch xil joyda turadi. */
