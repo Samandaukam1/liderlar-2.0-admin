@@ -228,23 +228,28 @@ test("natija xabaridan ism o‘qilmaydi — takror himoyasi saqlanadi", () => {
 
 /* ====================== 4b. HAVOLA DOMENI ============================== */
 
-test("havola OMMAVIY saytdan yasaladi, admin domenidan emas", () => {
+test("havola YAGONA manbadan yasaladi", () => {
   /*
-   * XATO SHU YERDA EDI: havola `getSiteUrl()` dan yasalardi, u esa
-   * productionda admin manzilini beradi. Nomzodga
-   * `liderlar-2-0-admin.vercel.app/anketa/...` ketardi va bunday
-   * havola umuman ochilmaydi — anketa sahifasi ommaviy saytda.
+   * ANKETA FORMASI ADMIN ILOVASIDA. Ommaviy saytda `/anketa`
+   * marshruti yo'q va rewrite ham yo'q — tekshirildi. Shuning uchun
+   * havolani `liderlar.uz` ga yo'naltirish uni o'lik qiladi.
+   *
+   * Bot va sotuv oqimi panel bilan BIR XIL mexanizmdan foydalanadi:
+   * forma ko'chsa, bitta env qiymati hammasini bir vaqtda
+   * to'g'irlaydi.
    */
   const bot = readFileSync("src/lib/intake/intake-link-bot.ts", "utf8");
   const engine = readFileSync("src/lib/sales/flow/engine.ts", "utf8");
   for (const [name, src] of [["bot", bot], ["engine", engine]] as const) {
-    assert.ok(src.includes("buildIntakeBaseUrl()"), `${name}: ommaviy manba ishlatilsin`);
-    assert.ok(!/getSiteUrl\(\)[^\n]*anketa/.test(src), `${name}: admin domeni qolmasin`);
+    assert.ok(src.includes("buildIntakeBaseUrl()"), `${name}: yagona manba ishlatilsin`);
+    assert.ok(!/getSiteUrl\(\)[^\n]*anketa/.test(src), `${name}: sayt manzili ishlatilmasin`);
   }
 
-  // Manba `*.vercel.app` ni rad etadigan resolverga tayanadi.
   const base = readFileSync("src/lib/intake/intake-base-url.ts", "utf8");
-  assert.ok(base.includes("resolvePublicWebUrl"));
+  // Env birinchi — forma ko'chganda bitta joydan o'zgaradi.
+  assert.ok(base.includes("INTAKE_BASE_URL"));
+  assert.ok(base.includes("x-forwarded-host"), "deploy manzili zaxira sifatida");
+  assert.ok(!base.includes("resolvePublicWebUrl"), "ommaviy sayt anketani servis qilmaydi");
 });
 
 /* ====================== 5. IKKALA BOTGA ULANGAN ======================== */
