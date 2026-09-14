@@ -125,11 +125,43 @@ export const GENDER_LABELS: Record<IntakeGender, string> = {
 };
 
 /**
- * Tayyor havola xabari.
+ * Nomzodga yuboriladigan ko'rsatma.
  *
- * Havola ALOHIDA QATORDA va atrofida belgi yo'q — Telegram uni
- * shundagina to'liq bosiladigan qilib ko'rsatadi va nusxalashda
- * ortiqcha belgi qo'shilmaydi.
+ * MATN `sales/flow/templates.ts` DAGI `intake_instructions` BILAN
+ * AYNAN BIR XIL. U yerda `isExact: true` deb belgilangan — ya'ni
+ * tahririyat yozgan va o'zgartirilmaydigan matn. Ikki nusxa
+ * yozilsa, ular vaqt o'tib ajralib ketardi va bir xil nomzod
+ * kanalga qarab boshqa-boshqa ko'rsatma olardi.
+ *
+ * Bu yerda nusxa turibdi, chunki modul SOF: u sotuv oqimining
+ * server kodini import qila olmaydi. Testda ikkalasi
+ * solishtiriladi.
+ */
+export const INTAKE_INSTRUCTIONS = `LINKni imkon qadar tezroq toldiirb javoblarni yuboring u vaqtinchalik link va tahiman bir necha soatda yaroqsiz boladi
+
+Rasm AYNAN linkdagi birinchi sahifadagi promt bilan yaratilishi shart
+
+promtni nusxalang va rasmingiz bilan birga ChatGPT yoki Gemini’ga bering. Tayyor natijani yuqoridagi «Rasm yuklash» tugmasi orqali joylang.
+
+Boshqa usulda tayyorlangan yoki oddiy rasm qabul qilinmaydi — bunday holatda maqola chiqarilmaydi.`;
+
+/** Telegram HTML rejimida faqat shu uchtasi qochiriladi. */
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Tayyor xabar — BITTA BOSISHDA NUSXALANADI.
+ *
+ * Butun matn `<pre>` blokida: Telegram'da bunday blok ustiga bir
+ * marta bosilsa, uning HAMMA mazmuni nusxalanadi. Moderator
+ * havolani va ko'rsatmani alohida-alohida belgilab o'tirmaydi —
+ * bir bosish, keyin nomzodga qo'yish.
+ *
+ * ORTIQCHA SO'Z YO'Q. Sarlavha, ism, jins va muddat qatorlari
+ * ATAYLAB olib tashlandi: bu matn nomzodga ketadi, moderatorga
+ * emas, va undagi har ortiqcha qator nusxalashda ham ko'chib
+ * o'tardi.
  */
 export function buildIntakeLinkResult(input: {
   fullName: string;
@@ -137,46 +169,7 @@ export function buildIntakeLinkResult(input: {
   link: string;
   expiresAt: string | null;
 }): string {
-  const lines = [
-    "✅ ANKETA HAVOLASI TAYYOR",
-    "",
-    `${input.fullName} · ${GENDER_LABELS[input.gender]}`,
-    "",
-    input.link,
-  ];
-  if (input.expiresAt) {
-    lines.push("", `Amal qilish muddati: ${formatExpiry(input.expiresAt)}`);
-  }
-  lines.push("", "Havolani nomzodga yuboring — u faqat shu nomzod uchun.");
-  return lines.join("\n");
-}
-
-/**
- * Muddat Toshkent vaqtida — moderator boshqa vaqt mintaqasini
- * o'ylamasin.
- *
- * Matn QISMLARDAN yig'iladi, tayyor `format()` natijasidan emas.
- * Sababi: `uz-UZ` ning ajratuvchisi muhitga bog'liq (bir joyda
- * "18/09/2026, 00:00", boshqasida "18.09.2026 00:00") va bu
- * Node versiyasi yoki platforma o'zgarganda jimgina boshqacha
- * natija beradi.
- */
-function formatExpiry(iso: string): string {
-  const at = Date.parse(iso);
-  if (!Number.isFinite(at)) return iso;
-
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Tashkent",
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date(at));
-
-  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
-  return `${get("day")}.${get("month")}.${get("year")} ${get("hour")}:${get("minute")}`;
+  return `<pre>${escapeHtml(`${input.link}\n${INTAKE_INSTRUCTIONS}`)}</pre>`;
 }
 
 /** Ism yetarli bo'lmaganda qaytariladigan savol — oqim uzilmasin. */

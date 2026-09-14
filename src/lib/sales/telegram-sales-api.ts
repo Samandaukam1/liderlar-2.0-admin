@@ -374,6 +374,7 @@ export async function sendSalesOperatorMessage(
   options: {
     inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>;
     forceReply?: boolean;
+    parseMode?: "HTML";
   } = {},
 ): Promise<{ ok: boolean; messageId: number | null; error: string | null }> {
   if (!(await isSalesOperatorChat(chatId))) {
@@ -390,6 +391,7 @@ export async function sendSalesOperatorMessage(
   return operatorCall("sendMessage", {
     chat_id: chatId,
     text,
+    ...(options.parseMode ? { parse_mode: options.parseMode } : {}),
     ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
   });
 }
@@ -399,6 +401,7 @@ export async function editSalesOperatorMessage(
   chatId: number,
   messageId: number,
   text: string,
+  options: { parseMode?: "HTML" } = {},
 ): Promise<{ ok: boolean; messageId: number | null; error: string | null }> {
   if (!(await isSalesOperatorChat(chatId))) {
     return { ok: false, messageId: null, error: "chat tahririyat ro‘yxatida emas" };
@@ -407,6 +410,7 @@ export async function editSalesOperatorMessage(
     chat_id: chatId,
     message_id: messageId,
     text,
+    ...(options.parseMode ? { parse_mode: options.parseMode } : {}),
     reply_markup: { inline_keyboard: [] },
   });
 }

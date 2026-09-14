@@ -176,12 +176,13 @@ export async function editTelegramMessageText(
   chatId: number,
   messageId: number,
   text: string,
-  options: { inlineKeyboard?: InlineButton[][] } = {},
+  options: { inlineKeyboard?: InlineButton[][]; parseMode?: "MarkdownV2" | "HTML" } = {},
 ): Promise<void> {
   await callTelegram("editMessageText", {
     chat_id: chatId,
     message_id: messageId,
     text,
+    ...(options.parseMode ? { parse_mode: options.parseMode } : {}),
     reply_markup: { inline_keyboard: options.inlineKeyboard ?? [] },
   });
 }

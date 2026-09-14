@@ -2,8 +2,8 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
-import { getSiteUrl } from "@/lib/site-url";
 import { createIntakeWithLink } from "@/lib/intake/intake-link-service";
+import { buildIntakeBaseUrl } from "@/lib/intake/intake-base-url";
 import { getSalesSettings } from "../settings.ts";
 import { getConnection } from "../repository.ts";
 import { generateTestReply } from "../test-chat.ts";
@@ -885,7 +885,7 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
       fullName: name.fullName,
       gender: name.gender,
       actorId: null,
-      baseUrl: `${getSiteUrl().replace(/\/+$/, "")}/anketa`,
+      baseUrl: await buildIntakeBaseUrl(),
       origin: "ai_sales_bot",
     });
 

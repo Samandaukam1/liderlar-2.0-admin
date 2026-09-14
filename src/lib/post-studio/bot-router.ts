@@ -515,12 +515,13 @@ async function handleCallbackQuery(
     });
 
     const messageId = query.message?.message_id ?? null;
+    const sendOptions = outcome.parseMode ? { parseMode: outcome.parseMode } : {};
     if (messageId != null) {
       // Tugmalar OLIB TASHLANADI: qayta bosilsa tushunarsiz natija
       // bo'lardi, va yuqoridagi ism belgisi ham yo'qoladi.
-      await editTelegramMessageText(chatId, messageId, outcome.text);
+      await editTelegramMessageText(chatId, messageId, outcome.text, sendOptions);
     } else {
-      await sendTelegramMessage(chatId, outcome.text);
+      await sendTelegramMessage(chatId, outcome.text, sendOptions);
     }
     console.log(`[telegram-webhook] anketa havolasi: ok=${outcome.ok}`);
     return;

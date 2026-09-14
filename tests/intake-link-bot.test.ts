@@ -15,6 +15,7 @@ import {
   buildNameRetryPrompt,
   cleanNameInput,
   GENDER_LABELS,
+  INTAKE_INSTRUCTIONS,
 } from "../src/lib/intake/intake-link-messages.ts";
 import { validateFullName } from "../src/lib/sales/flow/full-name.ts";
 
@@ -94,11 +95,19 @@ test("begona callback qabul qilinmaydi", () => {
   }
 });
 
-test("tugma yorlig‘i ikkala botda BIR XIL", () => {
-  // Moderator ikki botda bir xil narsani ko'rishi kerak.
-  assert.ok(router.includes(INTAKE_LINK_BUTTON_LABEL));
+test("tugma yorlig‘i ikkala botda BIR XIL manbadan", () => {
+  // Yorliq matni HECH QAYERDA takrorlanmaydi — ikkala bot ham
+  // konstantani import qiladi. Nusxa yozilsa, bittasi o'zgarganda
+  // moderator ikki botda ikki xil tugma ko'rardi.
+  assert.ok(router.includes("INTAKE_LINK_BUTTON_LABEL"));
   assert.ok(operator.includes("INTAKE_LINK_BUTTON_LABEL"));
+  assert.ok(!router.includes(INTAKE_LINK_BUTTON_LABEL), "matn nusxasi bo‘lmasin");
   assert.match(INTAKE_LINK_BUTTON_LABEL, /Anketa/);
+});
+
+test("jins yorliqlari o‘zbekcha", () => {
+  assert.equal(GENDER_LABELS.male, "erkak");
+  assert.equal(GENDER_LABELS.female, "ayol");
 });
 
 test("ikkita tugma — erkak va ayol", () => {
@@ -140,7 +149,37 @@ test("ism bosh harflarga keltiriladi", () => {
 
 /* =========================== 4. NATIJA MATNI =========================== */
 
-test("havola ALOHIDA qatorda — bosiladigan bo‘lsin", () => {
+test("butun matn BITTA nusxalanadigan blokda", () => {
+  // Moderator havolani va ko'rsatmani alohida belgilab o'tirmasin:
+  // Telegram'da <pre> ustiga bir bosish hammasini nusxalaydi.
+  const text = buildIntakeLinkResult({
+    fullName: "Karimov Aziz",
+    gender: "male",
+    link: "https://liderlar.uz/anketa/abc123",
+    expiresAt: null,
+  });
+  assert.ok(text.startsWith("<pre>"));
+  assert.ok(text.endsWith("</pre>"));
+  assert.equal((text.match(/<pre>/g) ?? []).length, 1);
+});
+
+test("ORTIQCHA SO‘Z YO‘Q — matn nomzodga ketadi", () => {
+  const text = buildIntakeLinkResult({
+    fullName: "Karimov Aziz",
+    gender: "male",
+    link: "https://liderlar.uz/anketa/abc123",
+    expiresAt: new Date().toISOString(),
+  });
+  // Sarlavha, ism, jins va muddat qatorlari bo'lmasligi kerak: ular
+  // nusxalashda ham ko'chib o'tardi.
+  assert.ok(!text.includes("ANKETA HAVOLASI TAYYOR"));
+  assert.ok(!text.includes("Karimov Aziz"));
+  assert.ok(!text.includes("erkak"));
+  assert.ok(!text.includes("Amal qilish muddati"));
+  assert.ok(!text.includes("Havolani nomzodga yuboring"));
+});
+
+test("havola BIRINCHI qatorda, keyin ko‘rsatma", () => {
   const link = "https://liderlar.uz/anketa/abc123";
   const text = buildIntakeLinkResult({
     fullName: "Karimov Aziz",
@@ -148,35 +187,64 @@ test("havola ALOHIDA qatorda — bosiladigan bo‘lsin", () => {
     link,
     expiresAt: null,
   });
-  const lines = text.split("\n");
-  assert.ok(lines.includes(link), "havola o‘z qatorida bo‘lsin");
-  assert.match(text, /Karimov Aziz · erkak/);
+  const inner = text.replace(/^<pre>/, "").replace(/<\/pre>$/, "");
+  assert.equal(inner.split("\n")[0], link);
+  assert.ok(inner.includes("Rasm AYNAN linkdagi birinchi sahifadagi promt bilan"));
+  assert.ok(inner.includes("ChatGPT yoki Gemini"));
+  assert.ok(inner.includes("maqola chiqarilmaydi"));
 });
 
-test("muddat Toshkent vaqtida ko‘rsatiladi", () => {
+test("ko‘rsatma matni sotuv shabloni bilan AYNAN bir xil", () => {
+  // Ikki nusxa yozilsa, bir xil nomzod kanalga qarab boshqa-boshqa
+  // ko'rsatma olardi.
+  const templates = readFileSync("src/lib/sales/flow/templates.ts", "utf8");
+  const start = templates.indexOf('key: "intake_instructions"');
+  const body = templates.slice(templates.indexOf("body: `", start) + 7);
+  const templateText = body.slice(0, body.indexOf("`,"));
+  assert.equal(INTAKE_INSTRUCTIONS, templateText);
+});
+
+test("HTML belgilari qochiriladi", () => {
+  // Havola odatda toza, lekin qochirish bo'lmasa bitta `<` butun
+  // yuborishni 400 bilan yiqitardi.
   const text = buildIntakeLinkResult({
-    fullName: "Karimova Dilnoza",
-    gender: "female",
-    link: "https://liderlar.uz/anketa/x",
-    expiresAt: "2026-09-17T19:00:00Z",
+    fullName: "X",
+    gender: "male",
+    link: "https://liderlar.uz/anketa/a<b&c",
+    expiresAt: null,
   });
-  // 19:00 UTC = 00:00 Toshkent (keyingi kun).
-  assert.match(text, /18\.09\.2026 00:00/);
+  assert.ok(text.includes("a&lt;b&amp;c"));
 });
 
-test("muddat yo‘q bo‘lsa qator umuman chiqmaydi", () => {
+test("natija xabaridan ism o‘qilmaydi — takror himoyasi saqlanadi", () => {
   const text = buildIntakeLinkResult({
     fullName: "Karimov Aziz",
     gender: "male",
     link: "https://liderlar.uz/anketa/x",
     expiresAt: null,
   });
-  assert.ok(!text.includes("Amal qilish muddati"));
+  assert.equal(parseNameFromGenderPrompt(text), null);
 });
 
-test("jins yorliqlari o‘zbekcha", () => {
-  assert.equal(GENDER_LABELS.male, "erkak");
-  assert.equal(GENDER_LABELS.female, "ayol");
+/* ====================== 4b. HAVOLA DOMENI ============================== */
+
+test("havola OMMAVIY saytdan yasaladi, admin domenidan emas", () => {
+  /*
+   * XATO SHU YERDA EDI: havola `getSiteUrl()` dan yasalardi, u esa
+   * productionda admin manzilini beradi. Nomzodga
+   * `liderlar-2-0-admin.vercel.app/anketa/...` ketardi va bunday
+   * havola umuman ochilmaydi — anketa sahifasi ommaviy saytda.
+   */
+  const bot = readFileSync("src/lib/intake/intake-link-bot.ts", "utf8");
+  const engine = readFileSync("src/lib/sales/flow/engine.ts", "utf8");
+  for (const [name, src] of [["bot", bot], ["engine", engine]] as const) {
+    assert.ok(src.includes("buildIntakeBaseUrl()"), `${name}: ommaviy manba ishlatilsin`);
+    assert.ok(!/getSiteUrl\(\)[^\n]*anketa/.test(src), `${name}: admin domeni qolmasin`);
+  }
+
+  // Manba `*.vercel.app` ni rad etadigan resolverga tayanadi.
+  const base = readFileSync("src/lib/intake/intake-base-url.ts", "utf8");
+  assert.ok(base.includes("resolvePublicWebUrl"));
 });
 
 /* ====================== 5. IKKALA BOTGA ULANGAN ======================== */

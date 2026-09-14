@@ -1,6 +1,6 @@
 import "server-only";
-import { getSiteUrl } from "@/lib/site-url";
 import { createIntakeWithLink } from "./intake-link-service";
+import { buildIntakeBaseUrl } from "./intake-base-url";
 import { validateFullName } from "@/lib/sales/flow/full-name";
 import {
   buildGenderKeyboard,
@@ -65,6 +65,13 @@ export interface IntakeLinkOutcome {
   ok: boolean;
   text: string;
   intakeId: string | null;
+  /**
+   * Tayyor havola HTML bilan ketadi (`<pre>` — bitta bosishda
+   * nusxalanadi). Xato matni esa ODDIY: unda Telegram'ning o'zi
+   * qaytargan tavsif bo'lishi mumkin va undagi `<` butun yuborishni
+   * yiqitardi.
+   */
+  parseMode: "HTML" | null;
 }
 
 /**
@@ -84,6 +91,7 @@ export async function createIntakeLinkFromBot(input: {
       ok: false,
       text: buildNameRetryPrompt(checked.reason ?? "noto‘g‘ri format"),
       intakeId: null,
+      parseMode: null,
     };
   }
 
@@ -93,7 +101,7 @@ export async function createIntakeLinkFromBot(input: {
     // Bot sessiyasi yo'q — anketa kim yaratgani `origin` bilan
     // va audit yozuvi bilan ajratiladi.
     actorId: null,
-    baseUrl: `${getSiteUrl().replace(/\/+$/, "")}/anketa`,
+    baseUrl: await buildIntakeBaseUrl(),
     origin: input.origin,
   });
 
@@ -102,6 +110,7 @@ export async function createIntakeLinkFromBot(input: {
       ok: false,
       text: `❌ Havola yaratilmadi: ${created.error ?? "noma’lum xato"}`,
       intakeId: null,
+      parseMode: null,
     };
   }
 
@@ -114,5 +123,6 @@ export async function createIntakeLinkFromBot(input: {
       expiresAt: created.expiresAt ?? null,
     }),
     intakeId: created.intakeId ?? null,
+    parseMode: "HTML",
   };
 }

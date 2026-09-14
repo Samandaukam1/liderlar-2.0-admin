@@ -111,10 +111,11 @@ export async function handleOperatorCallback(input: OperatorCallback): Promise<b
     origin: "sales_bot",
   });
 
+  const sendOptions = outcome.parseMode ? { parseMode: outcome.parseMode } : {};
   if (input.messageId != null) {
-    await editSalesOperatorMessage(input.chatId, input.messageId, outcome.text);
+    await editSalesOperatorMessage(input.chatId, input.messageId, outcome.text, sendOptions);
   } else {
-    await sendSalesOperatorMessage(input.chatId, outcome.text);
+    await sendSalesOperatorMessage(input.chatId, outcome.text, sendOptions);
   }
   return true;
 }
