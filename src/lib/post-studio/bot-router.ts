@@ -4,8 +4,16 @@ import {
   editTelegramMessageCaption,
   editTelegramMessageText,
   sendTelegramMessage,
+  sendTelegramPoll,
   type InlineButton,
 } from "./telegram-api.ts";
+import {
+  buildRegionPoll,
+  REGION_POLL_BUTTON_LABEL,
+  REGION_POLL_COMMAND,
+  REGION_POLL_HINT,
+  validateRegionPoll,
+} from "./region-poll.ts";
 import {
   buildChannelConfirmedCaption,
   confirmChannelPost,
@@ -116,6 +124,7 @@ export const EDITORIAL_HELP_REPLY = [
   "/toldirayotganlar — to‘ldirayotganlar ro‘yxati",
   "/qora — qora ro‘yxatga ism kiritish",
   "/anketa — nomzodga anketa havolasi yaratish",
+  "/sorovnoma — kanal uchun hudud so‘rovnomasi",
 ].join("\n");
 
 export const NOT_AUTHORIZED_REPLY =
@@ -171,6 +180,7 @@ function keyboardFor(editorial: boolean): string[][] | undefined {
     [WAITING_BUTTON_LABEL, FILLING_BUTTON_LABEL],
     [BLACKLIST_ADD_BUTTON_LABEL],
     [INTAKE_LINK_BUTTON_LABEL],
+    [REGION_POLL_BUTTON_LABEL],
   ];
 }
 
@@ -283,6 +293,21 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   }
 
   /*
+   * HUDUD SO'ROVNOMASI.
+   *
+   * Bot so'rovnomani MODERATORNING chatiga yuboradi, kanalga emas:
+   * kanal identifikatori hech qayerda saqlanmagan va bot u yerda
+   * admin ekani ham kafolatlanmagan. Moderator uni bir bosishda
+   * kanalga uzatadi — bu ishonchliroq va hech qanday sozlama
+   * talab qilmaydi.
+   */
+  if (command === REGION_POLL_COMMAND || text === REGION_POLL_BUTTON_LABEL) {
+    if (!editorial) return deny(chatId, keyboard);
+    await sendRegionPoll(chatId);
+    return;
+  }
+
+  /*
    * ANKETA HAVOLASI — IKKI QADAM, HOLATSIZ.
    *
    * Qora ro'yxat oqimi bilan bir xil naqsh: savol `force_reply`
@@ -364,6 +389,33 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
     replyKeyboard: keyboard,
   });
   console.log("[telegram-webhook] sendMessage success command=help");
+}
+
+/** Hudud so'rovnomasini moderator chatiga yuboradi. */
+async function sendRegionPoll(chatId: number): Promise<void> {
+  const poll = buildRegionPoll();
+
+  // Chegara CHAQIRUVDAN OLDIN tekshiriladi: Telegram chegaradan
+  // oshgan so'rovnomani 400 bilan rad etadi va moderator "nega
+  // ishlamadi" degan savol bilan qolardi.
+  const checked = validateRegionPoll(poll);
+  if (!checked.ok) {
+    await sendTelegramMessage(chatId, `❌ So‘rovnoma yasalmadi: ${checked.error}`);
+    console.error(`[telegram-webhook] so‘rovnoma yaroqsiz: ${checked.error}`);
+    return;
+  }
+
+  try {
+    const sent = await sendTelegramPoll(chatId, poll);
+    // Izoh so'rovnomadan KEYIN: u so'rovnomaning o'zini kanalga
+    // uzatishga xalaqit qilmasin.
+    await sendTelegramMessage(chatId, REGION_POLL_HINT);
+    console.log(`[telegram-webhook] so‘rovnoma yuborildi message=${sent.messageId}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await sendTelegramMessage(chatId, `❌ So‘rovnoma yuborilmadi: ${message}`);
+    console.error("[telegram-webhook] so‘rovnoma xatosi", message);
+  }
 }
 
 /**
