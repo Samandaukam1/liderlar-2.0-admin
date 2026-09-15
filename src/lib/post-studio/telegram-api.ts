@@ -163,40 +163,6 @@ export async function sendTelegramMessage(
   return { messageId: result.message_id };
 }
 
-export interface SentPoll {
-  messageId: number;
-  pollId: string | null;
-}
-
-/**
- * So'rovnoma yuboradi.
- *
- * ANONIM MAJBURIY EMAS, LEKIN AMALDA SHART: Telegram kanallarda
- * faqat anonim so'rovnomaga ruxsat beradi va anonim bo'lmaganini
- * kanalga uzatib ham bo'lmaydi. Moderator so'rovnomani o'z chatidan
- * kanalga forward qiladi, ya'ni anonim bo'lmasa butun ish bekor.
- */
-export async function sendTelegramPoll(
-  chatId: number,
-  input: {
-    question: string;
-    options: readonly string[];
-    isAnonymous: boolean;
-    allowsMultipleAnswers: boolean;
-  },
-): Promise<SentPoll> {
-  const result = await callTelegram<{ message_id: number; poll?: { id?: string } }>("sendPoll", {
-    chat_id: chatId,
-    question: input.question,
-    // Telegram massivni JSON satri sifatida kutadi.
-    options: JSON.stringify(input.options),
-    is_anonymous: input.isAnonymous,
-    allows_multiple_answers: input.allowsMultipleAnswers,
-    type: "regular",
-  });
-  return { messageId: result.message_id, pollId: result.poll?.id ?? null };
-}
-
 /**
  * Rewrites a message in place.
  *

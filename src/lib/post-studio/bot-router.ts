@@ -4,16 +4,19 @@ import {
   editTelegramMessageCaption,
   editTelegramMessageText,
   sendTelegramMessage,
-  sendTelegramPoll,
   type InlineButton,
 } from "./telegram-api.ts";
 import {
-  buildRegionPollHint,
-  buildRegionPolls,
+  parseVoteCallback,
   REGION_POLL_BUTTON_LABEL,
   REGION_POLL_COMMAND,
-  validateRegionPoll,
-} from "./region-poll.ts";
+} from "./region-vote.ts";
+import {
+  getChannelId,
+  publishRegionVote,
+  recordRegionVote,
+  saveChannelId,
+} from "./region-vote-service.ts";
 import {
   buildChannelConfirmedCaption,
   confirmChannelPost,
@@ -141,6 +144,12 @@ export interface TelegramUpdate {
      * aynan shu orqali taniydi — chat holati hech qayerda saqlanmaydi.
      */
     reply_to_message?: { text?: string };
+    /**
+     * Kanaldan uzatilgan post. Kanal identifikatorini shu yerdan
+     * olamiz: uni Telegram interfeysi ko'rsatmaydi va moderator
+     * qo'lda topa olmaydi.
+     */
+    forward_from_chat?: { id?: number; type?: string; title?: string };
   };
   callback_query?: {
     id: string;
@@ -293,6 +302,27 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   }
 
   /*
+   * KANALNI RO'YXATGA OLISH.
+   *
+   * Moderator kanaldan post uzatganda uning identifikatori
+   * saqlanadi. Boshqa yo'l yo'q: Telegram kanal id'sini (manfiy 13
+   * xonali son) interfeysda ko'rsatmaydi va odam uni qo'lda topa
+   * olmaydi.
+   */
+  const forwarded = message?.forward_from_chat;
+  if (forwarded?.type === "channel" && typeof forwarded.id === "number") {
+    if (!editorial) return deny(chatId, keyboard);
+    await saveChannelId(forwarded.id, forwarded.title ?? null);
+    await sendTelegramMessage(
+      chatId,
+      `✅ Kanal saqlandi: ${forwarded.title ?? "(nomsiz)"}\n\n` +
+        "Endi “Hudud so‘rovnomasi” tugmasini bosing.",
+      { replyKeyboard: keyboard },
+    );
+    return;
+  }
+
+  /*
    * HUDUD SO'ROVNOMASI.
    *
    * Bot so'rovnomani MODERATORNING chatiga yuboradi, kanalga emas:
@@ -392,52 +422,42 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
 }
 
 /**
- * Hudud so'rovnomasini moderator chatiga yuboradi.
+ * Hudud so'rovini KANALGA joylaydi.
  *
- * BIR NECHTA SO'ROVNOMA BO'LISHI MUMKIN: Telegram bitta so'rovnomaga
- * 12 tadan ko'p variant qo'ymaydi, hudud esa 14 ta. Bo'lish
- * `region-poll.ts` da, chegaraga qarab avtomatik.
+ * NEGA KANALGA, MODERATOR CHATIGA EMAS: tugmali xabar forward
+ * qilinganda tugmalarini YO'QOTADI. Ya'ni "botdan olib, kanalga
+ * tashlash" bu yerda ishlamaydi — bot kanalga o'zi yozishi va u
+ * yerda admin bo'lishi kerak.
  */
 async function sendRegionPoll(chatId: number): Promise<void> {
-  const polls = buildRegionPolls();
-
-  // Chegara CHAQIRUVDAN OLDIN tekshiriladi: Telegram chegaradan
-  // oshgan so'rovnomani 400 bilan rad etadi va moderator "nega
-  // ishlamadi" degan savol bilan qolardi. HAMMA bo'lak tekshiriladi.
-  for (const poll of polls) {
-    const checked = validateRegionPoll(poll);
-    if (!checked.ok) {
-      await sendTelegramMessage(chatId, `❌ So‘rovnoma yasalmadi: ${checked.error}`);
-      console.error(`[telegram-webhook] so‘rovnoma yaroqsiz: ${checked.error}`);
-      return;
-    }
+  const channelId = await getChannelId();
+  if (channelId == null) {
+    await sendTelegramMessage(chatId, CHANNEL_NOT_LINKED_REPLY);
+    return;
   }
 
-  const sentIds: number[] = [];
-  for (const poll of polls) {
-    try {
-      const sent = await sendTelegramPoll(chatId, poll);
-      sentIds.push(sent.messageId);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      // Birinchi bo'lak ketib, ikkinchisi yiqilsa moderator buni
-      // BILISHI kerak: aks holda u yarim so'rovnomani kanalga
-      // uzatib, hududlarning yarmini so'ramay qolardi.
-      await sendTelegramMessage(
-        chatId,
-        `❌ So‘rovnomaning ${sentIds.length + 1}-qismi yuborilmadi: ${message}\n` +
-          (sentIds.length > 0 ? "Yuborilganini kanalga UZATMANG — ro‘yxat to‘liq emas." : ""),
-      );
-      console.error("[telegram-webhook] so‘rovnoma xatosi", message);
-      return;
-    }
+  const result = await publishRegionVote();
+  if (!result.ok) {
+    await sendTelegramMessage(chatId, `❌ So‘rov joylanmadi: ${result.error}`);
+    console.error(`[telegram-webhook] so‘rov joylanmadi: ${result.error}`);
+    return;
   }
 
-  // Izoh so'rovnomalardan KEYIN: ular kanalga uzatishga xalaqit
-  // qilmasin va tartib buzilmasin.
-  await sendTelegramMessage(chatId, buildRegionPollHint(polls.length));
-  console.log(`[telegram-webhook] so‘rovnoma yuborildi: ${sentIds.length} qism`);
+  await sendTelegramMessage(
+    chatId,
+    "✅ So‘rov kanalga joylandi. Odamlar tugmani bosgan sari sonlar o‘zi yangilanadi.",
+  );
+  console.log(`[telegram-webhook] hudud so‘rovi joylandi message=${result.messageId}`);
 }
+
+const CHANNEL_NOT_LINKED_REPLY = [
+  "Kanal hali ro‘yxatga olinmagan.",
+  "",
+  "Kanaldan ISTALGAN bitta postni shu yerga uzating (forward) —",
+  "kanal avtomatik saqlanadi. Keyin so‘rov tugmasini qayta bosing.",
+  "",
+  "Bot kanalda admin bo‘lishi shart.",
+].join("\n");
 
 /**
  * Moderator yuborgan ismni qora ro'yxatga kiritadi va o'xshashlarini
@@ -560,6 +580,38 @@ async function handleCallbackQuery(
    * bilan yoziladi: `editMessageText` rasm ostida "there is no text in the
    * message to edit" bilan rad etiladi va tugma joyida qolib ketardi.
    */
+  /*
+   * KANALDAGI OVOZ.
+   *
+   * BU YERDA TAHRIRIYAT TEKSHIRUVI YO'Q va bu ataylab: ovozni
+   * kanalning HAR BIR obunachisi beradi, ular esa tahririyat
+   * ro'yxatida bo'lmaydi. Tekshiruv qo'yilsa, so'rovga faqat
+   * moderatorlar javob bera olardi.
+   *
+   * Himoya boshqa joyda: bitta odam bitta ovoz (unikal indeks) va
+   * callback faqat bizning `rv:` prefiksimizni qabul qiladi.
+   */
+  const voteKey = parseVoteCallback(query.data);
+  if (voteKey) {
+    const voterId = query.from?.id ?? null;
+    const messageId = query.message?.message_id ?? null;
+    if (chatId == null || messageId == null || voterId == null) {
+      await safeAnswerCallback(query.id);
+      return;
+    }
+
+    const outcome = await recordRegionVote({
+      chatId,
+      messageId,
+      telegramUserId: voterId,
+      optionKey: voteKey,
+    });
+    // Javob DARHOL chiqadi va Telegram uni cheklamaydi — son shu
+    // yerda ko'rinadi, xabar tahriri esa sekinroq bo'lishi mumkin.
+    await safeAnswerCallback(query.id, outcome.ack);
+    return;
+  }
+
   /*
    * ANKETA HAVOLASI — jins tanlandi.
    *
