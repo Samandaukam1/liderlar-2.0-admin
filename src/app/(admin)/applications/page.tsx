@@ -69,6 +69,28 @@ export default async function ApplicationsPage(props: {
       ),
     },
     {
+      /*
+       * HUDUD.
+       *
+       * So'rov `regions(name)` ni allaqachon olardi, lekin uni hech
+       * qayerda ko'rsatmasdi: ma'lumot yig'ilib, moderatorga
+       * ko'rinmay turardi. Ariza formasida hudud majburiy qilingach,
+       * bu ustun kerak bo'ldi.
+       *
+       * Eski arizalarda hudud YO'Q va bu normal — u o'sha paytda
+       * so'ralmagan. Chiziqcha aynan shuni bildiradi.
+       */
+      key: "region",
+      header: "Hudud",
+      desktopOnly: true,
+      render: (a) =>
+        a.regions?.name ? (
+          <span className="text-xs text-ink-soft">{a.regions.name}</span>
+        ) : (
+          <span className="text-xs text-ink-soft">—</span>
+        ),
+    },
+    {
       key: "promo",
       header: "Promo kod",
       desktopOnly: true,
