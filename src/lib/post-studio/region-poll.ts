@@ -23,7 +23,6 @@
  * oxirida — u viloyat emas.
  */
 export const UZBEKISTAN_REGIONS: readonly string[] = [
-  "Qoraqalpog‘iston Respublikasi",
   "Andijon viloyati",
   "Buxoro viloyati",
   "Farg‘ona viloyati",
@@ -31,12 +30,13 @@ export const UZBEKISTAN_REGIONS: readonly string[] = [
   "Namangan viloyati",
   "Navoiy viloyati",
   "Qashqadaryo viloyati",
+  "Qoraqalpog‘iston Respublikasi",
   "Samarqand viloyati",
   "Sirdaryo viloyati",
   "Surxondaryo viloyati",
+  "Toshkent shahri",
   "Toshkent viloyati",
   "Xorazm viloyati",
-  "Toshkent shahri",
 ];
 
 /** So'rovnoma savoli. */
@@ -48,8 +48,19 @@ export const REGION_POLL_QUESTION = "Qaysi viloyatdan bizni kuzatyapsiz siz?";
 export const POLL_QUESTION_MAX = 300;
 /** `sendPoll`: har variant 1–100 belgi. */
 export const POLL_OPTION_MAX = 100;
-/** `sendPoll`: 1–30 variant. */
-export const POLL_OPTIONS_MAX = 30;
+/**
+ * `sendPoll`: 1–12 variant.
+ *
+ * QIYMAT HUJJATDAN OLINGAN va Telegram'ning o'z xatosi bilan
+ * tasdiqlangan: "Bad Request: poll can't have more than 12 options".
+ *
+ * Bu yerda avval 30 turgan edi. Men uni hujjat sahifasini o'qigan
+ * yordamchi xulosasidan olganman va tekshirmaganman; test esa xatoni
+ * ushlamagan, chunki u shu konstantani o'ziga solishtirardi —
+ * haqiqatga emas. Endi chegara so'rovnoma qurilishini BOSHQARADI
+ * (pastdagi bo'lish), ya'ni noto'g'ri qiymat darhol ko'rinadi.
+ */
+export const POLL_OPTIONS_MAX = 12;
 
 export interface RegionPoll {
   question: string;
@@ -67,13 +78,59 @@ export interface RegionPoll {
   allowsMultipleAnswers: false;
 }
 
-export function buildRegionPoll(): RegionPoll {
-  return {
-    question: REGION_POLL_QUESTION,
-    options: UZBEKISTAN_REGIONS,
+/**
+ * So'rovnomalar RO'YXATI.
+ *
+ * NEGA BITTA EMAS: hududlar 14 ta, Telegram esa bitta so'rovnomaga
+ * 12 tadan ko'p variant qo'ymaydi. Ro'yxat chegaraga qarab
+ * bo'linadi, ya'ni kelajakda hudud qo'shilsa yoki chegara o'zgarsa
+ * kod o'zi moslashadi — qo'lda qayta bo'lish kerak bo'lmaydi.
+ *
+ * BO'LISH STATISTIKANI BUZMAYDI: har odam o'z hududi turgan
+ * so'rovnomada BIR MARTA ovoz beradi, ikkinchisida uning hududi
+ * yo'q. Yakuniy taqsimot — ikkala so'rovnoma natijasining yig'indisi.
+ *
+ * Bo'laklar TENG: 12+2 bo'lganda ikkinchisi "qo'shimcha" bo'lib
+ * ko'rinadi va e'tibordan qoladi. Alifbo tartibi saqlanadi va
+ * savolda oralig'i aytiladi, shunda odam qaysi ro'yxatga qarashni
+ * darhol biladi.
+ */
+export function buildRegionPolls(regions: readonly string[] = UZBEKISTAN_REGIONS): RegionPoll[] {
+  const chunks = splitEvenly(regions, POLL_OPTIONS_MAX);
+
+  return chunks.map((options, index) => ({
+    question:
+      chunks.length === 1
+        ? REGION_POLL_QUESTION
+        : `${REGION_POLL_QUESTION} (${index + 1}/${chunks.length} — ` +
+          `${firstWord(options[0])}dan ${firstWord(options[options.length - 1])}gacha)`,
+    options,
     isAnonymous: true,
     allowsMultipleAnswers: false,
-  };
+  }));
+}
+
+/**
+ * Ro'yxatni imkon qadar TENG bo'laklarga bo'ladi.
+ *
+ * `Math.ceil(n / max)` bo'lak soni, keyin har bo'lak shu songa
+ * qarab teng taqsimlanadi. 14 va 12 uchun: 2 bo'lak, 7+7.
+ */
+function splitEvenly(items: readonly string[], max: number): string[][] {
+  if (items.length === 0) return [];
+  const count = Math.ceil(items.length / max);
+  const size = Math.ceil(items.length / count);
+
+  const chunks: string[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+/** "Toshkent shahri" -> "Toshkent" — savol sarlavhasi qisqa bo'lsin. */
+function firstWord(region: string): string {
+  return region.split(" ")[0];
 }
 
 /**
@@ -104,9 +161,20 @@ export function validateRegionPoll(poll: RegionPoll): { ok: boolean; error: stri
   return { ok: true, error: null };
 }
 
-/** Moderatorga so'rovnoma bilan birga yuboriladigan qisqa izoh. */
-export const REGION_POLL_HINT =
-  "So‘rovnoma tayyor. Uni shu yerdan kanalga uzating (forward).";
+/** Moderatorga so'rovnomalar bilan birga yuboriladigan qisqa izoh. */
+export function buildRegionPollHint(pollCount: number): string {
+  if (pollCount === 1) {
+    return "So‘rovnoma tayyor. Uni shu yerdan kanalga uzating (forward).";
+  }
+  return [
+    `So‘rovnoma tayyor — ${pollCount} qism.`,
+    "",
+    `Telegram bitta so‘rovnomaga ${POLL_OPTIONS_MAX} tadan ko‘p variant qo‘ymaydi,`,
+    `hudud esa ${UZBEKISTAN_REGIONS.length} ta. Ikkalasini ham kanalga uzating.`,
+    "Har kim o‘z hududi turgan qismda bir marta ovoz beradi;",
+    "yakuniy natija ikkovining yig‘indisi.",
+  ].join("\n");
+}
 
 export const REGION_POLL_BUTTON_LABEL = "📊 Hudud so‘rovnomasi";
 export const REGION_POLL_COMMAND = "/sorovnoma";

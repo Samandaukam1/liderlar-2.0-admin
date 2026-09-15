@@ -8,10 +8,10 @@ import {
   type InlineButton,
 } from "./telegram-api.ts";
 import {
-  buildRegionPoll,
+  buildRegionPollHint,
+  buildRegionPolls,
   REGION_POLL_BUTTON_LABEL,
   REGION_POLL_COMMAND,
-  REGION_POLL_HINT,
   validateRegionPoll,
 } from "./region-poll.ts";
 import {
@@ -391,31 +391,52 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   console.log("[telegram-webhook] sendMessage success command=help");
 }
 
-/** Hudud so'rovnomasini moderator chatiga yuboradi. */
+/**
+ * Hudud so'rovnomasini moderator chatiga yuboradi.
+ *
+ * BIR NECHTA SO'ROVNOMA BO'LISHI MUMKIN: Telegram bitta so'rovnomaga
+ * 12 tadan ko'p variant qo'ymaydi, hudud esa 14 ta. Bo'lish
+ * `region-poll.ts` da, chegaraga qarab avtomatik.
+ */
 async function sendRegionPoll(chatId: number): Promise<void> {
-  const poll = buildRegionPoll();
+  const polls = buildRegionPolls();
 
   // Chegara CHAQIRUVDAN OLDIN tekshiriladi: Telegram chegaradan
   // oshgan so'rovnomani 400 bilan rad etadi va moderator "nega
-  // ishlamadi" degan savol bilan qolardi.
-  const checked = validateRegionPoll(poll);
-  if (!checked.ok) {
-    await sendTelegramMessage(chatId, `❌ So‘rovnoma yasalmadi: ${checked.error}`);
-    console.error(`[telegram-webhook] so‘rovnoma yaroqsiz: ${checked.error}`);
-    return;
+  // ishlamadi" degan savol bilan qolardi. HAMMA bo'lak tekshiriladi.
+  for (const poll of polls) {
+    const checked = validateRegionPoll(poll);
+    if (!checked.ok) {
+      await sendTelegramMessage(chatId, `❌ So‘rovnoma yasalmadi: ${checked.error}`);
+      console.error(`[telegram-webhook] so‘rovnoma yaroqsiz: ${checked.error}`);
+      return;
+    }
   }
 
-  try {
-    const sent = await sendTelegramPoll(chatId, poll);
-    // Izoh so'rovnomadan KEYIN: u so'rovnomaning o'zini kanalga
-    // uzatishga xalaqit qilmasin.
-    await sendTelegramMessage(chatId, REGION_POLL_HINT);
-    console.log(`[telegram-webhook] so‘rovnoma yuborildi message=${sent.messageId}`);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await sendTelegramMessage(chatId, `❌ So‘rovnoma yuborilmadi: ${message}`);
-    console.error("[telegram-webhook] so‘rovnoma xatosi", message);
+  const sentIds: number[] = [];
+  for (const poll of polls) {
+    try {
+      const sent = await sendTelegramPoll(chatId, poll);
+      sentIds.push(sent.messageId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Birinchi bo'lak ketib, ikkinchisi yiqilsa moderator buni
+      // BILISHI kerak: aks holda u yarim so'rovnomani kanalga
+      // uzatib, hududlarning yarmini so'ramay qolardi.
+      await sendTelegramMessage(
+        chatId,
+        `❌ So‘rovnomaning ${sentIds.length + 1}-qismi yuborilmadi: ${message}\n` +
+          (sentIds.length > 0 ? "Yuborilganini kanalga UZATMANG — ro‘yxat to‘liq emas." : ""),
+      );
+      console.error("[telegram-webhook] so‘rovnoma xatosi", message);
+      return;
+    }
   }
+
+  // Izoh so'rovnomalardan KEYIN: ular kanalga uzatishga xalaqit
+  // qilmasin va tartib buzilmasin.
+  await sendTelegramMessage(chatId, buildRegionPollHint(polls.length));
+  console.log(`[telegram-webhook] so‘rovnoma yuborildi: ${sentIds.length} qism`);
 }
 
 /**
