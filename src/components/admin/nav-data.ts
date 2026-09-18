@@ -99,6 +99,27 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    /*
+     * Koordinatorlar — AI Sotuvdan KEYINGI qatlam.
+     *
+     * AI birinchi chiziqda mijoz bilan yozishadi; koordinator esa
+     * odam sifatida hududiy lidni yopadi. Ikkalasi alohida bot,
+     * alohida jadval va alohida ruxsat bilan ishlaydi, shuning
+     * uchun alohida bo'lim.
+     */
+    label: "Koordinatorlar",
+    items: [
+      {
+        label: "Koordinatorlar",
+        href: "/koordinatorlar",
+        icon: MapPin,
+        permission: "coordinators.view",
+        keywords:
+          "koordinator hudud viloyat xarita lid marshrut talab komissiya reyting nominatsiya",
+      },
+    ],
+  },
+  {
     label: "Reyting",
     items: [
       { label: "Reyting", href: "/rankings", icon: Trophy, permission: "rankings.view" },

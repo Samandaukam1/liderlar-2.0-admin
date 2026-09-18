@@ -43,6 +43,13 @@ export const PERMISSIONS = [
   "applications.view",
   "applications.review",
   "applications.convert",
+  // Koordinatorlar CRM. SQL tomondagi `role_permissions` bilan bir
+  // xil bo'lishi SHART: RLS va server action bitta manbaga tayanadi
+  // va ular ajralib ketsa, panel ko'rsatgan narsani baza rad etardi.
+  "coordinators.view",
+  "coordinators.manage",
+  "coordinators.assign",
+  "coordinators.reports",
   "intakes.view",
   "intakes.create",
   "intakes.edit",
@@ -128,6 +135,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "notifications.view",
     "posts.view",
     "sales.view",
+    "coordinators.view",
+    "coordinators.reports",
   ],
   analyst: [
     "dashboard.view",
@@ -140,6 +149,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "intakes.view",
     "posts.view",
     "sales.view",
+    "coordinators.view",
+    "coordinators.reports",
     "export.run",
   ],
   viewer: VIEW_ONLY,

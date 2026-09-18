@@ -25,7 +25,22 @@ const PUBLIC_PATHS = ["/login", "/api/auth", "/api/public"];
  * to the "/api/telegram" prefix happening to cover it: a rename of either path
  * must not silently drop one of them back behind the session gate.
  */
-const MACHINE_PATHS = ["/api/telegram", "/api/telegram-sales", "/api/cron"];
+/*
+ * Telegram va cron chaqiruvlari — admin sessiyasidan ozod.
+ *
+ * `/api/telegram-coordinator` ALOHIDA yozilgan, garchi
+ * `/api/telegram` prefiksi uni allaqachon qamrasa ham: bu
+ * bog'liqlik jimgina. Kimdir keyin prefiksni `/api/telegram/`
+ * qilib qo'ysa, koordinator boti xatosiz, sababsiz ishlamay
+ * qolardi — Telegram esa faqat "Wrong response from the webhook"
+ * derdi.
+ */
+const MACHINE_PATHS = [
+  "/api/telegram",
+  "/api/telegram-sales",
+  "/api/telegram-coordinator",
+  "/api/cron",
+];
 
 // Candidate secure-link intake is public by design (token-gated at the route
 // layer). Only these paths are exempt from the admin session requirement.
