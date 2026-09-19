@@ -6,6 +6,9 @@ import { loadCoordinatorDashboard } from "@/lib/coordinators/dashboard";
 import { getCoordinatorBotStatus, isCoordinatorBotConfigured } from "@/lib/coordinators/bot-api";
 import { formatSom } from "@/lib/coordinators/bot-messages";
 import { RegionMapPanel } from "./region-map-panel";
+import { CoordinatorManager } from "./coordinator-manager";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getCoordinatorSettings } from "@/lib/coordinators/settings";
 
 export const metadata = { title: "Koordinatorlar" };
 export const dynamic = "force-dynamic";
@@ -20,10 +23,54 @@ export default async function CoordinatorsPage() {
   const ctx = await requirePermission("coordinators.view");
   const canManage = hasPermission(ctx.roles, "coordinators.manage");
 
-  const [dashboard, botStatus] = await Promise.all([
+  const db = createSupabaseAdminClient();
+  const [dashboard, botStatus, settings, coordinatorRows, regionRows] = await Promise.all([
     loadCoordinatorDashboard(),
     isCoordinatorBotConfigured() ? getCoordinatorBotStatus() : Promise.resolve(null),
+    getCoordinatorSettings(),
+    db
+      .from("coordinators")
+      .select(
+        "id, full_name, photo_url, region_id, phone, public_phone, show_phone_publicly, " +
+          "public_email, bio, telegram_user_id, telegram_username, status, backup_priority, " +
+          "daily_lead_limit, is_active, regions(name)",
+      )
+      .eq("is_active", true)
+      .order("full_name"),
+    db.from("regions").select("id, name").order("sort_order"),
   ]);
+
+  const coordinators = ((coordinatorRows.data ?? []) as unknown as Record<string, unknown>[]).map(
+    (row) => ({
+      id: row.id as string,
+      fullName: (row.full_name as string) ?? "",
+      photoUrl: (row.photo_url as string | null) ?? null,
+      regionId: (row.region_id as string | null) ?? null,
+      regionName: ((row.regions as { name?: string } | null)?.name) ?? null,
+      phone: (row.phone as string | null) ?? null,
+      publicPhone: (row.public_phone as string | null) ?? null,
+      showPhonePublicly: row.show_phone_publicly === true,
+      publicEmail: (row.public_email as string | null) ?? null,
+      bio: (row.bio as string | null) ?? null,
+      /*
+       * FAQAT BOR-YO'QLIGI uzatiladi, raqamning O'ZI emas.
+       *
+       * Telegram id ichki identifikator: uni brauzerga yuborish
+       * keraksiz va u ekran surati orqali tarqalishi mumkin.
+       */
+      hasTelegram: row.telegram_user_id != null,
+      telegramUsername: (row.telegram_username as string | null) ?? null,
+      status: (row.status as string) ?? "active",
+      backupPriority: (row.backup_priority as number) ?? 100,
+      dailyLeadLimit: (row.daily_lead_limit as number | null) ?? null,
+      isActive: row.is_active === true,
+    }),
+  );
+
+  const regions = (regionRows.data ?? []).map((r) => ({
+    id: r.id as string,
+    name: r.name as string,
+  }));
 
   const { national, nominations } = dashboard;
 
@@ -80,7 +127,62 @@ export default async function CoordinatorsPage() {
         <Kpi label="Bugungi komissiya" value={formatSom(national.commissionToday)} />
       </div>
 
+      {/* --- Tayyorlik ro'yxati --- */}
+      {!dashboard.routingEnabled ? (
+        <section className="mb-5 rounded-card border border-line bg-card p-5 shadow-card">
+          <h2 className="mb-2 font-display text-base font-semibold text-ink">
+            Marshrutlashni yoqish uchun tayyorlik
+          </h2>
+          <ul className="space-y-1 text-sm">
+            <Check ok={isCoordinatorBotConfigured()} label="Coordinator Bot tokeni sozlangan" />
+            <Check
+              ok={Boolean(botStatus?.webhookUrl)}
+              label="Bot webhook ulangan"
+              hint={botStatus?.lastError ?? undefined}
+            />
+            <Check
+              ok={dashboard.readiness.activeCoordinators > 0}
+              label={`Faol koordinator: ${dashboard.readiness.activeCoordinators}`}
+            />
+            <Check
+              ok={dashboard.readiness.coordinatorsWithTelegram > 0}
+              label={`Telegram ID bor: ${dashboard.readiness.coordinatorsWithTelegram}`}
+            />
+            <Check
+              ok={dashboard.readiness.coordinatorsWithRegion > 0}
+              label={`Hududi bor: ${dashboard.readiness.coordinatorsWithRegion}`}
+            />
+            <Check
+              ok={dashboard.readiness.regionsCovered > 0}
+              label={`Qamralgan hudud: ${dashboard.readiness.regionsCovered} / ${dashboard.readiness.regionsTotal}`}
+            />
+          </ul>
+          {dashboard.readiness.blockers.length > 0 ? (
+            <ul className="mt-3 space-y-1 border-t border-line pt-2">
+              {dashboard.readiness.blockers.map((b) => (
+                <li key={b} className="text-xs text-coral">• {b}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-3 border-t border-line pt-2 text-xs text-ink-soft">
+              Hammasi tayyor. Marshrutlashni quyidan yoqishingiz mumkin.
+            </p>
+          )}
+        </section>
+      ) : null}
+
       <RegionMapPanel regions={dashboard.regions} />
+
+      {canManage ? (
+        <div className="mt-6">
+          <CoordinatorManager
+            coordinators={coordinators}
+            regions={regions}
+            routingEnabled={dashboard.routingEnabled}
+            defaultTarget={settings.defaultDailyTarget}
+          />
+        </div>
+      ) : null}
 
       {/* --- Nominatsiyalar --- */}
       <div className="mt-6 grid grid-cols-1 gap-3 lg:grid-cols-3">
@@ -164,6 +266,20 @@ export default async function CoordinatorsPage() {
         </section>
       ) : null}
     </div>
+  );
+}
+
+function Check({ ok, label, hint }: { ok: boolean; label: string; hint?: string }) {
+  return (
+    <li className="flex items-start gap-2">
+      <span aria-hidden>{ok ? "✓" : "✗"}</span>
+      <span>
+        <span className={ok ? "text-ink" : "text-ink-soft"}>{label}</span>
+        {/* Holat rangdan tashqari belgi bilan ham beriladi. */}
+        <span className="sr-only">{ok ? " — tayyor" : " — tayyor emas"}</span>
+        {hint ? <span className="ml-2 text-[11px] text-coral">{hint}</span> : null}
+      </span>
+    </li>
   );
 }
 

@@ -41,6 +41,25 @@ export interface RegionStat {
   alerts: string[];
 }
 
+/**
+ * MARSHRUTLASHNI YOQISH UCHUN TAYYORLIKMI.
+ *
+ * Har shart ALOHIDA ko'rsatiladi: "tayyor emas" degan umumiy
+ * xabar admin nima qilishini bilmay qoldirardi.
+ */
+export interface RoutingReadiness {
+  botConfigured: boolean;
+  webhookHealthy: boolean;
+  activeCoordinators: number;
+  coordinatorsWithTelegram: number;
+  coordinatorsWithRegion: number;
+  regionsCovered: number;
+  regionsTotal: number;
+  leadIntakeReady: boolean;
+  ready: boolean;
+  blockers: string[];
+}
+
 export interface CoordinatorDashboard {
   businessDate: string;
   routingEnabled: boolean;
@@ -64,6 +83,7 @@ export interface CoordinatorDashboard {
     efficiencyMinLeads: number;
   };
   attention: string[];
+  readiness: RoutingReadiness;
 }
 
 export async function loadCoordinatorDashboard(
@@ -77,7 +97,7 @@ export async function loadCoordinatorDashboard(
   const [regionsRes, coordinatorsRes, leadsRes, targetsRes, commissionsRes] =
     await Promise.all([
       db.from("regions").select("id, slug, name").order("sort_order"),
-      db.from("coordinators").select("id, full_name, photo_url, region_id, status, is_active"),
+      db.from("coordinators").select("id, full_name, photo_url, region_id, status, is_active, telegram_user_id"),
       db
         .from("coordinator_leads")
         .select(
@@ -193,9 +213,39 @@ export async function loadCoordinatorDashboard(
     attention.unshift("Marshrutlash o‘chiq — lidlar koordinatorlarga yuborilmayapti");
   }
 
+  /* ---------------------------- tayyorlik -------------------------------- */
+  const withTelegram = coordinators.filter((c) => c.telegram_user_id != null).length;
+  const withRegion = coordinators.filter((c) => c.region_id != null).length;
+  const covered = new Set(
+    coordinators
+      .filter((c) => c.status === "active" && c.region_id != null)
+      .map((c) => c.region_id as string),
+  ).size;
+
+  const blockers: string[] = [];
+  if (coordinators.length === 0) blockers.push("Faol koordinator yo‘q");
+  else {
+    if (withTelegram === 0) blockers.push("Hech kimda Telegram ID yo‘q — bot xabar yubora olmaydi");
+    if (withRegion === 0) blockers.push("Hech kimda hudud biriktirilmagan");
+  }
+
+  const readiness: RoutingReadiness = {
+    botConfigured: false,
+    webhookHealthy: false,
+    activeCoordinators: coordinators.length,
+    coordinatorsWithTelegram: withTelegram,
+    coordinatorsWithRegion: withRegion,
+    regionsCovered: covered,
+    regionsTotal: regions.length,
+    leadIntakeReady: withTelegram > 0 && withRegion > 0,
+    ready: blockers.length === 0,
+    blockers,
+  };
+
   return {
     businessDate: date,
     routingEnabled: settings.routingEnabled,
+    readiness,
     national: {
       leadsToday: leads.length,
       claimedToday: leads.filter((l) => l.assigned_coordinator_id).length,

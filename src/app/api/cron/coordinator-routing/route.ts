@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { runExpirySweep } from "@/lib/coordinators/routing-service";
+import { ingestNewApplications, offerPendingLeads } from "@/lib/coordinators/lead-intake";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,6 +29,15 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Ruxsat yo‘q" }, { status: 401 });
   }
 
-  const result = await runExpirySweep();
-  return NextResponse.json({ ok: true, ...result });
+  /*
+   * IKKI ISH, SHU TARTIBDA.
+   *
+   * Avval muddati tugaganlar qaytariladi, keyin navbatdagilar
+   * yuboriladi. Teskarisida yangi lid taklif qilinib, o'sha tikda
+   * muddati o'tgan lid yana kutib qolardi.
+   */
+  const expiry = await runExpirySweep();
+  const ingested = await ingestNewApplications();
+  const pending = await offerPendingLeads();
+  return NextResponse.json({ ok: true, ...expiry, ingested, pendingOffered: pending });
 }
