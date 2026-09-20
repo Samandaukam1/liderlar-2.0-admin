@@ -348,3 +348,172 @@ test("tashkilotchilik har so'rovda qayta tekshiriladi", () => {
 
   assert.ok(checks.length >= 3, `kutilganidan kam tekshiruv: ${checks.length}`);
 });
+
+// ---------------------------------------------------------------
+// SOZLAMALAR: BOT VA BAYROQLAR
+// ---------------------------------------------------------------
+
+test("webhook manzili SO'ROVDAN olinmaydi", () => {
+  /*
+   * Manzilni mijoz yuborsa, kimdir botning barcha xabarlarini
+   * o'z serveriga yo'naltirib olardi — ya'ni a'zolarning
+   * yozishmalarini o'qiy olardi.
+   */
+  const code = src("src/lib/actions/mehr.ts");
+  const fn = code.match(/export async function registerMemberWebhookAction\([\s\S]*?\n\}/)?.[0] ?? "";
+
+  assert.ok(fn.length > 0, "action topilmadi");
+  assert.match(fn, /registerMemberWebhookAction\(\): Promise/, "action argument qabul qilyapti");
+  assert.match(fn, /process\.env\.MEMBER_WEBHOOK_BASE_URL/);
+});
+
+test("bayroq kaliti ro'yxatdan, ixtiyoriy satr emas", () => {
+  /*
+   * Ixtiyoriy kalit qabul qilinsa, bu action `site_settings`
+   * dagi ISTALGAN sozlamani o'zgartiradigan umumiy yozish
+   * yo'liga aylanardi.
+   */
+  const code = src("src/lib/actions/mehr.ts");
+  const schema = code.match(/const flagSchema = z\.object\(\{[\s\S]*?\n\}\);/)?.[0] ?? "";
+
+  assert.ok(schema.length > 0, "flagSchema topilmadi");
+  assert.match(schema, /key: z\.enum\(\[/);
+  assert.ok(!/key: z\.string\(\)/.test(schema), "kalit ixtiyoriy satr");
+});
+
+test("sozlamalarni faqat settings.manage o'zgartiradi", () => {
+  const code = src("src/lib/actions/mehr.ts");
+
+  for (const name of ["registerMemberWebhookAction", "setMehrFlagAction"]) {
+    const fn = code.match(new RegExp(`export async function ${name}\\([\\s\\S]*?\\n\\}`))?.[0] ?? "";
+    assert.ok(fn.length > 0, `${name} topilmadi`);
+    assert.match(fn, /requirePermission\("settings\.manage"\)/, `${name} ruxsatni tekshirmaydi`);
+  }
+});
+
+test("bayroq o'zgarishi auditga tushadi", () => {
+  /*
+   * Xususiyat yoqilishi productionda ko'rinadigan o'zgarish —
+   * keyin "kim yoqdi" degan savol muqarrar.
+   */
+  const code = src("src/lib/actions/mehr.ts");
+  const fn = code.match(/export async function setMehrFlagAction\([\s\S]*?\n\}/)?.[0] ?? "";
+
+  assert.match(fn, /logAudit\(/);
+  assert.match(fn, /severity: "warning"/);
+});
+
+test("bot holati token qaytarmaydi", () => {
+  const code = src("src/lib/member-bot/bot-api.ts");
+  const type = code.match(/export interface MemberBotStatus \{[\s\S]*?\n\}/)?.[0] ?? "";
+
+  assert.ok(type.length > 0, "MemberBotStatus topilmadi");
+  assert.ok(!/token/i.test(type), "holat tipida token bor");
+});
+
+test("kutayotgan xabarlar webhook o'rnatilganda O'CHIRILMAYDI", () => {
+  /*
+   * O'chirilsa, navbatda turgan odamlarning xabarlari jimgina
+   * yo'qolardi va ular "bot javob bermadi" deb qolardi.
+   */
+  assert.match(src("src/lib/member-bot/bot-api.ts"), /drop_pending_updates: false/);
+});
+
+test("sozlama qiymatlari brauzerga yuborilmaydi — faqat nomlari", () => {
+  const code = src("src/app/(admin)/mehr/page.tsx");
+  const block = code.match(/const missingEnv = \[[\s\S]*?\.map\([\s\S]*?\);/)?.[0] ?? "";
+
+  assert.ok(block.length > 0, "missingEnv topilmadi");
+  // Filtrdan keyin faqat NOM qoladi, qiymat emas.
+  assert.match(block, /\.map\(\(\[name\]\) => name as string\)/);
+});
+
+test("bayroqlarni birdaniga yoqadigan yo'l yo'q", () => {
+  /*
+   * §43 — nazorat ostidagi bosqichma-bosqich yoqish. Bir
+   * vaqtning o'zida hamma narsa ochilsa, nimadir buzilganda
+   * qaysi biri sabab bo'lganini aniqlab bo'lmaydi.
+   */
+  const code = src("src/lib/actions/mehr.ts");
+
+  assert.ok(!/enableAllFlags|setAllFlags/i.test(code), "ommaviy yoqish yo'li bor");
+
+  const ui = src("src/app/(admin)/mehr/bot-settings.tsx");
+  assert.ok(!/Hammasini yoq/i.test(ui), "UI da 'hammasini yoq' tugmasi bor");
+});
+
+// ---------------------------------------------------------------
+// MIJOZ/SERVER CHEGARASI
+// ---------------------------------------------------------------
+
+test("mijoz komponentlari server-only moduldan import qilmaydi", () => {
+  /*
+   * `import "server-only"` bo'lgan modulni "use client"
+   * faylidan hatto TIP uchun import qilish ham build'ni
+   * yiqitadi: bundler butun modulni brauzer paketiga tortadi.
+   *
+   * `tsc` buni KO'RMAYDI — xato faqat build'da chiqadi.
+   * Shu loyihada bu ikki marta sodir bo'lgan, shuning uchun
+   * test.
+   */
+  const serverOnly: string[] = [];
+
+  for (const file of [
+    "src/lib/mehr/flags.ts",
+    "src/lib/mehr/dashboard.ts",
+    "src/lib/mehr/approval-service.ts",
+    "src/lib/mehr/session-service.ts",
+    "src/lib/mehr/checkin-service.ts",
+    "src/lib/mehr/activity-service.ts",
+    "src/lib/member/link-service.ts",
+    "src/lib/member-bot/bot-api.ts",
+    "src/lib/member-bot/router.ts",
+    "src/lib/member-bot/webapp-session.ts",
+  ]) {
+    if (/^import ["']server-only["']/m.test(readFileSync(file, "utf8"))) {
+      serverOnly.push(file.replace(/^src\//, "@/").replace(/\.tsx?$/, ""));
+    }
+  }
+
+  assert.ok(serverOnly.length >= 5, `server-only modullar kam topildi: ${serverOnly.length}`);
+
+  for (const file of [
+    "src/app/(admin)/mehr/bot-settings.tsx",
+    "src/app/(admin)/mehr/review-queue.tsx",
+    "src/app/mehr-app/mini-app.tsx",
+  ]) {
+    const code = readFileSync(file, "utf8");
+    if (!/^["']use client["']/m.test(code)) continue;
+
+    /*
+     * `import type { … }` BUTUNLAY O'CHADI — TypeScript uni
+     * kompilyatsiyada olib tashlaydi va bundler ko'rmaydi.
+     * Xavfli bo'lgani — QIYMAT importi. Aynan shu farq
+     * `bot-settings.tsx` ni yiqitgan edi: u tip bilan birga
+     * `MEHR_FLAG_KEYS` ni ham olardi.
+     */
+    for (const statement of code.match(/^import\s+[\s\S]*?from\s+["'][^"']+["'];/gm) ?? []) {
+      if (/^import\s+type\s/.test(statement)) continue;
+
+      const mod = statement.match(/from\s+["']([^"']+)["']/)?.[1];
+      if (!mod || !serverOnly.includes(mod)) continue;
+
+      assert.fail(
+        `${file} — "use client" bo'la turib ${mod} dan QIYMAT import qilyapti:\n  ${statement}`,
+      );
+    }
+  }
+});
+
+test("bayroq kalitlari moduli server-only EMAS", () => {
+  /*
+   * Izohlar olib tashlanadi: modul o'zining nega alohida
+   * ekanini tushuntirganda "server-only" so'zini yozadi va
+   * test o'z izohiga tushib qolardi. Qidirilayotgani — matn
+   * emas, DIREKTIVA.
+   */
+  const code = src("src/lib/mehr/flag-keys.ts");
+
+  assert.ok(!/import\s+["']server-only["']/.test(code), "server-only direktivasi bor");
+  assert.ok(!/from\s+["']@\/lib\/supabase/.test(code), "kalitlar modulida baza mijozi bor");
+});

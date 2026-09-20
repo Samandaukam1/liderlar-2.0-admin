@@ -1,5 +1,15 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { MEHR_FLAG_KEYS, ALL_FLAGS_OFF, type MehrFlags } from "./flag-keys.ts";
+
+/*
+ * Kalitlar va tip SOF modulda (`flag-keys.ts`).
+ *
+ * Bu fayl `server-only` — mijoz komponenti undan hatto tipni
+ * import qilsa ham, bundler butun modulni brauzer paketiga
+ * tortadi va build yiqiladi.
+ */
+export * from "./flag-keys.ts";
 
 /**
  * MEHR bayroqlari (§43).
@@ -9,30 +19,6 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
  * xususiyatni keyin qaytarib yopish, yopiq turganini ochishdan
  * ancha qimmatga tushadi.
  */
-
-export const MEHR_FLAG_KEYS = {
-  publicEnabled: "mehr.public_enabled",
-  activityCreationEnabled: "mehr.activity_creation_enabled",
-  qrCheckinEnabled: "mehr.qr_checkin_enabled",
-  pointsEnabled: "mehr.points_enabled",
-  certificatesEnabled: "mehr.certificates_enabled",
-  memberAuthEnabled: "member.auth_enabled",
-  memberBotEnabled: "member.bot_enabled",
-  referralPointsEnabled: "referral.points_enabled",
-} as const;
-
-export type MehrFlags = Record<keyof typeof MEHR_FLAG_KEYS, boolean>;
-
-const ALL_OFF: MehrFlags = {
-  publicEnabled: false,
-  activityCreationEnabled: false,
-  qrCheckinEnabled: false,
-  pointsEnabled: false,
-  certificatesEnabled: false,
-  memberAuthEnabled: false,
-  memberBotEnabled: false,
-  referralPointsEnabled: false,
-};
 
 /** Faqat aynan 'true' yoqilgan hisoblanadi. */
 function isOn(value: string | null | undefined): boolean {
@@ -49,11 +35,11 @@ export async function getMehrFlags(): Promise<MehrFlags> {
 
   if (error) {
     console.error("MEHR_FLAGS_LOAD_FAILED", { code: error.code, message: error.message });
-    return { ...ALL_OFF };
+    return { ...ALL_FLAGS_OFF };
   }
 
   const map = new Map((data ?? []).map((r) => [r.key as string, r.value as string]));
-  const out = { ...ALL_OFF };
+  const out = { ...ALL_FLAGS_OFF };
 
   for (const [field, key] of Object.entries(MEHR_FLAG_KEYS)) {
     out[field as keyof MehrFlags] = isOn(map.get(key));

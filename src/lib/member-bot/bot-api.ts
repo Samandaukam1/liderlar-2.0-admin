@@ -147,15 +147,71 @@ export async function answerMemberCallback(
   });
 }
 
-export async function getMemberBotStatus(): Promise<{ username: string | null; ok: boolean }> {
-  try {
-    const response = await fetch(`${TELEGRAM_API}/bot${memberBotToken()}/getMe`);
-    const parsed = (await response.json()) as {
-      ok?: boolean;
-      result?: { username?: string };
+export const MEMBER_ALLOWED_UPDATES = ["message", "callback_query"] as const;
+
+/**
+ * Webhook'ni Telegram'da ro'yxatdan o'tkazadi.
+ *
+ * `drop_pending_updates: false` — ATAYLAB. Kutib turgan
+ * xabarlar o'chirilsa, webhook sozlangan paytda navbatda
+ * turgan odamlarning xabarlari jimgina yo'qolardi va ular
+ * "bot javob bermadi" deb qolardi.
+ */
+export async function setMemberWebhook(url: string): Promise<MemberSendResult> {
+  const secret = process.env.MEMBER_TELEGRAM_WEBHOOK_SECRET?.trim();
+  if (!secret) {
+    return {
+      ok: false,
+      messageId: null,
+      error: "MEMBER_TELEGRAM_WEBHOOK_SECRET sozlanmagan.",
     };
-    return { ok: parsed.ok === true, username: parsed.result?.username ?? null };
-  } catch {
-    return { ok: false, username: null };
+  }
+
+  return call("setWebhook", {
+    url,
+    secret_token: secret,
+    allowed_updates: MEMBER_ALLOWED_UPDATES,
+    drop_pending_updates: false,
+  });
+}
+
+export interface MemberBotStatus {
+  username: string | null;
+  webhookUrl: string | null;
+  pendingUpdates: number | null;
+  lastError: string | null;
+}
+
+/**
+ * Sozlamalar sahifasi uchun: bot kim va webhook qayerda.
+ *
+ * TOKEN CHIQMAYDI. Qaytadigan maydonlar ataylab sanalgan —
+ * `getWebhookInfo` javobini butunligicha uzatsak, unda
+ * kutilmagan maydonlar paydo bo'lishi mumkin.
+ */
+export async function getMemberBotStatus(): Promise<MemberBotStatus | null> {
+  if (!isMemberBotConfigured()) return null;
+
+  try {
+    const [meRes, hookRes] = await Promise.all([
+      fetch(`${TELEGRAM_API}/bot${memberBotToken()}/getMe`),
+      fetch(`${TELEGRAM_API}/bot${memberBotToken()}/getWebhookInfo`),
+    ]);
+
+    const me = (await meRes.json()) as { ok?: boolean; result?: { username?: string } };
+    const hook = (await hookRes.json()) as {
+      ok?: boolean;
+      result?: { url?: string; pending_update_count?: number; last_error_message?: string };
+    };
+
+    return {
+      username: me.result?.username ?? null,
+      webhookUrl: hook.result?.url ?? null,
+      pendingUpdates: hook.result?.pending_update_count ?? null,
+      lastError: hook.result?.last_error_message ?? null,
+    };
+  } catch (err) {
+    console.error("MEMBER_BOT_STATUS_FAILED", scrub(err instanceof Error ? err.message : String(err)));
+    return null;
   }
 }

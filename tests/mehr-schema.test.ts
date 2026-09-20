@@ -368,10 +368,30 @@ test("bayroqlar o'qilmasa, tizim YOPIQ qoladi", () => {
   /*
    * Ochilib ketgan xususiyatni keyin qaytarib yopish, yopiq
    * turganini ochishdan ancha qimmatga tushadi.
+   *
+   * Test KONSTANTA NOMIGA emas, XULQQA bog'langan: nomni
+   * o'zgartirish xatolik emas, standart holatning o'zgarishi
+   * esa xatolik. Birinchi variant aynan shu sababdan
+   * nomlash o'zgarganda bejiz yiqilgan edi.
    */
-  const code = readFileSync("src/lib/mehr/flags.ts", "utf8");
-  assert.match(code, /if \(error\)[\s\S]*?return \{ \.\.\.ALL_OFF \}/);
-  assert.match(code, /value\?\.trim\(\)\.toLowerCase\(\) === "true"/);
+  const flags = stripComments(readFileSync("src/lib/mehr/flags.ts", "utf8"));
+
+  // Xatolik yo'lida — yoqilgan holat emas, standart holat qaytadi.
+  const errorBranch = flags.match(/if \(error\)\s*\{[\s\S]*?\n  \}/)?.[0] ?? "";
+  assert.ok(errorBranch.length > 0, "xatolik shoxobchasi topilmadi");
+
+  const fallback = errorBranch.match(/return \{ \.\.\.(\w+) \}/)?.[1];
+  assert.ok(fallback, "xatolikda standart holat qaytarilmayapti");
+
+  // O'sha standart holatda birorta ham yoqilgan bayroq yo'q.
+  const keys = stripComments(readFileSync("src/lib/mehr/flag-keys.ts", "utf8"));
+  const constant = keys.match(new RegExp(`${fallback}: MehrFlags = \\{[\\s\\S]*?\\n\\};`))?.[0] ?? "";
+
+  assert.ok(constant.length > 0, `${fallback} konstantasi topilmadi`);
+  assert.ok(!/:\s*true/.test(constant), `${fallback} ichida yoqilgan bayroq bor`);
+
+  // Faqat aynan 'true' yoqilgan hisoblanadi — 'True', '1', 'yes' emas.
+  assert.match(flags, /=== "true"/);
 });
 
 test("MEHR navigatsiyasi mehr.view ruxsatiga bog'langan", () => {
