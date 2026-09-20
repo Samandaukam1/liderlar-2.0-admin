@@ -6,7 +6,11 @@ import { loadMehrDashboard } from "@/lib/mehr/dashboard";
 import { getMehrFlags } from "@/lib/mehr/flags";
 import { ReviewQueue } from "./review-queue";
 import { BotSettings, type BotStatusView } from "./bot-settings";
-import { getMemberBotStatus, isMemberBotConfigured } from "@/lib/member-bot/bot-api";
+import {
+  getMemberBotStatus,
+  isMemberBotConfigured,
+  misnamedTokenVariable,
+} from "@/lib/member-bot/bot-api";
 
 export const metadata = { title: "MEHR 365+" };
 export const dynamic = "force-dynamic";
@@ -58,6 +62,13 @@ export default async function MehrAdminPage() {
 
   const botView: BotStatusView = {
     configured: isMemberBotConfigured(),
+    /*
+     * Token canonical nom bilan yo'q, lekin adashtirilgan nom
+     * bilan bor bo'lsa — buni ochiq aytamiz. Aynan shu xato
+     * sodir bo'lgan va "yo'q" degan xabar sababni
+     * ko'rsatmagan edi.
+     */
+    misnamedToken: misnamedTokenVariable(),
     username: botStatus?.username ?? null,
     webhookUrl: botStatus?.webhookUrl ?? null,
     pendingUpdates: botStatus?.pendingUpdates ?? null,

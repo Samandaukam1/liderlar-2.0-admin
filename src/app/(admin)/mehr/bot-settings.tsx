@@ -5,6 +5,7 @@ import { Bot, RefreshCw, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { Badge } from "@/components/admin/badges";
 import {
   registerMemberWebhookAction,
+  setMemberMenuButtonAction,
   setMehrFlagAction,
   type MehrActionResult,
 } from "@/lib/actions/mehr";
@@ -18,6 +19,8 @@ export interface BotStatusView {
   lastError: string | null;
   /** Qaysi environment o'zgaruvchilari yetishmaydi. QIYMATLAR EMAS. */
   missingEnv: string[];
+  /** Token adashtirilgan nom bilan qo'shilgan bo'lsa — o'sha NOM. */
+  misnamedToken: string | null;
 }
 
 /*
@@ -81,6 +84,23 @@ export function BotSettings({
           Bot va bayroqlar
         </h2>
       </div>
+
+      {/*
+        NOMI ALMASHIB KETGAN TOKEN.
+
+        "Yo'q" degan xabar sababni ko'rsatmaydi va odam tokenni
+        qayta-qayta qo'shib, nega ishlamayotganini tushunmaydi.
+      */}
+      {status.misnamedToken && (
+        <div className="mt-3 rounded-lg border border-amber/50 bg-amber/10 p-3">
+          <p className="text-sm font-bold text-[#946a10]">Token nomi noto&apos;g&apos;ri</p>
+          <p className="mt-1 text-xs text-ink-soft">
+            Vercel&apos;da <code className="font-mono">{status.misnamedToken}</code> bor, lekin kod{" "}
+            <code className="font-mono">MEMBER_TELEGRAM_BOT_TOKEN</code> ni kutadi.
+            Tokenni to&apos;g&apos;ri nom bilan qo&apos;shib, qaytadan deploy qiling.
+          </p>
+        </div>
+      )}
 
       {/* ---- Yetishmayotgan sozlamalar ---- */}
       {status.missingEnv.length > 0 && (
@@ -149,6 +169,21 @@ export function BotSettings({
       >
         <RefreshCw className={`h-3.5 w-3.5 ${pending ? "animate-spin" : ""}`} aria-hidden />
         Webhook&apos;ni o&apos;rnatish
+      </button>
+
+      {/*
+        Mini App tugmasi ham PANELDAN. BotFather'da qo'lda
+        qo'yish mumkin, lekin manzil o'zgarganda uni yangilashni
+        unutish oson — va tugma jimgina eski manzilga olib borardi.
+      */}
+      <button
+        type="button"
+        disabled={pending || !status.configured}
+        onClick={() => run(setMemberMenuButtonAction)}
+        className="ml-2 mt-3 inline-flex items-center gap-1.5 rounded-badge border border-border-soft px-3 py-1.5 text-xs font-bold text-ink transition hover:bg-ice disabled:opacity-40"
+      >
+        <Bot className="h-3.5 w-3.5" aria-hidden />
+        Mini App tugmasini o&apos;rnatish
       </button>
 
       {/* ---- Bayroqlar ---- */}

@@ -8,7 +8,7 @@ import {
   rejectMehrActivity,
   revokeCertificate,
 } from "@/lib/mehr/approval-service";
-import { setMemberWebhook } from "@/lib/member-bot/bot-api";
+import { setMemberWebhook, setMemberMenuButton } from "@/lib/member-bot/bot-api";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 
@@ -204,6 +204,47 @@ export async function registerMemberWebhookAction(): Promise<MehrActionResult> {
 
   revalidate();
   return { ok: true, message: `Webhook o'rnatildi: ${url}` };
+}
+
+/**
+ * Telegram "Menu" tugmasini Mini App'ga bog'laydi.
+ *
+ * Manzil SERVERDAGI konfiguratsiyadan quriladi — mijozdan
+ * emas. Aks holda kimdir botning menyu tugmasini o'z
+ * sahifasiga yo'naltirib, foydalanuvchilarni soxta ekranga
+ * olib borardi.
+ */
+export async function setMemberMenuButtonAction(): Promise<MehrActionResult> {
+  await requirePermission("settings.manage");
+
+  const base =
+    process.env.MEMBER_MINI_APP_URL?.trim() || process.env.NEXT_PUBLIC_ADMIN_URL?.trim();
+  if (!base) {
+    return { ok: false, error: "NEXT_PUBLIC_ADMIN_URL sozlanmagan — Mini App manzilini aniqlab bo'lmadi." };
+  }
+
+  let url: string;
+  try {
+    url = process.env.MEMBER_MINI_APP_URL?.trim()
+      ? new URL(base).toString()
+      : new URL("/mehr-app", base).toString();
+  } catch {
+    return { ok: false, error: "Mini App manzili noto'g'ri formatda." };
+  }
+
+  const result = await setMemberMenuButton(url);
+  if (!result.ok) return { ok: false, error: result.error ?? "Tugma o'rnatilmadi." };
+
+  await logAudit({
+    actorId: null,
+    action: "mehr.bot.menu_button_set",
+    entityType: "member_bot",
+    newValue: { url },
+    severity: "info",
+  });
+
+  revalidate();
+  return { ok: true, message: `Mini App tugmasi o'rnatildi: ${url}` };
 }
 
 const flagSchema = z.object({

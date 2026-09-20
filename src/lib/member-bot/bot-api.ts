@@ -147,7 +147,58 @@ export async function answerMemberCallback(
   });
 }
 
+/**
+ * Tez-tez adashtiriladigan nomlar — FAQAT ANIQLASH UCHUN.
+ *
+ * Bu qiymatlar HECH QACHON ishlatilmaydi. Canonical nom bitta:
+ * `MEMBER_TELEGRAM_BOT_TOKEN`. Ro'yxat faqat shuning uchunki,
+ * aynan shu xato sodir bo'lgan: token Vercel'ga so'zlari
+ * almashtirilgan nom bilan qo'shilgan va bot jim qolgan —
+ * sabab esa hech qayerda ko'rinmagan.
+ *
+ * Panel endi "yo'q" deyish o'rniga "nomi almashib ketgan"
+ * deb aniq aytadi.
+ */
+const MISNAMED_TOKEN_CANDIDATES = [
+  "TELEGRAM_MEMBER_BOT_TOKEN",
+  "MEMBER_BOT_TOKEN",
+  "MEMBERBOT_TOKEN",
+] as const;
+
+/**
+ * Token canonical nom bilan yo'q, lekin adashtirilgan nom
+ * bilan bor bo'lsa — o'sha nomni qaytaradi.
+ *
+ * QIYMAT O'QILMAYDI, faqat mavjudligi tekshiriladi.
+ */
+export function misnamedTokenVariable(): string | null {
+  if (isMemberBotConfigured()) return null;
+
+  for (const name of MISNAMED_TOKEN_CANDIDATES) {
+    if (process.env[name]?.trim()) return name;
+  }
+  return null;
+}
+
 export const MEMBER_ALLOWED_UPDATES = ["message", "callback_query"] as const;
+
+/**
+ * Telegram'dagi "Menu" tugmasini Mini App'ga bog'laydi.
+ *
+ * Buni BotFather'da qo'lda qilish mumkin, lekin manzil
+ * o'zgarganda uni yangilashni unutish oson — va tugma
+ * jimgina eski manzilga olib borardi. Server o'zi qo'ysa,
+ * manzil har doim amaldagi konfiguratsiyadan keladi.
+ */
+export async function setMemberMenuButton(url: string): Promise<MemberSendResult> {
+  return call("setChatMenuButton", {
+    menu_button: {
+      type: "web_app",
+      text: "MEHR 365+",
+      web_app: { url },
+    },
+  });
+}
 
 /**
  * Webhook'ni Telegram'da ro'yxatdan o'tkazadi.

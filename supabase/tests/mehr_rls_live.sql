@@ -241,6 +241,74 @@ end;
 $$;
 
 -- ============================================================
+-- 5b. ADMIN ROLI
+--
+--    Adminning RLS'i `has_permission()` orqali ishlaydi.
+--    Uni ham haqiqiy rol bilan tekshiramiz: panel ko'rsatgan
+--    narsani baza rad etmasligi kerak.
+-- ============================================================
+reset role;
+
+-- TARTIB MUHIM: profiles.id auth.users(id) ga bog'langan.
+insert into auth.users (id, instance_id, aud, role, email, encrypted_password, created_at, updated_at)
+values ('aaaaaaaa-0000-4000-8000-000000000009', '00000000-0000-0000-0000-000000000000',
+        'authenticated', 'authenticated', 'admin@test.local', '', now(), now())
+on conflict (id) do nothing;
+
+insert into public.profiles (id, full_name)
+values ('aaaaaaaa-0000-4000-8000-000000000009', 'Admin')
+on conflict (id) do update set full_name = excluded.full_name;
+
+insert into public.user_roles (user_id, role_id)
+select 'aaaaaaaa-0000-4000-8000-000000000009', id from public.roles where slug = 'admin'
+on conflict do nothing;
+
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"aaaaaaaa-0000-4000-8000-000000000009","role":"authenticated"}';
+
+select pg_temp.check_it(
+  'admin: HAMMA tadbirni ko''radi (qoralama ham)',
+  '2', (select count(*)::text from public.mehr_activities));
+
+select pg_temp.check_it(
+  'admin: ishtirokchilarni ko''radi',
+  '1', (select count(*)::text from public.mehr_participants));
+
+select pg_temp.check_it(
+  'admin: ball daftarini ko''radi',
+  '2', (select count(*)::text from public.point_ledger));
+
+select pg_temp.check_it(
+  'admin ham QR imzolash kalitini ko''radi (mehr.review bilan)',
+  '1', (select count(*)::text from public.mehr_activity_sessions));
+
+select pg_temp.check_it(
+  'admin: bog''lash tokenini KO''RMAYDI — hech kimga ochilmagan',
+  '0', (select count(*)::text from public.member_link_tokens));
+
+do $$
+declare v_err text;
+begin
+  begin
+    perform public.mehr_approve_activity('bbbbbbbb-0000-4000-8000-000000000001', null);
+    v_err := 'BAJARILDI';
+  exception
+    when insufficient_privilege then v_err := 'RUXSAT YO''Q';
+    when others then v_err := 'XATO: ' || sqlstate;
+  end;
+  /*
+   * ADMIN HAM HTTP ORQALI CHAQIRA OLMAYDI.
+   *
+   * Bu ataylab: tasdiqlash server action orqali, ruxsat
+   * tekshirilgandan KEYIN va service role bilan bajariladi.
+   * PostgREST'ga ochiq qolsa, admin hisobi buzilgan taqdirda
+   * to'g'ridan-to'g'ri tasdiqlash yo'li ochilardi.
+   */
+  perform pg_temp.check_it('admin ham RPC ni HTTP orqali chaqira olmaydi', 'RUXSAT YO''Q', v_err);
+end;
+$$;
+
+-- ============================================================
 -- 6. TASDIQLASH FUNKSIYASI — HTTP ORQALI OCHIQMI?
 -- ============================================================
 do $$

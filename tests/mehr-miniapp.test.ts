@@ -534,3 +534,150 @@ test("Mini App manzili admin panel manzilidan kelib chiqadi", () => {
   // Manzil umuman topilmasa — null, taxminiy manzil EMAS.
   assert.match(fn, /return null/);
 });
+
+// ---------------------------------------------------------------
+// CANONICAL ENV NOMI
+// ---------------------------------------------------------------
+
+test("a'zo boti env nomlari CANONICAL va yagona", () => {
+  /*
+   * Bu aynan sodir bo'lgan xato: token Vercel'ga
+   * `TELEGRAM_MEMBER_BOT_TOKEN` deb qo'shilgan, kod esa
+   * `MEMBER_TELEGRAM_BOT_TOKEN` ni kutgan. So'zlar joyi
+   * almashib ketgani uchun bot jim qolgan va sabab hech
+   * qayerda ko'rinmagan.
+   *
+   * Kodda ikki xil nomni "zaxira" sifatida parallel qoldirish
+   * vasvasa qiladi, lekin bu yana yomonroq: qaysi biri
+   * haqiqiy ekani hech qachon aniq bo'lmaydi.
+   */
+  const files = [
+    "src/lib/member-bot/bot-api.ts",
+    "src/lib/member-bot/router.ts",
+    "src/app/api/telegram-member/webhook/route.ts",
+    "src/app/(admin)/mehr/page.tsx",
+    "src/lib/actions/mehr.ts",
+  ];
+
+  const all = files.map((f) => readFileSync(f, "utf8")).join("\n");
+
+  // Canonical nomlar ishlatiladi.
+  assert.match(all, /MEMBER_TELEGRAM_BOT_TOKEN/);
+  assert.match(all, /MEMBER_TELEGRAM_WEBHOOK_SECRET/);
+
+  /*
+   * Adashtirilgan nomlar FAQAT aniqlash ro'yxatida bo'lishi
+   * mumkin (`MISNAMED_TOKEN_CANDIDATES`). U yerda ular
+   * ishlatilmaydi — mavjudligi tekshiriladi va foydalanuvchiga
+   * "nomi almashib ketgan" deb aytiladi.
+   *
+   * Shuning uchun o'sha blok olib tashlanadi va QOLGANIDA
+   * birorta ham noto'g'ri nom bo'lmasligi kerak.
+   */
+  const withoutDetector = all.replace(
+    /const MISNAMED_TOKEN_CANDIDATES[\s\S]*?\] as const;/,
+    "",
+  );
+
+  for (const wrong of [
+    "TELEGRAM_MEMBER_BOT_TOKEN",
+    "TELEGRAM_MEMBER_WEBHOOK_SECRET",
+    "MEMBER_BOT_TOKEN",
+    "MEMBER_BOT_SECRET",
+    "MEMBERBOT_TOKEN",
+  ]) {
+    assert.ok(
+      !withoutDetector.includes(wrong),
+      `kodda noto'g'ri env nomi aniqlash ro'yxatidan tashqarida: ${wrong}`,
+    );
+  }
+
+  // Bot tokeni FAQAT transport faylida o'qiladi.
+  const readers = files.filter((f) =>
+    /process\.env\.MEMBER_TELEGRAM_BOT_TOKEN/.test(readFileSync(f, "utf8")),
+  );
+  assert.deepEqual(
+    readers,
+    ["src/lib/member-bot/bot-api.ts", "src/app/(admin)/mehr/page.tsx"],
+    "token kutilmagan faylda o'qilyapti",
+  );
+});
+
+test("panel token qiymatini emas, faqat HOLATINI ko'rsatadi", () => {
+  const page = readFileSync("src/app/(admin)/mehr/page.tsx", "utf8");
+
+  /*
+   * Qiymat brauzerga yuborilmasligi kerak. Filtrdan keyin
+   * faqat NOM qoladi — `missingEnv` massivida qiymat yo'q.
+   */
+  const block = page.match(/const missingEnv = \[[\s\S]*?\.map\([\s\S]*?\);/)?.[0] ?? "";
+  assert.ok(block.length > 0, "missingEnv topilmadi");
+  assert.match(block, /\.map\(\(\[name\]\) => name as string\)/);
+
+  /*
+   * Komponentga uzatiladigan obyektda token QIYMATI yo'q.
+   *
+   * `misnamedToken` bu yerda istisno emas — u ham NOM
+   * saqlaydi, qiymat emas ("TELEGRAM_MEMBER_BOT_TOKEN" kabi).
+   * Shuning uchun tip tekshirilganda o'sha maydon nomi
+   * hisobga olinmaydi.
+   */
+  // Izohlar tashlanadi: tipning o'z hujjatida "Token" so'zi bor
+  // va test o'sha matnga tushib qolardi.
+  const view = src("src/app/(admin)/mehr/bot-settings.tsx");
+  const type = view.match(/export interface BotStatusView \{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.ok(type.length > 0, "BotStatusView topilmadi");
+
+  const withoutNameFields = type
+    .replace(/misnamedToken: string \| null;/, "")
+    .replace(/MEMBER_TELEGRAM_BOT_TOKEN/g, "");
+
+  assert.ok(!/token/i.test(withoutNameFields), "ko'rinishda token qiymati bor");
+
+  // Aniqlash natijasi — NOM bo'lgani uchun `string | null`.
+  assert.match(type, /misnamedToken: string \| null;/);
+});
+
+test("adashtirilgan token nomi ANIQLANADI, lekin ISHLATILMAYDI", () => {
+  /*
+   * Aynan shu xato sodir bo'lgan: token Vercel'ga so'zlari
+   * almashtirilgan nom bilan qo'shilgan va bot jim qolgan.
+   *
+   * Muhimi: bu nomlar faqat ANIQLASH uchun o'qiladi. Ular
+   * `botToken()` da ishlatilsa, ikki canonical nom paydo
+   * bo'lardi va qaysi biri haqiqiy ekani noaniq qolardi.
+   */
+  const code = src("src/lib/member-bot/bot-api.ts");
+
+  assert.match(code, /export function misnamedTokenVariable/);
+  assert.match(code, /MISNAMED_TOKEN_CANDIDATES/);
+
+  // Token O'QILADIGAN yagona joy — canonical nom.
+  const tokenFn = code.match(/export function memberBotToken\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.ok(tokenFn.length > 0, "memberBotToken topilmadi");
+  assert.match(tokenFn, /MEMBER_TELEGRAM_BOT_TOKEN/);
+  assert.ok(
+    !/TELEGRAM_MEMBER_BOT_TOKEN|MEMBER_BOT_TOKEN/.test(tokenFn),
+    "adashtirilgan nom haqiqiy token sifatida ishlatilyapti",
+  );
+
+  // Aniqlash funksiyasi faqat mavjudligini tekshiradi.
+  const detector = code.match(/export function misnamedTokenVariable\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(detector, /\?\.trim\(\)/);
+  assert.match(detector, /return name/);
+});
+
+test("Mini App menyu tugmasi manzili SERVERDAN quriladi", () => {
+  /*
+   * Manzilni mijoz yuborsa, kimdir botning menyu tugmasini
+   * o'z sahifasiga yo'naltirib, foydalanuvchilarni soxta
+   * ekranga olib borardi.
+   */
+  const code = src("src/lib/actions/mehr.ts");
+  const fn = code.match(/export async function setMemberMenuButtonAction\([\s\S]*?\n\}/)?.[0] ?? "";
+
+  assert.ok(fn.length > 0, "action topilmadi");
+  assert.match(fn, /setMemberMenuButtonAction\(\): Promise/, "action argument qabul qilyapti");
+  assert.match(fn, /NEXT_PUBLIC_ADMIN_URL|MEMBER_MINI_APP_URL/);
+  assert.match(fn, /requirePermission\("settings\.manage"\)/);
+});
