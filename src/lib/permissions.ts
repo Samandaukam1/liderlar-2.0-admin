@@ -74,6 +74,27 @@ export const PERMISSIONS = [
   "sales.view",
   "sales.manage",
   "sales.learn",
+  /*
+   * MEHR 365+ va a'zo akkauntlari.
+   *
+   * SQL tomondagi `role_permissions` bilan bir xil bo'lishi SHART
+   * (20260920150000_mehr_rls.sql): RLS va server action bitta
+   * manbaga tayanadi va ular ajralib ketsa, panel ko'rsatgan
+   * narsani baza rad etardi.
+   *
+   * `mehr.review` alohida: tadbirni tasdiqlash ball va sertifikat
+   * yaratadi — bu ko'rishdan butunlay boshqa mas'uliyat.
+   */
+  "members.view",
+  "members.manage",
+  "mehr.view",
+  "mehr.review",
+  "mehr.manage",
+  "points.view",
+  "points.manage",
+  "certificates.manage",
+  "referrals.view",
+  "referrals.manage",
   "notifications.view",
   "notifications.manage",
   "admins.manage",
@@ -137,6 +158,10 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "sales.view",
     "coordinators.view",
     "coordinators.reports",
+    "members.view",
+    "mehr.view",
+    "mehr.review",
+    "points.view",
   ],
   analyst: [
     "dashboard.view",
@@ -151,6 +176,10 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "sales.view",
     "coordinators.view",
     "coordinators.reports",
+    "members.view",
+    "mehr.view",
+    "points.view",
+    "referrals.view",
     "export.run",
   ],
   viewer: VIEW_ONLY,
