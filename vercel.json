@@ -15,6 +15,14 @@
     {
       "path": "/api/cron/coordinator-routing",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/rankings",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/monthly-links",
+      "schedule": "0 4 * * *"
     }
   ]
 }
