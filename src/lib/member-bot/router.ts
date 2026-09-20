@@ -57,9 +57,29 @@ export interface MemberUpdate {
   };
 }
 
+/**
+ * Mini App manzili.
+ *
+ * Odatda uni alohida sozlash SHART EMAS: u admin panelning
+ * o'z manzilidan kelib chiqadi. Alohida o'zgaruvchi faqat
+ * Mini App boshqa domenga chiqarilgan holat uchun qoldirilgan.
+ *
+ * Manzil umuman topilmasa — null. Shunda bot tugmani
+ * KO'RSATMAYDI: bosilganda hech nima qilmaydigan tugma
+ * buzuq mahsulot belgisi.
+ */
 function miniAppUrl(): string | null {
-  const base = process.env.MEMBER_MINI_APP_URL?.trim();
-  return base || null;
+  const explicit = process.env.MEMBER_MINI_APP_URL?.trim();
+  if (explicit) return explicit;
+
+  const adminBase = process.env.NEXT_PUBLIC_ADMIN_URL?.trim();
+  if (!adminBase) return null;
+
+  try {
+    return new URL("/mehr-app", adminBase).toString();
+  } catch {
+    return null;
+  }
 }
 
 function loginUrl(): string {

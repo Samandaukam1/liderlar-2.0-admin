@@ -38,8 +38,20 @@ export default async function MehrAdminPage() {
   const missingEnv = [
     ["MEMBER_TELEGRAM_BOT_TOKEN", process.env.MEMBER_TELEGRAM_BOT_TOKEN],
     ["MEMBER_TELEGRAM_WEBHOOK_SECRET", process.env.MEMBER_TELEGRAM_WEBHOOK_SECRET],
-    ["MEMBER_MINI_APP_URL", process.env.MEMBER_MINI_APP_URL],
-    ["MEMBER_WEBHOOK_BASE_URL", process.env.MEMBER_WEBHOOK_BASE_URL],
+    /*
+     * Bu ikkisi ADMIN PANEL MANZILIDAN kelib chiqadi, shuning
+     * uchun `NEXT_PUBLIC_ADMIN_URL` bo'lsa yetarli. Alohida
+     * o'zgaruvchilar faqat boshqa domen kerak bo'lgan holat
+     * uchun qoldirilgan.
+     */
+    [
+      "MEMBER_MINI_APP_URL yoki NEXT_PUBLIC_ADMIN_URL",
+      process.env.MEMBER_MINI_APP_URL || process.env.NEXT_PUBLIC_ADMIN_URL,
+    ],
+    [
+      "MEMBER_WEBHOOK_BASE_URL yoki NEXT_PUBLIC_ADMIN_URL",
+      process.env.MEMBER_WEBHOOK_BASE_URL || process.env.NEXT_PUBLIC_ADMIN_URL,
+    ],
   ]
     .filter(([, value]) => !value?.trim())
     .map(([name]) => name as string);

@@ -517,3 +517,20 @@ test("bayroq kalitlari moduli server-only EMAS", () => {
   assert.ok(!/import\s+["']server-only["']/.test(code), "server-only direktivasi bor");
   assert.ok(!/from\s+["']@\/lib\/supabase/.test(code), "kalitlar modulida baza mijozi bor");
 });
+
+test("Mini App manzili admin panel manzilidan kelib chiqadi", () => {
+  /*
+   * Alohida o'zgaruvchi talab qilinsa, uni qo'shishni unutish
+   * oson — va bot tugmani jimgina ko'rsatmay qo'yardi.
+   */
+  const code = src("src/lib/member-bot/router.ts");
+  const fn = code.match(/function miniAppUrl\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+
+  assert.ok(fn.length > 0, "miniAppUrl topilmadi");
+  assert.match(fn, /MEMBER_MINI_APP_URL/);
+  assert.match(fn, /NEXT_PUBLIC_ADMIN_URL/);
+  assert.match(fn, /"\/mehr-app"/);
+
+  // Manzil umuman topilmasa — null, taxminiy manzil EMAS.
+  assert.match(fn, /return null/);
+});
