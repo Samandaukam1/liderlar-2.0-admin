@@ -27,6 +27,7 @@ import {
   Wand2,
   Bell,
   ShieldCheck,
+  UserCog,
   ScrollText,
   Settings,
   Palette,
@@ -179,6 +180,23 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Tizim",
     items: [
       { label: "Bildirishnomalar", href: "/notifications", icon: Bell, permission: "notifications.view" },
+      {
+        /*
+         * Bu ADMINLAR emas, A'ZOLAR.
+         *
+         * `/admins` — panelga kiradigan xodimlar. Bu bo'lim esa
+         * ensiklopediyadagi nomzodlarning shaxsiy hisoblari:
+         * kim tizimga kira oladi, kim Telegramga ulangan.
+         * Ikkisini bir joyga qo'shish ruxsatlarni ham
+         * chalkashtirardi.
+         */
+        label: "Foydalanuvchi akkauntlari",
+        href: "/foydalanuvchilar",
+        icon: UserCog,
+        permission: "members.view",
+        keywords:
+          "akkaunt hisob nomzod faollashtirish aktivatsiya parol telegram bloklash kirish login",
+      },
       { label: "Adminlar va rollar", href: "/admins", icon: ShieldCheck, permission: "admins.manage" },
       { label: "Audit log", href: "/audit-log", icon: ScrollText, permission: "audit.view" },
       { label: "Sayt sozlamalari", href: "/settings", icon: Settings, permission: "settings.manage" },
