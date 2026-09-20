@@ -6,6 +6,8 @@ import { loadMehrDashboard } from "@/lib/mehr/dashboard";
 import { getMehrFlags } from "@/lib/mehr/flags";
 import { ReviewQueue } from "./review-queue";
 import { BotSettings, type BotStatusView } from "./bot-settings";
+import { LogoPanel } from "./logo-panel";
+import { getMehrLogoUrl } from "@/lib/mehr/logo-service";
 import {
   getMemberBotStatus,
   isMemberBotConfigured,
@@ -30,11 +32,12 @@ export default async function MehrAdminPage() {
   const canReview = hasPermission(ctx.roles, "mehr.review");
   const canManageSettings = hasPermission(ctx.roles, "settings.manage");
 
-  const [{ stats, queue }, flags, botStatus] = await Promise.all([
+  const [{ stats, queue }, flags, botStatus, mehrLogoUrl] = await Promise.all([
     loadMehrDashboard(),
     getMehrFlags(),
     // Telegram'ga so'rov — faqat token bor bo'lsa.
     isMemberBotConfigured() ? getMemberBotStatus() : Promise.resolve(null),
+    getMehrLogoUrl(),
   ]);
 
   /*
@@ -162,6 +165,8 @@ export default async function MehrAdminPage() {
           </div>
         ))}
       </div>
+
+      {canManageSettings && <LogoPanel logoUrl={mehrLogoUrl} />}
 
       {canManageSettings && <BotSettings status={botView} flags={flags} />}
 
