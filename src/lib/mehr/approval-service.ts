@@ -2,6 +2,7 @@ import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 import { canTransition, nextStatus as statusAfter } from "./activity-rules.ts";
+import { getMehrFlags } from "./flags.ts";
 
 /**
  * MEHR tasdiqlash xizmati.
@@ -23,6 +24,7 @@ export interface ApproveResult {
     | "already_approved"
     | "wrong_state"
     | "not_found"
+    | "points_disabled"
     | "error";
   /** Ball/sertifikat AYNAN shu chaqiruvda yaratildimi. */
   pointsCreated: number;
@@ -57,6 +59,26 @@ export async function approveMehrActivity(
   activityId: string,
   options: { actorId?: string | null } = {},
 ): Promise<ApproveResult> {
+  /*
+   * BALL BAYROG'I O'CHIQ BO'LSA — TASDIQ UMUMAN BO'LMAYDI.
+   *
+   * Faqat ballni o'tkazib yuborish mumkin edi, lekin shunda
+   * tadbir "tasdiqlangan" bo'lib, sertifikat chiqib, ball esa
+   * bo'lmasdi — va buni keyin qo'lda to'g'rilash kerak
+   * bo'lardi. Tasdiq bo'linmas amal: yo butunlay, yo hech.
+   */
+  const flags = await getMehrFlags();
+  if (!flags.pointsEnabled) {
+    return {
+      ok: false,
+      reason: "points_disabled",
+      pointsCreated: 0,
+      certificatesCreated: 0,
+      frozenParticipants: 0,
+      slug: null,
+    };
+  }
+
   const db = createSupabaseAdminClient();
 
   const { data, error } = await db.rpc("mehr_approve_activity", {

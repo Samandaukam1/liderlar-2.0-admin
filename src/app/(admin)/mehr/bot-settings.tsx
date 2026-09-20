@@ -20,6 +20,22 @@ export interface BotStatusView {
   missingEnv: string[];
 }
 
+/*
+ * Hali hech nimani to'smaydigan bayroqlar.
+ *
+ * Panel "o'chiq" deb ko'rsatib, aslida hech nimani to'smasa,
+ * bu YOLG'ON XOTIRJAMLIK beradi: odam "yopiq ekan" deb
+ * o'ylab yuradi. Shuning uchun ochiq aytiladi.
+ *
+ * Ro'yxat `tests/mehr-schema.test.ts` dagi NOT_YET_ENFORCED
+ * bilan bir xil bo'lishi kerak.
+ */
+const NOT_YET_BUILT: Partial<Record<keyof MehrFlags, string>> = {
+  publicEnabled: "Ommaviy MEHR sahifalari hali qurilmagan",
+  memberAuthEnabled: "Kirish allaqachon ishlaydi — bu bayroq hech nimani to'smaydi",
+  referralPointsEnabled: "Referral dvigateli hali qurilmagan",
+};
+
 const FLAG_LABEL: Record<keyof MehrFlags, string> = {
   publicEnabled: "Ommaviy sahifalar",
   activityCreationEnabled: "Tadbir yaratish va seans",
@@ -146,6 +162,8 @@ export function BotSettings({
       <ul className="mt-2 divide-y divide-border-soft">
         {(Object.keys(FLAG_LABEL) as (keyof MehrFlags)[]).map((field) => {
           const on = local[field];
+          const notBuilt = NOT_YET_BUILT[field];
+
           return (
             <li key={field} className="flex items-center justify-between gap-3 py-2">
               <span className="min-w-0">
@@ -153,6 +171,9 @@ export function BotSettings({
                 <span className="ml-2 font-mono text-[11px] text-ink-soft">
                   {MEHR_FLAG_KEYS[field]}
                 </span>
+                {notBuilt && (
+                  <span className="mt-0.5 block text-[11px] text-ink-soft">⚠️ {notBuilt}</span>
+                )}
               </span>
 
               <button

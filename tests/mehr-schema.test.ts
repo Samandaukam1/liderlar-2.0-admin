@@ -429,3 +429,107 @@ test("mavjud jadvallar buzilmaydi: drop table / drop column yo'q", () => {
   assert.ok(!/drop column/i.test(CODE), "drop column topildi");
   assert.ok(!/truncate/i.test(CODE), "truncate topildi");
 });
+
+// ---------------------------------------------------------------
+// BAYROQ HAQIQATAN TO'SADIMI
+// ---------------------------------------------------------------
+
+/**
+ * Hali hech nimani to'smaydigan bayroqlar — SABABI BILAN.
+ *
+ * Bu ro'yxat ataylab qo'lda yoziladi. Panel bayroqni "o'chiq"
+ * deb ko'rsatib, aslida hech nimani to'smasa, bu yolg'on
+ * xotirjamlik beradi: odam "yopiq ekan" deb o'ylab yuradi.
+ *
+ * Xususiyat qurilganda uni shu ro'yxatdan OLIB TASHLASH kerak —
+ * aks holda test yiqiladi va eslatadi.
+ */
+const NOT_YET_ENFORCED: Readonly<Record<string, string>> = {
+  publicEnabled: "Ommaviy MEHR sahifalari hali qurilmagan (Phase 3).",
+  memberAuthEnabled:
+    "A'zo autentifikatsiyasi Liderlar'da ALLAQACHON bor va u bu tizimdan oldin " +
+    "mavjud edi — uni bayroq bilan yopish mavjud kirishni buzardi.",
+  referralPointsEnabled: "Referral dvigateli hali qurilmagan (Phase 10).",
+};
+
+test("har bir bayroq yo to'sadi, yo 'hali qurilmagan' deb belgilangan", () => {
+  const sources = [
+    "src/app/api/mehr-app/checkin/route.ts",
+    "src/app/api/mehr-app/session/route.ts",
+    "src/app/api/mehr-app/activity/route.ts",
+    "src/app/api/mehr-cert/[code]/route.ts",
+    "src/app/api/telegram-member/webhook/route.ts",
+    "src/lib/mehr/approval-service.ts",
+  ]
+    .map((f) => stripComments(readFileSync(f, "utf8")))
+    .join("\n");
+
+  const fields = Object.keys(
+    JSON.parse(
+      // flag-keys.ts dagi kalitlar ro'yxatini o'qiymiz.
+      "{" +
+        (stripComments(readFileSync("src/lib/mehr/flag-keys.ts", "utf8"))
+          .match(/export const MEHR_FLAG_KEYS = \{([\s\S]*?)\} as const;/)?.[1] ?? "")
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.includes(":"))
+          .map((line) => {
+            const [key, value] = line.replace(/,$/, "").split(":");
+            return `"${key.trim()}": ${value.trim()}`;
+          })
+          .join(",") +
+        "}",
+    ),
+  );
+
+  assert.equal(fields.length, 8, `kutilmagan bayroq soni: ${fields.length}`);
+
+  for (const field of fields) {
+    const enforced = new RegExp(`flags\\.${field}\\b`).test(sources);
+    const excused = field in NOT_YET_ENFORCED;
+
+    if (excused) {
+      assert.ok(
+        !enforced,
+        `${field} endi to'syapti — uni NOT_YET_ENFORCED ro'yxatidan olib tashlang`,
+      );
+    } else {
+      assert.ok(
+        enforced,
+        `${field} hech nimani to'smaydi. Yo to'sing, yo NOT_YET_ENFORCED ga sabab bilan qo'shing.`,
+      );
+    }
+  }
+});
+
+test("ball o'chiq bo'lsa, tasdiq UMUMAN bo'lmaydi", () => {
+  /*
+   * Faqat ballni o'tkazib yuborish mumkin edi, lekin shunda
+   * tadbir "tasdiqlangan" bo'lib, sertifikat chiqib, ball esa
+   * bo'lmasdi — keyin buni qo'lda to'g'rilash kerak bo'lardi.
+   */
+  const code = stripComments(readFileSync("src/lib/mehr/approval-service.ts", "utf8"));
+
+  assert.match(code, /if \(!flags\.pointsEnabled\)/);
+  assert.match(code, /reason: "points_disabled"/);
+
+  // Tekshiruv RPC chaqiruvidan OLDIN turishi shart.
+  assert.ok(
+    code.indexOf("pointsEnabled") < code.indexOf('rpc("mehr_approve_activity"'),
+    "bayroq tekshiruvi RPC dan keyin turibdi",
+  );
+});
+
+test("bot o'chiq bo'lsa, webhook 200 qaytaradi (503 emas)", () => {
+  /*
+   * Non-2xx Telegram'ni cheksiz qayta urinishga solardi,
+   * holbuki bu xato emas — ataylab yopilgan holat.
+   */
+  const code = stripComments(readFileSync("src/app/api/telegram-member/webhook/route.ts", "utf8"));
+
+  assert.match(code, /if \(!flags\.memberBotEnabled\)/);
+  assert.match(code, /skipped: "disabled"/);
+
+  const block = code.match(/if \(!flags\.memberBotEnabled\)[\s\S]*?\n  \}/)?.[0] ?? "";
+  assert.ok(!/status: 5\d\d/.test(block), "o'chiq holatda 5xx qaytaryapti");
+});

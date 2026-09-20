@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { isMemberWebhookConfigured, isValidMemberSecret } from "@/lib/member-bot/bot-api";
 import { handleMemberUpdate, type MemberUpdate } from "@/lib/member-bot/router";
+import { getMehrFlags } from "@/lib/mehr/flags";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,6 +32,22 @@ export async function POST(request: NextRequest) {
   if (!isValidMemberSecret(secret, request.headers.get("x-telegram-bot-api-secret-token"))) {
     console.warn("[member-webhook] rad etildi: sekret mos kelmadi");
     return NextResponse.json({ ok: false }, { status: 401 });
+  }
+
+  /*
+   * BAYROQ O'CHIQ BO'LSA — HECH NIMA QILINMAYDI.
+   *
+   * Avval bu tekshiruv yo'q edi va `member.bot_enabled`
+   * panelda turgani bilan hech nimani to'smasdi: bot o'chiq
+   * deb ko'rsatilib, aslida javob berib turardi.
+   *
+   * 200 qaytariladi, 503 emas: non-2xx Telegram'ni cheksiz
+   * qayta urinishga solardi, holbuki bu xato emas — ataylab
+   * yopilgan holat.
+   */
+  const flags = await getMehrFlags();
+  if (!flags.memberBotEnabled) {
+    return NextResponse.json({ ok: true, skipped: "disabled" });
   }
 
   let update: unknown;

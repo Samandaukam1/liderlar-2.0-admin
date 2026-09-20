@@ -93,18 +93,28 @@ export default async function MehrAdminPage() {
         Tizim o'chiq turganda navbat bo'sh ko'rinadi va buni
         "ish yo'q" deb tushunish oson. Sabab ko'rinib tursin.
       */}
-      {!flags.publicEnabled || !flags.pointsEnabled ? (
+      {/*
+        FAQAT HAQIQATAN TO'SAYOTGAN bayroqlar sanaladi.
+        `mehr.public_enabled` bu ro'yxatda YO'Q: ommaviy sahifalar
+        hali qurilmagan va uni "yopiq" deb ko'rsatish qurilgan-u
+        yopilgan degan taassurot berardi.
+      */}
+      {!flags.activityCreationEnabled ||
+      !flags.qrCheckinEnabled ||
+      !flags.pointsEnabled ||
+      !flags.certificatesEnabled ||
+      !flags.memberBotEnabled ? (
         <div className="mb-6 rounded-lg border border-amber/40 bg-amber/10 p-4 text-sm">
           <p className="font-bold text-[#946a10]">MEHR 365+ hali to&apos;liq yoqilmagan</p>
           <ul className="mt-2 space-y-1 text-ink-soft">
-            {!flags.publicEnabled && <li>• Ommaviy sahifalar yopiq (mehr.public_enabled)</li>}
+            {!flags.memberBotEnabled && <li>• A&apos;zo boti javob bermaydi (member.bot_enabled)</li>}
             {!flags.activityCreationEnabled && <li>• Tadbir yaratish yopiq (mehr.activity_creation_enabled)</li>}
             {!flags.qrCheckinEnabled && <li>• QR check-in yopiq (mehr.qr_checkin_enabled)</li>}
-            {!flags.pointsEnabled && <li>• Ball berish yopiq (mehr.points_enabled)</li>}
-            {!flags.certificatesEnabled && <li>• Sertifikatlar yopiq (mehr.certificates_enabled)</li>}
+            {!flags.pointsEnabled && <li>• Tasdiqlash yopiq — ball berilmaydi (mehr.points_enabled)</li>}
+            {!flags.certificatesEnabled && <li>• Sertifikat PDF yopiq (mehr.certificates_enabled)</li>}
           </ul>
           <p className="mt-2 text-xs text-ink-soft">
-            Bayroqlar <strong>Sayt sozlamalari</strong> bo&apos;limidan yoqiladi.
+            Bayroqlar quyidagi <strong>Bot va bayroqlar</strong> bo&apos;limidan yoqiladi.
           </p>
         </div>
       ) : null}

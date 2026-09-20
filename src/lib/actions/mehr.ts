@@ -51,6 +51,13 @@ export async function approveMehrActivityAction(
           ok: false,
           error: `Bu tadbirni hozir tasdiqlab bo'lmaydi — holati: ${result.status ?? "noma'lum"}.`,
         };
+      case "points_disabled":
+        return {
+          ok: false,
+          error:
+            "Ball berish o'chiq (mehr.points_enabled). Tasdiqlash ball va sertifikatni birga " +
+            "yaratadi, shuning uchun avval o'sha bayroqni yoqing.",
+        };
       default:
         return { ok: false, error: "Tasdiqlashda xato. Qaytadan urinib ko'ring." };
     }
