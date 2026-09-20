@@ -18,6 +18,7 @@ export const MEHR_FLAG_KEYS = {
   certificatesEnabled: "mehr.certificates_enabled",
   memberAuthEnabled: "member.auth_enabled",
   memberBotEnabled: "member.bot_enabled",
+  accountActivationEnabled: "member.account_activation_enabled",
   referralPointsEnabled: "referral.points_enabled",
 } as const;
 
@@ -40,5 +41,6 @@ export const ALL_FLAGS_OFF: MehrFlags = {
   certificatesEnabled: false,
   memberAuthEnabled: false,
   memberBotEnabled: false,
+  accountActivationEnabled: false,
   referralPointsEnabled: false,
 };

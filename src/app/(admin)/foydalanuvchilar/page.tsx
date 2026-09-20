@@ -5,6 +5,7 @@ import { Badge } from "@/components/admin/badges";
 import { loadAccountReport } from "@/lib/accounts/account-report";
 import { isActivationEnabled } from "@/lib/accounts/activation-service";
 import { AccountTable } from "./account-table";
+import { ActivationToggle } from "./activation-toggle";
 import type { AccountFilter } from "@/lib/accounts/account-types";
 
 export const metadata = { title: "Foydalanuvchi akkauntlari" };
@@ -81,6 +82,28 @@ export default async function AccountsPage({
             <code className="font-mono">member.account_activation_enabled</code> o&apos;chiq.
             Mavjud hisoblar bundan ta&apos;sirlanmaydi — faqat yangi faollashtirish to&apos;silgan.
           </p>
+
+          {/*
+            Kalit MUAMMONING YONIDA turadi.
+
+            Avval u faqat boshqa bo'limda bor edi va bu xabar
+            "yoqing" deb aytardi-yu, qayerdan yoqishni
+            ko'rsatmasdi.
+          */}
+          {canManage && (
+            <div className="mt-3">
+              <ActivationToggle enabled={false} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {activationEnabled && canManage && (
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border-soft bg-paper px-4 py-3 text-sm">
+          <span className="text-ink-soft">
+            Faollashtirish yoqilgan — yangi havola yaratish mumkin.
+          </span>
+          <ActivationToggle enabled />
         </div>
       )}
 

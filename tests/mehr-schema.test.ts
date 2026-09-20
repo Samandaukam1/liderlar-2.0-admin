@@ -460,6 +460,7 @@ test("har bir bayroq yo to'sadi, yo 'hali qurilmagan' deb belgilangan", () => {
     "src/app/api/mehr-cert/[code]/route.ts",
     "src/app/api/telegram-member/webhook/route.ts",
     "src/lib/mehr/approval-service.ts",
+    "src/lib/accounts/activation-service.ts",
   ]
     .map((f) => stripComments(readFileSync(f, "utf8")))
     .join("\n");
@@ -482,7 +483,7 @@ test("har bir bayroq yo to'sadi, yo 'hali qurilmagan' deb belgilangan", () => {
     ),
   );
 
-  assert.equal(fields.length, 8, `kutilmagan bayroq soni: ${fields.length}`);
+  assert.equal(fields.length, 9, `kutilmagan bayroq soni: ${fields.length}`);
 
   for (const field of fields) {
     const enforced = new RegExp(`flags\\.${field}\\b`).test(sources);

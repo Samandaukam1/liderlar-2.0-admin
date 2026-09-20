@@ -1,6 +1,7 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
+import { getMehrFlags } from "@/lib/mehr/flags";
 import {
   issueActivationToken,
   hashActivationToken,
@@ -32,18 +33,18 @@ async function activationTtlHours(): Promise<number> {
   return clampTtl(Number(data?.value ?? DEFAULT_TTL_HOURS));
 }
 
+/**
+ * Faollashtirish yoqilganmi.
+ *
+ * Bayroq MEHR bayroqlari bilan BITTA joydan o'qiladi
+ * (`getMehrFlags`). Bu yerda alohida `site_settings` so'rovi
+ * yozish oson edi, lekin shunda ikkita o'qish mantig'i paydo
+ * bo'lardi va ular bir kun kelib boshqacha xulq ko'rsatardi —
+ * masalan "True" va "true" ni turlicha tushunardi.
+ */
 export async function isActivationEnabled(): Promise<boolean> {
-  const db = createSupabaseAdminClient();
-  const { data, error } = await db
-    .from("site_settings")
-    .select("value")
-    .eq("key", "member.account_activation_enabled")
-    .maybeSingle();
-
-  // Sozlama o'qilmasa — yopiq. Ochilib ketgan xususiyatni
-  // keyin yopish qimmatroqqa tushadi.
-  if (error) return false;
-  return data?.value?.trim().toLowerCase() === "true";
+  const flags = await getMehrFlags();
+  return flags.accountActivationEnabled;
 }
 
 export interface CreateActivationResult {

@@ -54,6 +54,7 @@ const FLAG_LABEL: Record<keyof MehrFlags, string> = {
   certificatesEnabled: "Sertifikatlar",
   memberAuthEnabled: "A'zo autentifikatsiyasi",
   memberBotEnabled: "A'zo boti",
+  accountActivationEnabled: "Nomzod hisobini faollashtirish",
   referralPointsEnabled: "Referral ballari",
 };
 

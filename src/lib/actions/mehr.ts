@@ -273,6 +273,7 @@ const flagSchema = z.object({
     "mehr.certificates_enabled",
     "member.auth_enabled",
     "member.bot_enabled",
+    "member.account_activation_enabled",
     "referral.points_enabled",
   ]),
   enabled: z.boolean(),
