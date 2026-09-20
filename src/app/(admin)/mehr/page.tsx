@@ -11,6 +11,10 @@ import {
   isMemberBotConfigured,
   misnamedTokenVariable,
 } from "@/lib/member-bot/bot-api";
+import {
+  resolveAdminOrigin,
+  describeOriginFailure,
+} from "@/lib/member-bot/admin-origin";
 
 export const metadata = { title: "MEHR 365+" };
 export const dynamic = "force-dynamic";
@@ -60,6 +64,20 @@ export default async function MehrAdminPage() {
     .filter(([, value]) => !value?.trim())
     .map(([name]) => name as string);
 
+  /*
+   * QAYSI MANZIL ISHLATILISHI — OLDINDAN KO'RINSIN.
+   *
+   * Avval buni faqat tugmani bosib bilish mumkin edi va
+   * Telegram xatosi ("An HTTPS URL must be provided") panelda
+   * emas, javobda chiqardi. Endi admin bosishdan oldin
+   * ko'radi.
+   */
+  const origin = resolveAdminOrigin([
+    { name: "MEMBER_WEBHOOK_BASE_URL", value: process.env.MEMBER_WEBHOOK_BASE_URL },
+    { name: "NEXT_PUBLIC_ADMIN_URL", value: process.env.NEXT_PUBLIC_ADMIN_URL },
+    { name: "VERCEL_PROJECT_PRODUCTION_URL", value: process.env.VERCEL_PROJECT_PRODUCTION_URL },
+  ]);
+
   const botView: BotStatusView = {
     configured: isMemberBotConfigured(),
     /*
@@ -69,6 +87,9 @@ export default async function MehrAdminPage() {
      * ko'rsatmagan edi.
      */
     misnamedToken: misnamedTokenVariable(),
+    resolvedOrigin: origin.ok ? origin.origin : null,
+    originSource: origin.ok ? origin.source : null,
+    originProblem: origin.ok ? null : describeOriginFailure(origin.problems),
     username: botStatus?.username ?? null,
     webhookUrl: botStatus?.webhookUrl ?? null,
     pendingUpdates: botStatus?.pendingUpdates ?? null,

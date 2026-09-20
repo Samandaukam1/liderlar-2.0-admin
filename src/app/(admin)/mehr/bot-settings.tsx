@@ -21,6 +21,13 @@ export interface BotStatusView {
   missingEnv: string[];
   /** Token adashtirilgan nom bilan qo'shilgan bo'lsa — o'sha NOM. */
   misnamedToken: string | null;
+
+  /** Webhook va Mini App uchun ishlatiladigan manzil. */
+  resolvedOrigin: string | null;
+  /** Qaysi environment o'zgaruvchisidan olingani. */
+  originSource: string | null;
+  /** Manzil yaroqsiz bo'lsa — nega. */
+  originProblem: string | null;
 }
 
 /*
@@ -122,6 +129,27 @@ export function BotSettings({
         </div>
       )}
 
+      {/*
+        MANZIL MUAMMOSI — TUGMADAN OLDIN.
+
+        Telegram "An HTTPS URL must be provided" deb rad etgani
+        panelda emas, tugma javobida chiqardi va sabab
+        sozlamada ekani ko'rinmasdi.
+      */}
+      {status.originProblem && (
+        <div className="mt-3 rounded-lg border border-coral/40 bg-coral/10 p-3">
+          <p className="flex items-center gap-1.5 text-sm font-bold text-[#c43d3d]">
+            <AlertTriangle className="h-4 w-4" aria-hidden />
+            Manzil yaroqsiz
+          </p>
+          <p className="mt-1 text-xs text-ink-soft">{status.originProblem}</p>
+          <p className="mt-1.5 text-xs text-ink-soft">
+            Telegram webhook va Mini App uchun <strong>HTTPS</strong> manzil talab qiladi va
+            lokal manzilga yeta olmaydi.
+          </p>
+        </div>
+      )}
+
       {/* ---- Bot holati ---- */}
       <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
         <Row label="Bot">
@@ -133,6 +161,17 @@ export function BotSettings({
             )
           ) : (
             <Badge accent="coral">token sozlanmagan</Badge>
+          )}
+        </Row>
+
+        <Row label="Ishlatiladigan manzil">
+          {status.resolvedOrigin ? (
+            <span className="break-all font-mono text-xs">
+              {status.resolvedOrigin}
+              <span className="ml-1.5 font-sans text-ink-soft">({status.originSource})</span>
+            </span>
+          ) : (
+            <Badge accent="coral">aniqlanmadi</Badge>
           )}
         </Row>
 
@@ -163,7 +202,7 @@ export function BotSettings({
 
       <button
         type="button"
-        disabled={pending || !status.configured}
+        disabled={pending || !status.configured || !status.resolvedOrigin}
         onClick={() => run(registerMemberWebhookAction)}
         className="mt-3 inline-flex items-center gap-1.5 rounded-badge border border-border-soft px-3 py-1.5 text-xs font-bold text-ink transition hover:bg-ice disabled:opacity-40"
       >
@@ -178,7 +217,7 @@ export function BotSettings({
       */}
       <button
         type="button"
-        disabled={pending || !status.configured}
+        disabled={pending || !status.configured || !status.resolvedOrigin}
         onClick={() => run(setMemberMenuButtonAction)}
         className="ml-2 mt-3 inline-flex items-center gap-1.5 rounded-badge border border-border-soft px-3 py-1.5 text-xs font-bold text-ink transition hover:bg-ice disabled:opacity-40"
       >

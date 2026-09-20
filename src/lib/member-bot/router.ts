@@ -23,6 +23,7 @@ import {
 } from "./messages.ts";
 import { consumeTelegramLink, findProfileByTelegramId } from "@/lib/member/link-service";
 import { CERTIFICATE_ROLE_LABEL } from "@/lib/mehr/certificate-code";
+import { resolveAdminOrigin } from "./admin-origin.ts";
 import { getSiteUrl } from "@/lib/site-url";
 
 /**
@@ -69,17 +70,27 @@ export interface MemberUpdate {
  * buzuq mahsulot belgisi.
  */
 function miniAppUrl(): string | null {
-  const explicit = process.env.MEMBER_MINI_APP_URL?.trim();
-  if (explicit) return explicit;
+  /*
+   * Telegram web_app tugmasi FAQAT HTTPS manzilni qabul qiladi
+   * va lokal manzilga umuman yeta olmaydi. Shu yerda
+   * `NEXT_PUBLIC_ADMIN_URL` da dev sozlamasidan qolgan
+   * `http://localhost:3001` turgan edi.
+   *
+   * Yaroqsiz manzil bilan tugma ko'rsatilsa, u bosilganda
+   * Telegram xato berardi — buzuq tugma esa yo'q tugmadan
+   * yomonroq. Shuning uchun yaroqsiz bo'lsa null.
+   */
+  const resolved = resolveAdminOrigin([
+    { name: "MEMBER_MINI_APP_URL", value: process.env.MEMBER_MINI_APP_URL },
+    { name: "NEXT_PUBLIC_ADMIN_URL", value: process.env.NEXT_PUBLIC_ADMIN_URL },
+    { name: "VERCEL_PROJECT_PRODUCTION_URL", value: process.env.VERCEL_PROJECT_PRODUCTION_URL },
+  ]);
 
-  const adminBase = process.env.NEXT_PUBLIC_ADMIN_URL?.trim();
-  if (!adminBase) return null;
+  if (!resolved.ok) return null;
 
-  try {
-    return new URL("/mehr-app", adminBase).toString();
-  } catch {
-    return null;
-  }
+  return resolved.source === "MEMBER_MINI_APP_URL"
+    ? resolved.origin + new URL(process.env.MEMBER_MINI_APP_URL!.trim()).pathname
+    : new URL("/mehr-app", resolved.origin).toString();
 }
 
 function loginUrl(): string {

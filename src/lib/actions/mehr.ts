@@ -9,6 +9,10 @@ import {
   revokeCertificate,
 } from "@/lib/mehr/approval-service";
 import { setMemberWebhook, setMemberMenuButton } from "@/lib/member-bot/bot-api";
+import {
+  resolveAdminOrigin,
+  describeOriginFailure,
+} from "@/lib/member-bot/admin-origin";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 
@@ -172,21 +176,26 @@ export async function revokeCertificateAction(
 export async function registerMemberWebhookAction(): Promise<MehrActionResult> {
   await requirePermission("settings.manage");
 
-  const base = process.env.MEMBER_WEBHOOK_BASE_URL?.trim() || process.env.NEXT_PUBLIC_ADMIN_URL?.trim();
-  if (!base) {
-    return {
-      ok: false,
-      error:
-        "MEMBER_WEBHOOK_BASE_URL sozlanmagan — admin panelning manzilini environment'ga qo'shing.",
-    };
+  /*
+   * MANZIL TARTIB BILAN QIDIRILADI.
+   *
+   * Oxirgi nomzod — Vercel'ning O'ZI bergan production domeni.
+   * U qo'lda yozilmaydi va shuning uchun adashmaydi: bu yerda
+   * `NEXT_PUBLIC_ADMIN_URL` da dev sozlamasidan qolgan
+   * `http://localhost:3001` turib, Telegram ikkala so'rovni
+   * ham rad etgan edi.
+   */
+  const resolved = resolveAdminOrigin([
+    { name: "MEMBER_WEBHOOK_BASE_URL", value: process.env.MEMBER_WEBHOOK_BASE_URL },
+    { name: "NEXT_PUBLIC_ADMIN_URL", value: process.env.NEXT_PUBLIC_ADMIN_URL },
+    { name: "VERCEL_PROJECT_PRODUCTION_URL", value: process.env.VERCEL_PROJECT_PRODUCTION_URL },
+  ]);
+
+  if (!resolved.ok) {
+    return { ok: false, error: describeOriginFailure(resolved.problems) };
   }
 
-  let url: string;
-  try {
-    url = new URL("/api/telegram-member/webhook", base).toString();
-  } catch {
-    return { ok: false, error: "MEMBER_WEBHOOK_BASE_URL noto'g'ri formatda." };
-  }
+  const url = new URL("/api/telegram-member/webhook", resolved.origin).toString();
 
   const result = await setMemberWebhook(url);
   if (!result.ok) {
@@ -198,7 +207,7 @@ export async function registerMemberWebhookAction(): Promise<MehrActionResult> {
     action: "mehr.bot.webhook_set",
     entityType: "member_bot",
     // Manzil maxfiy emas, lekin token hech qachon bu yerga tushmaydi.
-    newValue: { url },
+    newValue: { url, source: resolved.source },
     severity: "warning",
   });
 
@@ -217,20 +226,28 @@ export async function registerMemberWebhookAction(): Promise<MehrActionResult> {
 export async function setMemberMenuButtonAction(): Promise<MehrActionResult> {
   await requirePermission("settings.manage");
 
-  const base =
-    process.env.MEMBER_MINI_APP_URL?.trim() || process.env.NEXT_PUBLIC_ADMIN_URL?.trim();
-  if (!base) {
-    return { ok: false, error: "NEXT_PUBLIC_ADMIN_URL sozlanmagan — Mini App manzilini aniqlab bo'lmadi." };
+  // Webhook bilan bir xil qoida: HTTPS va tashqaridan yetib
+  // boradigan manzil. Telegram ikkalasini ham shunday talab qiladi.
+  const explicit = process.env.MEMBER_MINI_APP_URL?.trim();
+
+  const resolved = resolveAdminOrigin([
+    { name: "MEMBER_MINI_APP_URL", value: explicit },
+    { name: "NEXT_PUBLIC_ADMIN_URL", value: process.env.NEXT_PUBLIC_ADMIN_URL },
+    { name: "VERCEL_PROJECT_PRODUCTION_URL", value: process.env.VERCEL_PROJECT_PRODUCTION_URL },
+  ]);
+
+  if (!resolved.ok) {
+    return { ok: false, error: describeOriginFailure(resolved.problems) };
   }
 
-  let url: string;
-  try {
-    url = process.env.MEMBER_MINI_APP_URL?.trim()
-      ? new URL(base).toString()
-      : new URL("/mehr-app", base).toString();
-  } catch {
-    return { ok: false, error: "Mini App manzili noto'g'ri formatda." };
-  }
+  /*
+   * `MEMBER_MINI_APP_URL` to'liq manzil bo'lishi mumkin
+   * (Mini App boshqa domenda). Boshqa hollarda yo'l qo'shiladi.
+   */
+  const url =
+    resolved.source === "MEMBER_MINI_APP_URL"
+      ? new URL(explicit!).toString()
+      : new URL("/mehr-app", resolved.origin).toString();
 
   const result = await setMemberMenuButton(url);
   if (!result.ok) return { ok: false, error: result.error ?? "Tugma o'rnatilmadi." };

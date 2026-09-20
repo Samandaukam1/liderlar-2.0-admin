@@ -7,6 +7,11 @@ import {
   INITDATA_MAX_AGE_SECONDS,
 } from "../src/lib/member-bot/webapp-auth.ts";
 import {
+  checkOrigin,
+  resolveAdminOrigin,
+  describeOriginFailure,
+} from "../src/lib/member-bot/admin-origin.ts";
+import {
   mainMenu,
   mehrMenu,
   notLinkedMessage,
@@ -680,4 +685,118 @@ test("Mini App menyu tugmasi manzili SERVERDAN quriladi", () => {
   assert.match(fn, /setMemberMenuButtonAction\(\): Promise/, "action argument qabul qilyapti");
   assert.match(fn, /NEXT_PUBLIC_ADMIN_URL|MEMBER_MINI_APP_URL/);
   assert.match(fn, /requirePermission\("settings\.manage"\)/);
+});
+
+// ---------------------------------------------------------------
+// ADMIN MANZILI — TELEGRAM TALABLARI
+// ---------------------------------------------------------------
+
+test("localhost rad etiladi — Telegram unga yeta olmaydi", () => {
+  /*
+   * Aynan shu sodir bo'ldi: Vercel Production'da
+   * NEXT_PUBLIC_ADMIN_URL = "http://localhost:3001" turgan va
+   * Telegram webhook ham, Mini App tugmasi ham rad etilgan.
+   */
+  for (const bad of [
+    "http://localhost:3001",
+    "https://localhost:3001",
+    "http://127.0.0.1:3000",
+    "https://192.168.1.10",
+    "http://10.0.0.5",
+  ]) {
+    const verdict = checkOrigin(bad);
+    assert.equal(verdict.ok, false, bad);
+    assert.equal(verdict.ok === false && verdict.reason, "local", bad);
+  }
+});
+
+test("http:// jimgina https ga aylantirilmaydi", () => {
+  /*
+   * Aylantirish vasvasa qiladi, lekin bu yolg'on ishonch
+   * berardi: sayt HTTPS'da ochilmasa webhook baribir
+   * ishlamaydi va sabab yana yashirin qolardi.
+   */
+  const verdict = checkOrigin("http://admin.example.com");
+
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.ok === false && verdict.reason, "not_https");
+});
+
+test("to'g'ri HTTPS manzil qabul qilinadi", () => {
+  const verdict = checkOrigin("https://liderlar-2-0-admin.vercel.app");
+  assert.equal(verdict.ok, true);
+  assert.equal(verdict.ok === true && verdict.origin, "https://liderlar-2-0-admin.vercel.app");
+});
+
+test("protokolsiz domen qabul qilinadi — Vercel shunday beradi", () => {
+  /*
+   * `VERCEL_PROJECT_PRODUCTION_URL` domenni protokolsiz beradi.
+   * Uni rad etsak, eng ishonchli manba ishlatilmay qolardi.
+   */
+  const verdict = checkOrigin("liderlar-2-0-admin.vercel.app");
+  assert.equal(verdict.ok, true);
+  assert.equal(verdict.ok === true && verdict.origin, "https://liderlar-2-0-admin.vercel.app");
+});
+
+test("yaroqsiz nomzod tashlanadi va keyingisiga o'tiladi", () => {
+  const result = resolveAdminOrigin([
+    { name: "MEMBER_WEBHOOK_BASE_URL", value: "" },
+    { name: "NEXT_PUBLIC_ADMIN_URL", value: "http://localhost:3001" },
+    { name: "VERCEL_PROJECT_PRODUCTION_URL", value: "liderlar-2-0-admin.vercel.app" },
+  ]);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.ok === true && result.source, "VERCEL_PROJECT_PRODUCTION_URL");
+  assert.equal(result.ok === true && result.origin, "https://liderlar-2-0-admin.vercel.app");
+});
+
+test("hech biri yaramasa — sabab NOMI bilan qaytadi", () => {
+  /*
+   * Yaroqsizlari jimgina tashlansa, panel "o'rnatilmadi"
+   * derdi-yu, qaysi o'zgaruvchi aybdor ekanini ko'rsatmasdi.
+   */
+  const result = resolveAdminOrigin([
+    { name: "MEMBER_WEBHOOK_BASE_URL", value: null },
+    { name: "NEXT_PUBLIC_ADMIN_URL", value: "http://localhost:3001" },
+    { name: "VERCEL_PROJECT_PRODUCTION_URL", value: undefined },
+  ]);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.ok === false && result.problems.length, 1);
+  assert.equal(result.ok === false && result.problems[0].name, "NEXT_PUBLIC_ADMIN_URL");
+  assert.equal(result.ok === false && result.problems[0].reason, "local");
+
+  const text = describeOriginFailure(result.ok === false ? result.problems : []);
+  assert.ok(text.includes("NEXT_PUBLIC_ADMIN_URL"));
+  assert.ok(text.includes("localhost"));
+});
+
+test("qo'yilmagan o'zgaruvchi 'muammo' deb sanalmaydi", () => {
+  const result = resolveAdminOrigin([{ name: "A", value: "" }, { name: "B", value: null }]);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.ok === false && result.problems.length, 0);
+});
+
+test("webhook va Mini App manzillari BIR XIL qoidaga bo'ysunadi", () => {
+  const code = src("src/lib/actions/mehr.ts");
+
+  for (const name of ["registerMemberWebhookAction", "setMemberMenuButtonAction"]) {
+    const fn = code.match(new RegExp(`export async function ${name}\\([\\s\\S]*?\\n\\}`))?.[0] ?? "";
+    assert.ok(fn.length > 0, `${name} topilmadi`);
+    assert.match(fn, /resolveAdminOrigin\(/, `${name} manzilni tekshirmaydi`);
+    assert.match(fn, /VERCEL_PROJECT_PRODUCTION_URL/, `${name} zaxira manbaga tayanmaydi`);
+  }
+});
+
+test("bot yaroqsiz manzil bilan Mini App tugmasini KO'RSATMAYDI", () => {
+  /*
+   * Buzuq tugma yo'q tugmadan yomonroq: bosilganda Telegram
+   * xato beradi va foydalanuvchi mahsulotni buzuq deb biladi.
+   */
+  const fn = src("src/lib/member-bot/router.ts").match(/function miniAppUrl\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+
+  assert.ok(fn.length > 0, "miniAppUrl topilmadi");
+  assert.match(fn, /resolveAdminOrigin\(/);
+  assert.match(fn, /if \(!resolved\.ok\) return null/);
 });
