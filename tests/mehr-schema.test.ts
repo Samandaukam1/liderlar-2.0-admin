@@ -8,8 +8,9 @@ const foundation = readFileSync(`${M}20260920120000_mehr_member_foundation.sql`,
 const activities = readFileSync(`${M}20260920130000_mehr_activities.sql`, "utf8");
 const points = readFileSync(`${M}20260920140000_mehr_points_certificates.sql`, "utf8");
 const rls = readFileSync(`${M}20260920150000_mehr_rls.sql`, "utf8");
+const approval = readFileSync(`${M}20260920160000_mehr_approval.sql`, "utf8");
 
-const ALL = [foundation, activities, points, rls].join("\n");
+const ALL = [foundation, activities, points, rls, approval].join("\n");
 
 /** Izohlarni olib tashlaydi: izohdagi matn "kod bor" degani emas. */
 function stripComments(sql: string): string {
@@ -237,6 +238,146 @@ test("hech bir jadvalga mijoz tomonidan yozish siyosati berilmagan", () => {
   assert.ok(!/for insert/i.test(CODE), "insert siyosati topildi");
   assert.ok(!/for update/i.test(stripComments(rls)), "update siyosati topildi");
   assert.ok(!/for all/i.test(CODE), "for all siyosati topildi");
+});
+
+// ---------------------------------------------------------------
+// TASDIQLASH TRANZAKSIYASI (§27)
+// ---------------------------------------------------------------
+
+const APPROVAL = stripComments(approval);
+
+test("tasdiqlash — bitta funksiya, ya'ni bitta tranzaksiya", () => {
+  /*
+   * JS'da 6 ta alohida so'rov bo'lganda, to'rtinchisida tarmoq
+   * uzilsa, odamlarda ball bo'lib sertifikat bo'lmasdi.
+   */
+  assert.match(APPROVAL, /create or replace function public\.mehr_approve_activity/);
+});
+
+test("bir vaqtda ikki admin bossa, qator qulflanadi", () => {
+  assert.match(APPROVAL, /from public\.mehr_activities[\s\S]*?where id = p_activity_id[\s\S]*?for update/);
+});
+
+test("ball qayta chaqiruvda ikkinchi marta tushmaydi", () => {
+  assert.match(APPROVAL, /on conflict \(idempotency_key\) do nothing/);
+});
+
+test("sertifikat qayta chaqiruvda ikkinchi marta berilmaydi", () => {
+  assert.match(
+    APPROVAL,
+    /on conflict \(activity_id, recipient_profile_id, role\) where activity_id is not null/,
+  );
+});
+
+test("xabarnoma faqat haqiqiy holat o'tishida yuboriladi", () => {
+  /*
+   * Bu jadvalda takrorlanmaslik kaliti yo'q, shuning uchun dedupe
+   * holat o'tishiga bog'landi — aks holda har qayta chaqiruvda
+   * odamlar yana bezovta qilinardi.
+   */
+  assert.match(APPROVAL, /if v_transitioned and v_profiles is not null then\s*\n\s*insert into public\.notifications/);
+});
+
+test("faqat 'submitted' va 'approved' holatdagi tadbir qayta ishlanadi", () => {
+  assert.match(APPROVAL, /status not in \('submitted', 'approved'\)/);
+});
+
+test("jamlanma daftardan qayta hisoblanadi, qo'lda yozilmaydi", () => {
+  assert.match(APPROVAL, /from public\.point_ledger l/);
+  assert.match(APPROVAL, /on conflict \(profile_id, period, period_key, category\)\s*\n?\s*do update/);
+});
+
+test("davr chegarasi Toshkent vaqti bo'yicha", () => {
+  /*
+   * UTC bilan hisoblansa, 5 soatlik farq tufayli oyning birinchi
+   * kunidagi ish o'tgan oyga tushib qolardi.
+   */
+  const occurrences = APPROVAL.match(/at time zone 'Asia\/Tashkent'/g) ?? [];
+  assert.ok(occurrences.length >= 4, `Toshkent vaqti kam ishlatilgan: ${occurrences.length}`);
+  assert.ok(!/to_char\(l\.created_at, /.test(APPROVAL), "vaqt mintaqasiz to_char topildi");
+});
+
+test("sertifikat kodi bashorat qilinadigan random() bilan yasalmaydi", () => {
+  assert.match(APPROVAL, /gen_random_bytes\(10\)/);
+  assert.ok(!/\brandom\(\)/.test(APPROVAL), "random() qolgan");
+});
+
+test("tasdiqlash funksiyasi HTTP orqali ochiq qolmaydi", () => {
+  /*
+   * PostgREST public sxemadagi funksiyalarni o'zi ochadi. Huquq
+   * olib tashlanmasa, tizimga kirgan istalgan odam o'z tadbirini
+   * o'zi tasdiqlab, o'ziga ball va sertifikat yozib olardi.
+   */
+  for (const fn of [
+    "mehr_approve_activity\\(uuid, uuid\\)",
+    "recompute_point_aggregates\\(uuid\\[\\]\\)",
+    "mehr_certificate_code\\(\\)",
+  ]) {
+    for (const role of ["anon", "authenticated", "public"]) {
+      assert.match(
+        APPROVAL,
+        new RegExp(`revoke all on function public\\.${fn} from ${role}`),
+        `${fn} uchun ${role} dan huquq olinmagan`,
+      );
+    }
+    assert.match(
+      APPROVAL,
+      new RegExp(`grant execute on function public\\.${fn} to service_role`),
+      `${fn} service_role ga berilmagan`,
+    );
+  }
+});
+
+// ---------------------------------------------------------------
+// XIZMAT QATLAMI VA PII INTIZOMI
+// ---------------------------------------------------------------
+
+test("MEHR so'rovlari select(\"*\") ishlatmaydi", () => {
+  /*
+   * Tadbir qatorida tekshiruv koordinatalari bor. RLS qator
+   * darajasida ishlaydi, ustun darajasida emas — qator ochilsa,
+   * undagi HAMMA ustun ochiladi. Shuning uchun ustunlar
+   * atma-ati sanaladi.
+   */
+  for (const file of [
+    "src/lib/mehr/dashboard.ts",
+    "src/lib/mehr/approval-service.ts",
+    "src/lib/mehr/flags.ts",
+  ]) {
+    const code = stripComments(readFileSync(file, "utf8"));
+    assert.ok(!/\.select\(\s*["'`]\*/.test(code), `${file} da select("*") bor`);
+  }
+});
+
+test("server action'lar ruxsatni o'zi tekshiradi", () => {
+  /*
+   * Xizmat qatlami service role bilan ishlaydi va RLS'ni
+   * chetlab o'tadi. Tekshiruv chaqiruvchining xohishiga
+   * qoldirilmaydi.
+   */
+  const code = stripComments(readFileSync("src/lib/actions/mehr.ts", "utf8"));
+  const actions = [...code.matchAll(/export async function (\w+Action)\s*\([\s\S]*?\n\}/g)];
+
+  assert.ok(actions.length >= 3, `kutilganidan kam action: ${actions.length}`);
+  for (const [body, name] of actions) {
+    assert.match(body, /requirePermission\(/, `${name} ruxsatni tekshirmaydi`);
+  }
+});
+
+test("bayroqlar o'qilmasa, tizim YOPIQ qoladi", () => {
+  /*
+   * Ochilib ketgan xususiyatni keyin qaytarib yopish, yopiq
+   * turganini ochishdan ancha qimmatga tushadi.
+   */
+  const code = readFileSync("src/lib/mehr/flags.ts", "utf8");
+  assert.match(code, /if \(error\)[\s\S]*?return \{ \.\.\.ALL_OFF \}/);
+  assert.match(code, /value\?\.trim\(\)\.toLowerCase\(\) === "true"/);
+});
+
+test("MEHR navigatsiyasi mehr.view ruxsatiga bog'langan", () => {
+  const nav = readFileSync("src/components/admin/nav-data.ts", "utf8");
+  assert.match(nav, /href: "\/mehr"/);
+  assert.match(nav, /permission: "mehr\.view"/);
 });
 
 // ---------------------------------------------------------------

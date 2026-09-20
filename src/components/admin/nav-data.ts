@@ -23,6 +23,7 @@ import {
   MonitorPlay,
   Megaphone,
   Handshake,
+  HeartHandshake,
   Wand2,
   Bell,
   ShieldCheck,
@@ -116,6 +117,27 @@ export const NAV_GROUPS: NavGroup[] = [
         permission: "coordinators.view",
         keywords:
           "koordinator hudud viloyat xarita lid marshrut talab komissiya reyting nominatsiya",
+      },
+    ],
+  },
+  {
+    /*
+     * MEHR 365+ — Liderlar ichidagi ALOHIDA KICHIK BREND.
+     *
+     * Ensiklopediya nomzodni ko'rsatadi; MEHR esa qilingan
+     * ishni tekshiradi va ball beradi. Ikkisi boshqa jadval,
+     * boshqa ruxsat va boshqa mas'uliyat, shuning uchun
+     * alohida bo'lim.
+     */
+    label: "MEHR 365+",
+    items: [
+      {
+        label: "MEHR 365+",
+        href: "/mehr",
+        icon: HeartHandshake,
+        permission: "mehr.view",
+        keywords:
+          "mehr ezgulik volontyor tadbir sertifikat ball reyting tekshiruv qr check-in referral",
       },
     ],
   },
