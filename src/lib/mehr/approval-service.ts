@@ -1,6 +1,7 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
+import { canTransition, nextStatus as statusAfter } from "./activity-rules.ts";
 
 /**
  * MEHR tasdiqlash xizmati.
@@ -140,7 +141,15 @@ export async function rejectMehrActivity(
   if (!trimmed) return { ok: false, reason: "reason_required" };
 
   const db = createSupabaseAdminClient();
-  const nextStatus = action === "reject" ? "rejected" : "changes_requested";
+
+  /*
+   * Holat mashinasi BITTA joyda — activity-rules.ts da.
+   *
+   * Bu yerda "rejected yoki changes_requested" deb qo'lda
+   * yozish oson edi, lekin shunda mashina ikki nusxaga
+   * bo'linardi va biri o'zgarganda ikkinchisi eskirib qolardi.
+   */
+  const nextStatus = statusAfter(action === "reject" ? "reject" : "request_changes");
 
   /*
    * SHARTLI UPDATE — tekshirib-keyin-yozish emas.
@@ -150,6 +159,10 @@ export async function rejectMehrActivity(
    * o'zgartiradi va biz buni ko'ramiz. Avval o'qib, keyin yozsak,
    * ikkalasiga ham "submitted" ko'rinardi.
    */
+  if (!canTransition("submitted", action === "reject" ? "reject" : "request_changes")) {
+    return { ok: false, reason: "wrong_state" };
+  }
+
   const { data, error } = await db
     .from("mehr_activities")
     .update({

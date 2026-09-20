@@ -101,6 +101,57 @@ update public.mehr_activities
  where id = 'ffffffff-0000-4000-8000-000000000001';
 
 -- ------------------------------------------------------------
+-- DALIL YUBORISH KAFOLATLARI (§10)
+--
+-- Ilova shartli UPDATE ishlatadi: egalik va holat yozuvning
+-- ICHIDA tekshiriladi. Shu shart haqiqatan to'sishini
+-- tekshiramiz — ilovaga ishonib qo'ya olmaymiz.
+-- ------------------------------------------------------------
+
+-- Tadbirni vaqtincha qoralamaga qaytaramiz.
+update public.mehr_activities set status = 'draft', submitted_at = null
+ where id = 'ffffffff-0000-4000-8000-000000000001';
+
+-- BEGONA odam yubora olmaydi.
+with attempt as (
+  update public.mehr_activities
+     set status = 'submitted', submitted_at = now()
+   where id = 'ffffffff-0000-4000-8000-000000000001'
+     and organizer_profile_id = 'eeeeeeee-0000-4000-8000-000000000002'
+     and status in ('draft', 'changes_requested')
+  returning 1
+)
+select pg_temp.chk('begona a''zo tadbirni yubora olmaydi', '0',
+  (select count(*)::text from attempt));
+
+select pg_temp.chk('tadbir hamon qoralama', 'draft',
+  (select status from public.mehr_activities where id = 'ffffffff-0000-4000-8000-000000000001'));
+
+-- Tashkilotchi yubora oladi.
+with attempt as (
+  update public.mehr_activities
+     set status = 'submitted', submitted_at = now()
+   where id = 'ffffffff-0000-4000-8000-000000000001'
+     and organizer_profile_id = 'eeeeeeee-0000-4000-8000-000000000001'
+     and status in ('draft', 'changes_requested')
+  returning 1
+)
+select pg_temp.chk('tashkilotchi dalilni yubora oladi', '1',
+  (select count(*)::text from attempt));
+
+-- Ikkinchi marta yuborib bo'lmaydi: holat endi 'submitted'.
+with attempt as (
+  update public.mehr_activities
+     set status = 'submitted', submitted_at = now()
+   where id = 'ffffffff-0000-4000-8000-000000000001'
+     and organizer_profile_id = 'eeeeeeee-0000-4000-8000-000000000001'
+     and status in ('draft', 'changes_requested')
+  returning 1
+)
+select pg_temp.chk('yuborilgan tadbir qayta yuborilmaydi', '0',
+  (select count(*)::text from attempt));
+
+-- ------------------------------------------------------------
 -- TASDIQ — BIRINCHI MARTA
 -- ------------------------------------------------------------
 create temporary table approve_out (r jsonb) on commit drop;

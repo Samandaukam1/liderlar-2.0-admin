@@ -1,29 +1,29 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { identifyWebAppRequest, identityError } from "@/lib/member-bot/webapp-session";
-import {
-  createMehrActivity,
-  createActivitySchema,
-  submitMehrActivity,
-  submitActivitySchema,
-} from "@/lib/mehr/activity-service";
+import { createMehrActivity, createActivitySchema } from "@/lib/mehr/activity-service";
 import { getMehrFlags } from "@/lib/mehr/flags";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/*
+ * DALIL YUBORISH BU YERDA YO'Q — ATAYLAB.
+ *
+ * Tashkilotchi tadbirni yakunlagach, dalilni (muqova rasmi,
+ * fotolar, tavsif) shaxsiy kabinetda to'ldiradi. Fayl yuklash
+ * uchun brauzer muhiti ancha qulay, va eng muhimi — yuborish
+ * mantig'i BITTA joyda qoladi. Ikki ilovada ikki nusxa bo'lsa,
+ * ular vaqt o'tib bir-biridan ajralib ketardi.
+ *
+ * Mini App'ning ishi — tadbirning O'ZI: seans, QR, jonli hisob.
+ */
 const bodySchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("create"),
     initData: z.string().min(1),
     activity: createActivitySchema,
-  }),
-  z.object({
-    action: z.literal("submit"),
-    initData: z.string().min(1),
-    activityId: z.uuid(),
-    evidence: submitActivitySchema,
   }),
   z.object({
     action: z.literal("list"),
@@ -96,37 +96,5 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, activityId: result.activityId });
   }
 
-  const result = await submitMehrActivity(
-    parsed.data.activityId,
-    identity.profileId,
-    parsed.data.evidence,
-  );
-
-  if (!result.ok) {
-    const STATUS: Record<string, number> = {
-      not_organizer: 403,
-      not_found: 404,
-      wrong_state: 409,
-      incomplete: 400,
-      error: 500,
-    };
-    return NextResponse.json(
-      {
-        ok: false,
-        code: result.reason.toUpperCase(),
-        error:
-          result.reason === "incomplete"
-            ? `Quyidagilar yetishmayapti: ${result.missing.join(", ")}`
-            : result.reason === "not_organizer"
-              ? "Bu tadbir sizga tegishli emas."
-              : result.reason === "wrong_state"
-                ? "Bu tadbir allaqachon yuborilgan yoki ko'rib chiqilgan."
-                : "Xatolik yuz berdi.",
-        missing: result.missing,
-      },
-      { status: STATUS[result.reason] ?? 500 },
-    );
-  }
-
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: false, code: "BAD_INPUT", error: "Noma'lum amal." }, { status: 400 });
 }

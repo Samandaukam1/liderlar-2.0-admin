@@ -1,12 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import {
-  checkSubmission,
-  canTransition,
-  type SubmissionDraft,
-  type ActivityStatus,
-} from "./activity-rules.ts";
+
 
 /**
  * Ezgulik ishini yaratish va tekshiruvga yuborish (§3, §10).
@@ -124,114 +119,11 @@ export async function createMehrActivity(
   return { ok: true, activityId, error: null };
 }
 
-export const submitActivitySchema = z.object({
-  title: z.string().trim().min(3).max(200),
-  description: z.string().trim().min(1).max(20000),
-  purpose: z.string().trim().min(1).max(2000),
-  resultSummary: z.string().trim().max(5000).nullable().optional(),
-  coverImageUrl: z.string().url(),
-  beneficiaryCount: z.number().int().min(0).max(1000000),
-  notes: z.string().trim().max(5000).nullable().optional(),
-});
-
-export type SubmitActivityInput = z.infer<typeof submitActivitySchema>;
-
-export interface SubmitResult {
-  ok: boolean;
-  reason: "submitted" | "not_organizer" | "not_found" | "wrong_state" | "incomplete" | "error";
-  missing: string[];
-}
-
-/**
- * Dalilni saqlab, tekshiruvga yuboradi.
+/*
+ * Dalil yuborish SHU YERDA EMAS.
  *
- * To'liqlik SERVERDA tekshiriladi: brauzerdagi tekshiruv
- * qulaylik, chegara emas.
+ * U liderlar-web kabinetida turadi: fayl yuklash brauzerda
+ * ishonchliroq va qoida bitta nusxada qoladi. Bazaviy kafolat
+ * esa ikkalasi uchun ham bir xil — shartli UPDATE tashkilotchi
+ * va holatni yozuvning ichida tekshiradi.
  */
-export async function submitMehrActivity(
-  activityId: string,
-  organizerProfileId: string,
-  input: SubmitActivityInput,
-): Promise<SubmitResult> {
-  const db = createSupabaseAdminClient();
-
-  const { data: activity } = await db
-    .from("mehr_activities")
-    .select("id, organizer_profile_id, status, starts_at")
-    .eq("id", activityId)
-    .maybeSingle();
-
-  if (!activity) return { ok: false, reason: "not_found", missing: [] };
-  if (activity.organizer_profile_id !== organizerProfileId) {
-    return { ok: false, reason: "not_organizer", missing: [] };
-  }
-
-  /*
-   * Holat mashinasi BITTA joyda turadi (activity-rules.ts):
-   * 'draft' va 'changes_requested' yuboriladi, qolganlari yo'q.
-   * Bu yerda ro'yxatni qayta yozsak, ikkalasi ajralib ketardi.
-   */
-  if (!canTransition(activity.status as ActivityStatus, "submit")) {
-    return { ok: false, reason: "wrong_state", missing: [] };
-  }
-
-  const [{ count: mediaCount }, { count: participantCount }] = await Promise.all([
-    db.from("mehr_media").select("id", { count: "exact", head: true }).eq("activity_id", activityId),
-    db
-      .from("mehr_participants")
-      .select("id", { count: "exact", head: true })
-      .eq("activity_id", activityId)
-      .eq("status", "checked_in"),
-  ]);
-
-  const draft: SubmissionDraft = {
-    title: input.title,
-    description: input.description,
-    purpose: input.purpose,
-    coverImageUrl: input.coverImageUrl,
-    beneficiaryCount: input.beneficiaryCount,
-    mediaCount: mediaCount ?? 0,
-    participantCount: participantCount ?? 0,
-    startsAt: activity.starts_at as string | null,
-  };
-
-  const verdict = checkSubmission(draft);
-  if (!verdict.ok) return { ok: false, reason: "incomplete", missing: verdict.missing };
-
-  /*
-   * SHARTLI UPDATE. Holat shartini yozuvning ichiga qo'yamiz:
-   * shu orada admin tadbirni rad etgan bo'lsa, bu yozuv 0 qator
-   * o'zgartiradi va biz buni ko'ramiz.
-   */
-  const { data: updated, error } = await db
-    .from("mehr_activities")
-    .update({
-      title: input.title,
-      description: input.description,
-      purpose: input.purpose,
-      result_summary: input.resultSummary ?? null,
-      cover_image_url: input.coverImageUrl,
-      beneficiary_count: input.beneficiaryCount,
-      notes: input.notes ?? null,
-      status: "submitted",
-      submitted_at: new Date().toISOString(),
-    })
-    .eq("id", activityId)
-    .in("status", ["draft", "changes_requested"])
-    .select("id")
-    .maybeSingle();
-
-  if (error) {
-    console.error("MEHR_SUBMIT_FAILED", { code: error.code, message: error.message });
-    return { ok: false, reason: "error", missing: [] };
-  }
-  if (!updated) return { ok: false, reason: "wrong_state", missing: [] };
-
-  await db.from("mehr_reviews").insert({
-    activity_id: activityId,
-    action: "submitted",
-    actor_user_id: organizerProfileId,
-  });
-
-  return { ok: true, reason: "submitted", missing: [] };
-}
