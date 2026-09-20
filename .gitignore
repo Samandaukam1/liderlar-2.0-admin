@@ -45,3 +45,6 @@ next-env.d.ts
 
 # Supabase CLI temporary files
 supabase/.temp/
+# `supabase start` lokal stekni ko'targanda yozadi — mashinaga xos,
+# repoga tegishli emas.
+supabase/.branches/

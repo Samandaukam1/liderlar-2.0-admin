@@ -10,6 +10,12 @@ import {
 } from "@/lib/actions/mehr";
 import type { ReviewQueueItem } from "@/lib/mehr/dashboard";
 
+const ROLE_LABEL: Record<string, string> = {
+  participant: "ishtirokchi",
+  co_organizer: "hamkor",
+  organizer: "tashkilotchi",
+};
+
 function formatDate(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -81,6 +87,24 @@ export function ReviewQueue({
                   <Badge accent="neutral">{formatDate(item.startsAt)}</Badge>
 
                   {/*
+                    QR DALILI.
+
+                    Seans umuman ochilmagan bo'lsa, ishtirok
+                    ro'yxati QR orqali emas, boshqa yo'l bilan
+                    paydo bo'lgan — bu tekshirishga arziydigan
+                    holat, xato emas.
+                  */}
+                  <Badge accent={item.hadSession ? "neutral" : "amber"}>
+                    {item.hadSession ? `${item.checkinCount} QR qayd` : "QR ishlatilmagan"}
+                  </Badge>
+
+                  {item.requiresLocation && (
+                    <Badge accent={item.locationVerifiedCount > 0 ? "neutral" : "amber"}>
+                      {item.locationVerifiedCount} joyi tasdiqlangan
+                    </Badge>
+                  )}
+
+                  {/*
                     TASHKILOTCHI TARIXI.
 
                     Avval rad etilganlar soni ko'rinib tursin —
@@ -95,6 +119,24 @@ export function ReviewQueue({
                     <Badge accent="green">{item.organizerApprovedCount} tasdiqlangan ishi bor</Badge>
                   )}
                 </div>
+
+                {/*
+                  TASDIQLANSA NIMA BO'LADI.
+
+                  Admin ball tarqalishini BOSISHDAN OLDIN
+                  ko'rishi kerak — tasdiq qaytarib bo'lmaydigan
+                  amal: ball daftarga tushadi va sertifikat
+                  beriladi.
+                */}
+                {item.proposedPoints > 0 && (
+                  <p className="mt-2 text-xs text-ink-soft">
+                    Tasdiqlansa: <strong className="text-ink">{item.proposedPoints} ball</strong>
+                    {" — "}
+                    {item.proposedBreakdown
+                      .map((b) => `${b.count}×${ROLE_LABEL[b.role] ?? b.role} (${b.points})`)
+                      .join(", ")}
+                  </p>
+                )}
 
                 {item.riskFlags.length > 0 && (
                   <p className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-[#c43d3d]">

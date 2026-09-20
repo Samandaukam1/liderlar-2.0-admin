@@ -39,12 +39,33 @@ const MACHINE_PATHS = [
   "/api/telegram",
   "/api/telegram-sales",
   "/api/telegram-coordinator",
+  "/api/telegram-member",
   "/api/cron",
 ];
 
-// Candidate secure-link intake is public by design (token-gated at the route
-// layer). Only these paths are exempt from the admin session requirement.
-const INTAKE_PUBLIC_PREFIXES = ["/anketa", "/api/intake"];
+/*
+ * Public by design, gated at the route layer rather than by an admin session.
+ *
+ * `/anketa` + `/api/intake` — candidate secure-link intake, gated by token.
+ *
+ * `/mehr-app` + `/api/mehr-app` — the MEHR Mini App, gated by Telegram's
+ * `initData` HMAC signature. It runs inside Telegram for ordinary members,
+ * who have no admin cookie at all: requiring one would 307 every organizer
+ * and participant away from the check-in screen. Identity there comes from
+ * the signature, which only the bot token can produce.
+ */
+const INTAKE_PUBLIC_PREFIXES = [
+  "/anketa",
+  "/api/intake",
+  "/mehr-app",
+  "/api/mehr-app",
+  /*
+   * `/api/mehr-cert` — a MEHR certificate PDF, gated by its own code.
+   * The recipient is an ordinary member with no admin cookie, and the
+   * code is what the QR on the certificate already carries.
+   */
+  "/api/mehr-cert",
+];
 
 /**
  * Refreshes the Supabase session cookie and gates every admin route.
