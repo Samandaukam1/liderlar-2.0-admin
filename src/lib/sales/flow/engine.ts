@@ -695,8 +695,39 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
   const result = await runFlowSteps(input);
   if (result && input.simulated !== true) {
     await recordCoverageRefusal(input.conversationId, result);
+    await recordMessageClassification(input.messageId, result);
   }
   return result;
+}
+
+/**
+ * XABAR TASNIFINI SAQLAYDI — O'LCHOV UCHUN (31-band).
+ *
+ * Eng muhim ko'rsatkich — YOLG'ON JAVOBSIZLIK ULUSHI: oddiy
+ * muloqot xabarlarining qanchasi bo'shliqqa tushyapti. Tasnif
+ * saqlanmasa, bu savolga faqat taxmin bilan javob berilardi.
+ *
+ * MATN SAQLANMAYDI — u allaqachon o'z jadvalida (37-band).
+ */
+async function recordMessageClassification(
+  messageId: string | null,
+  result: FlowRunResult,
+): Promise<void> {
+  if (!messageId || result.messageIntent == null) return;
+  try {
+    await adminClient()
+      .from("sales_messages")
+      .update({
+        message_intent: result.messageIntent,
+        gap_decision: result.gapDecision ?? "none",
+      })
+      .eq("id", messageId);
+  } catch (err) {
+    // O'lchov sotuv oqimini buzmasligi kerak.
+    console.error("SALES_METRIC_WRITE_FAILED", {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 async function recordCoverageRefusal(

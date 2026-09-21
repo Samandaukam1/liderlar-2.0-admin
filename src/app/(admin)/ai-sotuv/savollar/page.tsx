@@ -11,6 +11,7 @@ import {
   type GapClassification,
 } from "@/lib/sales/gaps/gap-classification";
 import { MESSAGE_INTENT_LABELS, type MessageIntent } from "@/lib/sales/flow/message-intent";
+import { getIntelligenceMetrics } from "@/lib/sales/gaps/metrics";
 import { SalesTabs, NoAutoReplyNotice } from "../sales-tabs";
 import { AnswerGapForm } from "./answer-gap-form";
 import { CleanupControls } from "./cleanup-controls";
@@ -45,7 +46,7 @@ export default async function SalesGapsPage({
 
   const db = createSupabaseAdminClient();
 
-  const [{ data }, { data: allRows }, { count: escalations }] = await Promise.all([
+  const [{ data }, { data: allRows }, { count: escalations }, metrics] = await Promise.all([
     db
       .from("sales_knowledge_gaps")
       .select(
@@ -60,6 +61,7 @@ export default async function SalesGapsPage({
       .from("sales_case_escalations")
       .select("id", { count: "exact", head: true })
       .eq("status", "open"),
+    getIntelligenceMetrics(),
   ]);
 
   const rows = data ?? [];
@@ -92,6 +94,38 @@ export default async function SalesGapsPage({
         <Stat label="Tasniflanmagan" value={counts.unclassified} />
         <Stat label="Odam kerak" value={escalations ?? 0} />
       </div>
+
+      {/* ----------------------- KO‘RSATKICHLAR ----------------------- */}
+      {metrics.classified > 0 ? (
+        <div className="mb-4 rounded-card border border-line bg-card p-4">
+          <p className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-soft">
+            Oxirgi {metrics.classified} ta kiruvchi xabar
+          </p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+            <Stat label="Oddiy muloqot" value={metrics.conversational} />
+            <Stat label="Bilim savoli" value={metrics.questions} />
+            <Stat label="Holat savoli" value={metrics.statusQuestions} />
+            <Stat label="Bo‘shliq yozildi" value={metrics.knowledgeGaps} />
+            <Stat label="Odam kerak" value={metrics.escalations} />
+          </div>
+          {/*
+            ENG MUHIM RAQAM (31-band): muloqot xabari bo'la
+            turib bo'shliqqa tushganlar. Nol bo'lishi kerak.
+          */}
+          <p
+            className={
+              metrics.falseUnanswered === 0
+                ? "mt-3 rounded-card border border-mint/50 bg-mint/10 px-3 py-2 text-xs font-semibold text-ink"
+                : "mt-3 rounded-card border border-coral/50 bg-coral/10 px-3 py-2 text-xs font-semibold text-coral"
+            }
+          >
+            Yolg‘on javobsizlik: {metrics.falseUnanswered}
+            {metrics.falseUnanswered === 0
+              ? " — oddiy muloqot navbatga tushmayapti."
+              : " — oddiy muloqot hali ham navbatga tushyapti, tekshirish kerak."}
+          </p>
+        </div>
+      ) : null}
 
       {Object.keys(byClassification).length > 0 ? (
         <div className="mb-4 flex flex-wrap gap-1.5">
