@@ -267,6 +267,16 @@ export interface SentMessage {
 export interface FlowRunResult {
   conversationId: string;
   intent: ReplyIntent | null;
+  /**
+   * Xabarning MULOQOT niyati (greeting, thanks, status_question...).
+   *
+   * Jurnalga chiqadi — mijoz matni EMAS, faqat tasnif (37-band).
+   * Ishlab turgan tizimda "javobsiz savollar yana ifloslanyaptimi"
+   * degan savolga shu maydon javob beradi.
+   */
+  messageIntent: string | null;
+  /** Bo'shliq darvozasining qarori: knowledge_gap / case_escalation / none. */
+  gapDecision: string | null;
   stageBefore: SalesStage;
   stageAfter: SalesStage;
   sent: SentMessage[];
@@ -738,6 +748,8 @@ async function runFlowSteps(input: HandleMessageInput): Promise<FlowRunResult | 
   const result: FlowRunResult = {
     conversationId: conversation.id,
     intent: null,
+    messageIntent: null,
+    gapDecision: null,
     stageBefore: conversation.stage,
     stageAfter: conversation.stage,
     sent: [],
@@ -1239,6 +1251,7 @@ async function answerFromKnowledge(
       context.conversation.greetedAt != null || context.result.stageBefore !== "new",
   });
   context.result.notes.push(`niyat: ${intent.intent} (${intent.matched ?? "—"})`);
+  context.result.messageIntent = intent.intent;
 
   /* --------- QATLAM 2 — oddiy muloqot: bilim ham, model ham yo'q ------- */
   if (!intent.needsKnowledge && !intent.needsSystemState) {
@@ -1771,6 +1784,7 @@ async function recordGapIfGenuine(
   });
 
   context.result.notes.push(`bo‘shliq qarori: ${gate.decision} (${gate.reason})`);
+  context.result.gapDecision = gate.decision;
 
   if (gate.decision === "none") return { escalated: false };
 
@@ -1984,6 +1998,8 @@ export async function onIntakeSubmitted(intakeId: string): Promise<FlowRunResult
     const result: FlowRunResult = {
       conversationId,
       intent: null,
+      messageIntent: null,
+      gapDecision: null,
       stageBefore: conversation.stage,
       stageAfter: conversation.stage,
       sent: [],

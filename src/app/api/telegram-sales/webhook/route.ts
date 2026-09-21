@@ -169,9 +169,18 @@ async function handleSalesUpdate(update: unknown): Promise<void> {
         messageType: parsed.message.messageType,
       });
       if (flow) {
+        /*
+         * MIJOZ MATNI JURNALGA CHIQMAYDI — faqat tasnif (37-band).
+         *
+         * `msg` maydoni "javobsiz savollar yana ifloslanyaptimi"
+         * degan savolga jonli javob beradi: oddiy muloqot
+         * xabarlarida `gap=none` bo'lishi kerak.
+         */
         console.log(
           `[sales-webhook] oqim: ${flow.stageBefore} -> ${flow.stageAfter} ` +
-            `intent=${flow.intent} sent=${flow.sent.length} refused=${flow.refusals.join(",")}`,
+            `intent=${flow.intent} msg=${flow.messageIntent ?? "-"} ` +
+            `gap=${flow.gapDecision ?? "-"} sent=${flow.sent.length} ` +
+            `refused=${flow.refusals.join(",")}`,
         );
       }
       return;
