@@ -244,10 +244,18 @@ test("ANIQ yetkazish xatosida bosqich ORQAGA qaytariladi", () => {
    * mijoz hech narsa olmagan — u hali eski bosqichda. Bosqichni
    * oldinga qoldirish suhbatni mijoz KO'RMAGAN holatga o'tkazardi.
    */
-  assert.match(engine, /const allFailed = /);
+  /*
+   * Shartning NOMIGA emas, MAZMUNIGA bog'lanadi: o'zgaruvchi
+   * `allFailed` dan `allUndelivered` ga o'zgarganda test
+   * xulqni tekshirishda davom etishi kerak.
+   */
+  const condition = engine.match(/attempted\.every\(\(outcome\) =>[^;]+;/);
+  assert.ok(condition, "yetkazilmaganlik sharti topilmadi");
+  assert.ok(condition[0].includes('"failed"'), "Telegram xatosi hisobga olinmayapti");
+
   assert.match(engine, /bosqich .* qaytarildi|qaytarildi/);
   // Yetkazilmagan qadamga eslatma rejalashtirilmaydi.
-  assert.match(engine, /allFailed && !isRePrompt/);
+  assert.match(engine, /&& !isRePrompt/);
 });
 
 test("NOMA’LUM yetkazish qaytarilmaydi ham, qayta yuborilmaydi ham", () => {
@@ -261,7 +269,16 @@ test("siyosat rad etgani XATO deb sanalmaydi", () => {
   assert.match(engine, /outcome !== "refused"/);
 });
 
-test("yuborish natijasi to‘rt holatga ajratilgan", () => {
-  assert.match(engine, /export type SendOutcome = "sent" \| "refused" \| "failed" \| "unknown"/);
+test("yuborish natijasi holatlarga ajratilgan", () => {
+  /*
+   * Ro'yxatning TARKIBI tekshiriladi, tartibi emas. Aks holda
+   * yangi holat qo'shilishi testni mazmunan hech narsa
+   * o'zgarmagan holda yiqitardi.
+   */
+  const union = engine.match(/export type SendOutcome = [^;]+;/);
+  assert.ok(union, "SendOutcome ta'rifi topilmadi");
+  for (const state of ["sent", "refused", "undelivered", "failed", "unknown"]) {
+    assert.ok(union[0].includes(`"${state}"`), `"${state}" holati yo'q`);
+  }
   assert.match(engine, /deliveryUnknown/);
 });

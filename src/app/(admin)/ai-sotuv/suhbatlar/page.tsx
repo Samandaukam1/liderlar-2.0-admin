@@ -4,6 +4,7 @@ import { requirePermission } from "@/lib/auth";
 import { PageHeader } from "@/components/admin/page-header";
 import { DataTable, Pagination, type Column } from "@/components/admin/data-table";
 import { Badge } from "@/components/admin/badges";
+import { OUTBOUND_REFUSAL_LABELS } from "@/lib/sales/flow/outbound-guard";
 import { EmptyState } from "@/components/ui/feedback";
 import { listConversations, type ConversationListItem } from "@/lib/sales/repository";
 import {
@@ -57,6 +58,17 @@ export default async function SalesConversationsPage({
           <p className="truncate font-semibold text-ink">{row.contactName}</p>
           {row.contactUsername ? (
             <p className="truncate text-xs text-ink-soft">@{row.contactUsername}</p>
+          ) : null}
+          {/*
+            JAVOBSIZ QOLGAN SUHBAT RO'YXATDAN KO'RINADI.
+
+            Bitta suhbatni ochib ko'rgandagina bilinsa, jim qolish
+            ommaviy bo'lganda ham sezilmay ketardi.
+          */}
+          {row.lastRefusalReason ? (
+            <p className="mt-1 truncate text-xs font-semibold text-coral">
+              javob ketmadi: {refusalLabel(row.lastRefusalReason)}
+            </p>
           ) : null}
         </div>
       ),
@@ -135,4 +147,11 @@ export default async function SalesConversationsPage({
       />
     </div>
   );
+}
+
+/** Noma'lum kod ham ko'rsatiladi — sahifa yiqilmasligi kerak. */
+function refusalLabel(reason: string): string {
+  return reason in OUTBOUND_REFUSAL_LABELS
+    ? OUTBOUND_REFUSAL_LABELS[reason as keyof typeof OUTBOUND_REFUSAL_LABELS]
+    : reason;
 }

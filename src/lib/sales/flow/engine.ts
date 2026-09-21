@@ -11,7 +11,11 @@ import { sendSalesMessage } from "../telegram-sales-api.ts";
 import { classifyReply, isPaymentEvidenceType } from "./classify.ts";
 import { classifyAttachment } from "./attachment-intent.ts";
 import { validateFullName } from "./full-name.ts";
-import { authorizeOutbound, type OutboundRefusalReason } from "./outbound-guard.ts";
+import {
+  authorizeOutbound,
+  isCoverageRefusal,
+  type OutboundRefusalReason,
+} from "./outbound-guard.ts";
 import { FOLLOWUP_TEMPLATES, getTemplate } from "./templates.ts";
 import {
   isForwardTransition,
@@ -205,19 +209,27 @@ async function loadConversation(conversationId: string): Promise<FlowConversatio
 /**
  * Yuborish natijasi (29-band).
  *
- * TO'RT HOLAT, va ular ATAYLAB ajratilgan:
+ * BESH HOLAT, va ular ATAYLAB ajratilgan:
  *
- *   · `sent`     — Telegram qabul qildi;
- *   · `refused`  — siyosat ruxsat bermadi (rollout, opt-out). Bu
- *                  XATO EMAS: biz ataylab jim qoldik;
- *   · `failed`   — Telegram ANIQ xato qaytardi, mijoz olmadi;
- *   · `unknown`  — timeout/uzilish. Yetkazilgani NOMA'LUM.
+ *   · `sent`        — Telegram qabul qildi;
+ *   · `refused`     — SHU SUHBATDA ataylab jim qoldik (inson
+ *                     qo'lga olgan, mijoz opt-out qilgan). Holat
+ *                     haqiqiy, bosqich o'zgarmaydi;
+ *   · `undelivered` — sozlama yoki chiqarish qamrovi to'sdi.
+ *                     Mijoz uchun bu hech narsa sodir
+ *                     bo'lmagani bilan bir xil;
+ *   · `failed`      — Telegram ANIQ xato qaytardi, mijoz olmadi;
+ *   · `unknown`     — timeout/uzilish. Yetkazilgani NOMA'LUM.
  *
- * Oxirgi ikkitasini aralashtirish qimmatga tushadi: `failed` da
- * bosqichni oldinga surish yolg'on holat yaratadi, `unknown` da esa
- * qayta yuborish mijozga IKKINCHI nusxani jo'natadi.
+ * `refused` va `undelivered` ni aralashtirish JONLI TIZIMDA xato
+ * berdi: rollout to'sgan uchta suhbat `new -> offer_sent` ga
+ * o'tib qolgan, mijozlar esa salomlashuvni ham olmagan edi.
+ * `failed` va `unknown` ni aralashtirish esa boshqa tomondan
+ * qimmat: birinchisida bosqichni oldinga surish yolg'on holat
+ * yaratadi, ikkinchisida qayta yuborish IKKINCHI nusxani
+ * jo'natadi.
  */
-export type SendOutcome = "sent" | "refused" | "failed" | "unknown";
+export type SendOutcome = "sent" | "refused" | "undelivered" | "failed" | "unknown";
 
 export interface SentMessage {
   templateKey: string | null;
@@ -306,7 +318,9 @@ async function send(
     if (!context.result.refusals.includes(decision.reason)) {
       context.result.refusals.push(decision.reason);
     }
-    return "refused";
+    // Qamrov to'sgan bo'lsa — bu "jim qolish qarori" emas,
+    // YETKAZILMAGAN xabar. Bosqich shunga qarab hal qilinadi.
+    return isCoverageRefusal(decision.reason) ? "undelivered" : "refused";
   }
 
   let telegramMessageId: number | null = null;
@@ -621,7 +635,66 @@ export async function runQueuedJob(input: HandleMessageInput): Promise<{
   }
 }
 
+/**
+ * Oqimni bajaradi va JIM QOLISH SABABINI suhbat qatoriga yozadi.
+ *
+ * NEGA ALOHIDA QATLAM: rad etish sababi ilgari faqat server
+ * log'ida qolardi. Admin panelda "avto-javob yoqiq" deb turardi,
+ * bot esa jim edi va sababni topishning yagona yo'li Vercel
+ * log'ini o'qish edi. Aynan shu sabab jonli tizimda bir necha kun
+ * sezilmay qoldi: uchta mijozga `rollout_not_allowlisted` sababli
+ * hech narsa yuborilmagan, panelda esa hech qanday belgi yo'q edi.
+ *
+ * Sabab endi suhbat qatorida turadi — suhbat sahifasi uni
+ * ko'rsatadi va tuzatish tugmasi yonida bo'ladi.
+ */
 async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null> {
+  const result = await runFlowSteps(input);
+  if (result && input.simulated !== true) {
+    await recordCoverageRefusal(input.conversationId, result);
+  }
+  return result;
+}
+
+async function recordCoverageRefusal(
+  conversationId: string,
+  result: FlowRunResult,
+): Promise<void> {
+  const blocked = result.refusals.find((reason) => isCoverageRefusal(reason));
+  const admin = createSupabaseAdminClient();
+
+  try {
+    if (blocked) {
+      await admin
+        .from("sales_conversations")
+        .update({
+          last_refusal_reason: blocked,
+          last_refusal_at: new Date().toISOString(),
+        })
+        .eq("id", conversationId);
+      return;
+    }
+
+    // Javob ketdi — eski ogohlantirish o'z-o'zidan o'chadi.
+    // `not is null` sharti keraksiz yozishning oldini oladi.
+    if (result.sent.length > 0) {
+      await admin
+        .from("sales_conversations")
+        .update({ last_refusal_reason: null, last_refusal_at: null })
+        .eq("id", conversationId)
+        .not("last_refusal_reason", "is", null);
+    }
+  } catch (err) {
+    // Bu faqat KO'RINUVCHANLIK. Yozilmasa ham sotuv oqimi
+    // buzilmasligi kerak.
+    console.error("SALES_REFUSAL_RECORD_FAILED", {
+      conversationId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function runFlowSteps(input: HandleMessageInput): Promise<FlowRunResult | null> {
   const conversation = await loadConversation(input.conversationId);
   if (!conversation) return null;
 
@@ -985,10 +1058,20 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
    *     ko'radi.
    */
   const attempted = outcomes.filter((outcome) => outcome !== "refused");
-  const allFailed = attempted.length > 0 && attempted.every((outcome) => outcome === "failed");
   const anyUnknown = attempted.some((outcome) => outcome === "unknown");
+  /*
+   * `undelivered` ham shu yerga qo'shildi. Ilgari faqat
+   * `failed` qaytarardi va qamrov to'sgan suhbat bosqichi
+   * oldinga surilib qolardi: jonli tizimda uchta suhbat
+   * `new -> offer_sent` ga o'tgan, lekin mijozlar hech narsa
+   * olmagan edi. Ro'yxat to'g'rilangandan keyin ham ular
+   * salomlashuvni olmasdi — ssenariy o'rtasidan boshlanardi.
+   */
+  const allUndelivered =
+    attempted.length > 0 &&
+    attempted.every((outcome) => outcome === "failed" || outcome === "undelivered");
 
-  if (allFailed && !isRePrompt) {
+  if (allUndelivered && !isRePrompt) {
     await moveStage(
       { ...conversation, stage: transition.to },
       result.stageBefore,

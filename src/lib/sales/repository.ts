@@ -475,6 +475,8 @@ export interface ConversationListItem {
   lastMessageAt: string | null;
   learningStatus: LearningStatus;
   learnedAt: string | null;
+  /** Qamrov/sozlama sababli javob ketmagan bo'lsa — sababi. */
+  lastRefusalReason: string | null;
 }
 
 /**
@@ -526,7 +528,7 @@ export async function listConversations(options: {
   let query = admin
     .from("sales_conversations")
     .select(
-      "id, chat_id, message_count, incoming_count, outgoing_count, last_message_at, learning_status, learned_at, sales_contacts(first_name, last_name, username)",
+      "id, chat_id, message_count, incoming_count, outgoing_count, last_message_at, learning_status, learned_at, last_refusal_reason, sales_contacts(first_name, last_name, username)",
       { count: "exact" },
     )
     .order("last_message_at", { ascending: false, nullsFirst: false })
@@ -555,6 +557,7 @@ export async function listConversations(options: {
       lastMessageAt: (row.last_message_at as string | null) ?? null,
       learningStatus: (row.learning_status as LearningStatus) ?? "pending",
       learnedAt: (row.learned_at as string | null) ?? null,
+      lastRefusalReason: (row.last_refusal_reason as string | null) ?? null,
     };
   });
 
@@ -1239,6 +1242,16 @@ export interface ConversationFlowState {
   intakeLinkExpiresAt: string | null;
   paymentStatus: string;
   paidAt: string | null;
+  /**
+   * Oxirgi javob QAMROV sababli yuborilmagan bo'lsa — sababi.
+   *
+   * Bu "AI jim turibdi" bilan bir narsa EMAS: inson qo'lga
+   * olgani `aiEnabled` da ko'rinadi. Bu yerda sozlama yoki
+   * chiqarish qamrovi to'sganini bildiradi va uni admin
+   * o'zi tuzatishi mumkin.
+   */
+  lastRefusalReason: string | null;
+  lastRefusalAt: string | null;
   evidence: Array<{
     id: string;
     fileKind: string;
@@ -1273,7 +1286,7 @@ export async function getConversationFlowState(
       admin
         .from("sales_conversations")
         .select(
-          "sales_stage, stage_updated_at, ai_enabled, takeover_at, customer_full_name, intake_id, intake_link_prefix, intake_link_expires_at, payment_status, paid_at",
+          "sales_stage, stage_updated_at, ai_enabled, takeover_at, customer_full_name, intake_id, intake_link_prefix, intake_link_expires_at, payment_status, paid_at, last_refusal_reason, last_refusal_at",
         )
         .eq("id", conversationId)
         .maybeSingle(),
@@ -1309,6 +1322,8 @@ export async function getConversationFlowState(
     intakeLinkExpiresAt: (conversation.intake_link_expires_at as string | null) ?? null,
     paymentStatus: (conversation.payment_status as string) ?? "none",
     paidAt: (conversation.paid_at as string | null) ?? null,
+    lastRefusalReason: (conversation.last_refusal_reason as string | null) ?? null,
+    lastRefusalAt: (conversation.last_refusal_at as string | null) ?? null,
     evidence: (evidence ?? []).map((row) => ({
       id: row.id as string,
       fileKind: row.file_kind as string,

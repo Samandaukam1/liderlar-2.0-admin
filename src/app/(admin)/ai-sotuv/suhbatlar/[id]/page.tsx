@@ -6,6 +6,11 @@ import { PageHeader } from "@/components/admin/page-header";
 import { Badge } from "@/components/admin/badges";
 import { getConversationDetail, getConversationFlowState } from "@/lib/sales/repository";
 import { SALES_STAGE_LABELS, isSalesStage } from "@/lib/sales/flow/stages";
+import {
+  OUTBOUND_REFUSAL_FIXES,
+  OUTBOUND_REFUSAL_LABELS,
+  type OutboundRefusalReason,
+} from "@/lib/sales/flow/outbound-guard";
 import { hasPermission } from "@/lib/permissions";
 import { FlowControls } from "./flow-controls";
 import { LEARNING_STATUS_LABELS } from "@/lib/sales/types";
@@ -78,6 +83,32 @@ export default async function SalesConversationPage({
           </span>
         }
       />
+
+      {/*
+        JIM QOLISH SABABI — ENG TEPADA.
+
+        Ilgari bu ma'lumot faqat server log'ida bor edi: panelda
+        "avto-javob yoqiq" deb turardi, bot esa jim edi va sababni
+        bilishning yo'li yo'q edi. Endi sabab ham, tuzatish yo'li
+        ham shu yerda — «Ro'yxatga qo'shish» tugmasining yonida.
+      */}
+      {flow?.lastRefusalReason ? (
+        <section className="mb-4 rounded-card border border-coral/50 bg-coral/10 p-4">
+          <p className="flex items-center gap-2 text-sm font-bold text-coral">
+            <ShieldAlert className="h-4 w-4" aria-hidden />
+            Oxirgi javob mijozga yuborilmadi
+          </p>
+          <p className="mt-1.5 text-sm text-ink">
+            {refusalLabel(flow.lastRefusalReason)}
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-ink-soft">
+            {refusalFix(flow.lastRefusalReason)}
+          </p>
+          {flow.lastRefusalAt ? (
+            <p className="mt-2 text-xs text-ink-soft">{formatDate(flow.lastRefusalAt)}</p>
+          ) : null}
+        </section>
+      ) : null}
 
       {/* ------------------- 0.2 SOTUV OQIMI ------------------- */}
       {flow ? (
@@ -235,4 +266,23 @@ export default async function SalesConversationPage({
       </section>
     </div>
   );
+}
+
+/*
+ * Sabab kodlari bazadan keladi — ular kod ro'yxatidan chiqib
+ * ketgan bo'lishi mumkin (eski qator, yangi versiya). Shuning
+ * uchun xom kod ham ko'rsatiladi, sahifa esa yiqilmaydi.
+ */
+function isRefusalReason(value: string): value is OutboundRefusalReason {
+  return value in OUTBOUND_REFUSAL_LABELS;
+}
+
+function refusalLabel(reason: string): string {
+  return isRefusalReason(reason) ? OUTBOUND_REFUSAL_LABELS[reason] : reason;
+}
+
+function refusalFix(reason: string): string {
+  return isRefusalReason(reason)
+    ? OUTBOUND_REFUSAL_FIXES[reason]
+    : "Sabab noma\u2019lum — jurnalga qarang.";
 }

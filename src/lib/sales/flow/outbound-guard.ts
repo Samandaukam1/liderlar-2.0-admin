@@ -78,6 +78,80 @@ export const OUTBOUND_REFUSAL_LABELS: Record<OutboundRefusalReason, string> = {
   rollout_outside_percentage: "Bu suhbat foizli qamrovga kirmagan",
 };
 
+/**
+ * NIMA QILISH KERAK — sabab bilan birga ko'rsatiladi.
+ *
+ * Yorliqning o'zi yetarli emas edi: "Bu chat tanlangan
+ * ro'yxatda yo'q" ni o'qigan admin keyingi qadamni bilmaydi va
+ * sozlamalar sahifasida qidirib yuradi.
+ */
+export const OUTBOUND_REFUSAL_FIXES: Record<OutboundRefusalReason, string> = {
+  auto_reply_disabled:
+    "Sozlamalar sahifasida «Avto-javob» kalitini yoqing.",
+  human_takeover:
+    "Suhbat inson nazoratida. Shu sahifadagi boshqaruvdan AI ni qaytadan yoqing.",
+  connection_disabled:
+    "Telegram Business ulanishi o‘chirilgan. Telegram ilovasida botni biznes yordamchisi sifatida qayta ulang.",
+  no_reply_rights:
+    "Telegram Business sozlamasida botga «xabar yuborish» huquqini bering.",
+  opted_out:
+    "Mijoz «boshqa yozmang» degan. Bu qaror — avtomatik javob qaytarilmaydi.",
+  unexpected_stage: "Texnik holat — tahlil uchun jurnalga qarang.",
+  empty_body: "Texnik holat — shablon matni bo‘sh.",
+  missing_chat: "Texnik holat — chat identifikatori yo‘q.",
+  rollout_off:
+    "Chiqarish bosqichi «O‘chiq». Sozlamalarda «To‘liq» yoki «Tanlangan chatlar» ni tanlang.",
+  rollout_test_only:
+    "Chiqarish «Faqat sinov» rejimida — jonli chatlarga xabar ketmaydi.",
+  rollout_not_allowlisted:
+    "Rejim «Tanlangan chatlar». Yuqoridagi «Ro‘yxatga qo‘shish» tugmasini bosing yoki hammaga javob berish uchun sozlamalarda «To‘liq» ni tanlang.",
+  rollout_outside_percentage:
+    "Foizli qamrov bu suhbatni o‘z ichiga olmagan. Foizni oshiring yoki «To‘liq» ni tanlang.",
+};
+
+/*
+ * RAD ETISHNING IKKI TURI — BOSQICH UCHUN HAL QILUVCHI FARQ.
+ *
+ * QAROR: `human_takeover`, `opted_out`, `unexpected_stage`,
+ * `empty_body`. Mijoz xabar olmadi, lekin suhbat holati
+ * HAQIQIY — biz aynan shu holatda ataylab jim qoldik.
+ *
+ * QAMROV: `rollout_*`, `auto_reply_disabled`, `connection_*`,
+ * `no_reply_rights`, `missing_chat`. Bularning suhbatga aloqasi
+ * YO'Q — sozlama shunday turibdi. Mijoz salomlashuvni ham,
+ * narxni ham KO'RMAGAN, demak u hali eski bosqichda.
+ *
+ * NEGA MUHIM: bosqich shunday oldinga surilib qolsa, qamrov
+ * ochilgandan keyin ham o'sha mijoz salomlashuv, foyda va narx
+ * xabarlarini UMUMAN olmaydi — ssenariy uning uchun o'rtasidan
+ * boshlanadi. Amalda shu sodir bo'ldi: `new -> offer_sent`
+ * o'tishi yozildi, lekin `rollout_not_allowlisted` sababli
+ * hech narsa yuborilmadi.
+ */
+export const COVERAGE_REFUSAL_REASONS = [
+  "auto_reply_disabled",
+  "connection_disabled",
+  "no_reply_rights",
+  "missing_chat",
+  "rollout_off",
+  "rollout_test_only",
+  "rollout_not_allowlisted",
+  "rollout_outside_percentage",
+] as const;
+
+/** Qolganlari — ongli qaror; holat o'zgarmaydi. */
+export const DELIBERATE_REFUSAL_REASONS = [
+  "human_takeover",
+  "opted_out",
+  "unexpected_stage",
+  "empty_body",
+] as const;
+
+/** Sabab sozlama/qamrovdanmi (ha) yoki suhbat qaroridanmi (yo'q). */
+export function isCoverageRefusal(reason: OutboundRefusalReason): boolean {
+  return (COVERAGE_REFUSAL_REASONS as readonly string[]).includes(reason);
+}
+
 export interface OutboundContext {
   conversationId: string;
   businessConnectionId: string | null;
