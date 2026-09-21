@@ -17,70 +17,127 @@
  */
 
 import { normalizeForIntent } from "../text-normalize.ts";
+import type { SalesStage } from "./stages.ts";
+
+interface ReferralMarker {
+  id: string;
+  pattern: RegExp;
+  /**
+   * Bu belgi manbani O'ZI ko'rsatadimi.
+   *
+   * "jamoa" so'zi o'zi hech kimni ko'rsatmaydi — u faqat
+   * "o'zak" bilan birga ma'no beradi. Shuning uchun kamida
+   * bitta ko'rsatuvchi belgi bo'lishi SHART.
+   */
+  identifying: boolean;
+}
 
 export interface ReferralSource {
   key: string;
   /** Panelda ko'rinadigan nom. */
   label: string;
-  /**
-   * Qidiriladigan iboralar — normallashtirilgan shaklda
-   * (kichik harf, yagona apostrof).
-   */
-  phrases: readonly string[];
+  markers: readonly ReferralMarker[];
 }
 
 /**
- * IBORALAR TO'LIQ YOZILADI, ISM YOLG'IZ EMAS.
+ * AYNAN SHU IBORA KUTILMAYDI.
  *
- * "niyatullayevich" ni yolg'iz qidirish xato bo'lardi: bu
- * o'zbekcha OTASINING ISMI shakli va nomzodning o'zi
- * "Aziz Niyatullayevich" bo'lishi mumkin. Shunda begona odam
- * bepul maqolaga ega bo'lardi. Shu sababli ism va familiya
- * birga qidiriladi.
+ * Odam "Diyorbek Niyatullayevich nomidan yozayapman" deb to'liq
+ * yozishi kam. Amalda "Diyorbek aka aytdi", "Niyatullayevichdan
+ * keldim", "Kamolov yubordi", "o'zakdanman" deb yozadi. Shuning
+ * uchun qat'iy ibora emas, BELGILAR sanaladi:
  *
- * "o'zak" ham yolg'iz qidirilmaydi — bu oddiy so'z ("o'zak
- * masala"). Faqat "jamoa" bilan birga.
+ *   · ikkita belgi topilsa (ism + familiya, "o'zak" + "jamoa")
+ *     — kontekstsiz ham yetarli;
+ *   · bitta belgi topilsa — yoniga yo'llanma so'zi kerak
+ *     ("aytdi", "yubordi", "nomidan", "keldim" va h.k.).
+ *
+ * Bir belgini kontekstsiz qabul qilish xato bo'lardi: "men
+ * Aziz Niyatullayevichman" degan nomzod begona odam bo'la turib
+ * bepul maqola olib ketardi.
  */
 export const REFERRAL_SOURCES: readonly ReferralSource[] = [
   {
     key: "diyorbek_niyatullayevich",
     label: "Diyorbek Niyatullayevich",
-    phrases: [
-      // "niyatulla" prefiksi niyatullayev / niyatullaev /
-      // niyatullayevich variantlarini ham qamrab oladi.
-      "diyorbek niyatulla",
-      "diyarbek niyatulla",
-      "niyatullayev diyorbek",
-      "niyatullaev diyorbek",
+    markers: [
+      // diyorbek / diyarbek / dieorbek — yozuv xatolari bilan.
+      { id: "ism", pattern: /di[yj]?[oae]r?bek/u, identifying: true },
+      // niyatulla / niyatullayev / niyatullaevich / niatulla.
+      { id: "familiya", pattern: /n[ie][yj]?atulla/u, identifying: true },
+      // "diyorbekdan", "niyatullayevdan" — chiqish kelishigi
+      // o'zi yo'llanma ma'nosini beradi.
+      {
+        id: "dan",
+        pattern: /(?:di[yj]?[oae]r?bek|n[ie][yj]?atulla)[\p{L}']*(?:dan|niki)/u,
+        identifying: false,
+      },
     ],
   },
   {
     key: "shohruh_kamolov",
     label: "Shohruh Kamolov",
-    phrases: [
-      // O'zbek yozuvida h/x va u/o' almashib ketadi.
-      "shohruh kamolov",
-      "shohrux kamolov",
-      "shoxruh kamolov",
-      "shoxrux kamolov",
-      "kamolov shohruh",
-      "kamolov shoxrux",
+    markers: [
+      // shohruh / shohrux / shoxruh / shoxrux / shahrux / shorux.
+      { id: "ism", pattern: /sh[oa]h?x?r[uo]h?x?/u, identifying: true },
+      // kamolov / kamalov / komolov / kamolovich.
+      { id: "familiya", pattern: /k[ao]m[oa]l[oa]v/u, identifying: true },
+      {
+        id: "dan",
+        pattern: /(?:sh[oa]h?x?r[uo]h?x?|k[ao]m[oa]l[oa]v)[\p{L}']*(?:dan|niki)/u,
+        identifying: false,
+      },
     ],
   },
   {
     key: "ozak_jamoasi",
     label: "O'zak jamoasi",
-    phrases: [
-      // Qo'shimcha kesilmaydi: "jamoa" prefiksi jamoasi /
-      // jamoasidan / jamoasidanman ni ham tutadi.
-      "o'zak jamoa",
-      "ozak jamoa",
-      "o'zak guruh",
-      "ozak guruh",
-      "o'zak loyiha",
-      "ozak loyiha",
+    markers: [
+      { id: "nom", pattern: /(?:^|[^\p{L}])(?:o'zak|ozak|uzak|o'zaq|ozaq)/u, identifying: true },
+      // O'zi hech kimni ko'rsatmaydi — faqat "o'zak" bilan birga.
+      { id: "jamoa", pattern: /jamoa|guruh|komanda|jamoasi|loyiha/u, identifying: false },
+      {
+        id: "dan",
+        pattern: /(?:o'zak|ozak|uzak|o'zaq|ozaq)[\p{L}']*(?:dan|chi|niki)/u,
+        identifying: false,
+      },
     ],
   },
+];
+
+/**
+ * YO'LLANMA SO'ZLARI — "meni kimdir yubordi" ma'nosi.
+ *
+ * Ro'yxat keng: odam "aytdi", "yubordi", "nomidan", "tanish",
+ * "keldim" — istalgan birini ishlatishi mumkin va bittasi
+ * tushib qolsa qoida jimgina ishlamay qolardi.
+ */
+const REFERRAL_CONTEXT: readonly RegExp[] = [
+  /nomidan|nomdan|nomida/u,
+  /tarafidan|tomonidan|tomondan/u,
+  /ayt(di|gan|ishdi|uvdi|di-?ku)/u,
+  /de(di|yishdi|b ayt)/u,
+  /yubor(di|gan|ishdi|di-?ku)|jo'?nat(di|gan)|yo'?lla(di|gan)/u,
+  /tavsiya|tanishtir|bog'?lan/u,
+  /keldim|kelganman|kelyapman|murojaat/u,
+  /orqali|tanish(im|imiz)?|do'?st(im)?|ustoz(im)?|rahbar(im)?/u,
+  /jamoasidan|guruhidan|tomonidan/u,
+  /aka(m|ngiz)?\b|opa(m|ngiz)?\b/u,
+];
+
+/**
+ * ISM ATAB AYTILGANINING BELGISI.
+ *
+ * "Shohruh ismli tanishim bor" — bu yo'llanma emas, shunchaki
+ * ism tilga olingan. Bitta belgi + yo'llanma so'zi yo'lida
+ * shunday jumlalar tutilib qolardi, shuning uchun bu naqshlar
+ * o'sha eng zaif yo'lni bekor qiladi.
+ *
+ * Ikki belgi topilgan holatga (ism + familiya) ta'sir qilmaydi:
+ * u yerda shubha yo'q.
+ */
+const NAMING_PATTERNS: readonly RegExp[] = [
+  /isml[ie]|ismim|ismi\b|degan (?:odam|yigit|qiz|kishi)/u,
 ];
 
 export const REFERRAL_SOURCE_LABELS: Readonly<Record<string, string>> =
@@ -90,38 +147,73 @@ export function isReferralSourceKey(value: unknown): value is string {
   return typeof value === "string" && value in REFERRAL_SOURCE_LABELS;
 }
 
-/**
- * Ibora matnda bormi.
- *
- * BOSHIDA chegara bor, OXIRIDA yo'q. O'zbek tili qo'shimchali:
- * "jamoasidanman" ni tutish uchun oxirgi chegara bo'lmasligi
- * kerak. Boshidagi chegara esa iboraning boshqa so'z ichida
- * tasodifan uchrashining oldini oladi.
- */
-function containsPhrase(haystack: string, phrase: string): boolean {
-  const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escaped}`, "u").test(haystack);
-}
-
 export interface ReferralDetection {
   source: string;
   label: string;
+  /** Nima asosida topilgani — panelda va jurnalda ko'rinadi. */
   matched: string;
 }
 
-/** Matnda tanish nomi bormi. Topilmasa null. */
+/**
+ * Matnda tanish nomi bormi. Topilmasa null.
+ *
+ * DIQQAT: bu funksiya suhbatning FAQAT boshida chaqirilishi
+ * kerak (`canDetectReferral`). Keyinroq mijozning o'z ismi
+ * so'raladi va "Aziz Niyatullayevich" degan javob shu qoidani
+ * noto'g'ri ishga tushirib yuborardi.
+ */
 export function detectReferral(text: string | null | undefined): ReferralDetection | null {
-  const normalized = ` ${normalizeForIntent(text ?? "").trim()}`;
-  if (normalized.trim() === "") return null;
+  const normalized = normalizeForIntent(text ?? "").trim();
+  if (normalized === "") return null;
+
+  const hasContext = REFERRAL_CONTEXT.some((pattern) => pattern.test(normalized));
 
   for (const source of REFERRAL_SOURCES) {
-    for (const phrase of source.phrases) {
-      if (containsPhrase(normalized, phrase)) {
-        return { source: source.key, label: source.label, matched: phrase };
-      }
+    const found = source.markers.filter((marker) => marker.pattern.test(normalized));
+    if (!found.some((marker) => marker.identifying)) continue;
+
+    if (found.length >= 2) {
+      return {
+        source: source.key,
+        label: source.label,
+        matched: found.map((marker) => marker.id).join("+"),
+      };
+    }
+    if (hasContext && !NAMING_PATTERNS.some((pattern) => pattern.test(normalized))) {
+      return {
+        source: source.key,
+        label: source.label,
+        matched: `${found[0].id}+yo'llanma`,
+      };
     }
   }
   return null;
+}
+
+/**
+ * Shu bosqichda tanish nomi izlanadimi.
+ *
+ * NEGA CHEKLOV: `need_full_name` dan boshlab mijoz O'Z ISMINI
+ * yozadi. Familiyasi "Niyatullayev" bo'lgan oddiy nomzod shu
+ * yerda imtiyozli deb belgilanib qolardi va unga to'lov
+ * ma'lumoti umuman yuborilmasdi — ya'ni u to'lay olmasdi.
+ *
+ * Tanish nomini odam birinchi xabarlarida aytadi, shuning
+ * uchun bu cheklov amalda hech narsani yo'qotmaydi.
+ */
+export const REFERRAL_DETECTION_STAGES: readonly SalesStage[] = [
+  "new",
+  "application_confirm",
+  "benefits_question",
+  "benefits_sent",
+  "offer_sent",
+  "waiting_offer_review",
+  "article_decision",
+  "followup_later",
+];
+
+export function canDetectReferral(stage: SalesStage): boolean {
+  return REFERRAL_DETECTION_STAGES.includes(stage);
 }
 
 /* ========================================================================= *

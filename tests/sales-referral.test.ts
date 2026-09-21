@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  canDetectReferral,
   detectReferral,
   isMoneyTemplate,
   mentionsMoney,
@@ -37,6 +38,36 @@ test("tanish nomidan yozgan odam aniqlanadi", () => {
   }
 });
 
+test("AYNAN o‘sha ibora kutilmaydi — yaqin gaplar ham tutiladi", () => {
+  /*
+   * Odam ssenariy yozib bermaydi. "Diyorbek Niyatullayevich
+   * nomidan yozayapman" deb to'liq yozadigan odam kam;
+   * ko'pchilik qisqa va erkin yozadi. Qat'iy ibora talab
+   * qilinsa, qoida amalda deyarli hech qachon ishlamasdi.
+   */
+  const loose: [string, string][] = [
+    ["Diyorbek aka aytdi sizga yozing deb", "diyorbek_niyatullayevich"],
+    ["diyorbek akam yubordi", "diyorbek_niyatullayevich"],
+    ["Niyatullayevich tavsiya qildi", "diyorbek_niyatullayevich"],
+    ["niyatullaevdan keldim", "diyorbek_niyatullayevich"],
+    ["diyarbek niyatulla", "diyorbek_niyatullayevich"],
+    ["Kamolov aytdi", "shohruh_kamolov"],
+    ["shohrux akam nomidan", "shohruh_kamolov"],
+    ["Shoxruh yubordi meni", "shohruh_kamolov"],
+    ["kamalov orqali keldim", "shohruh_kamolov"],
+    ["o'zakdan keldim", "ozak_jamoasi"],
+    ["ozakdanman", "ozak_jamoasi"],
+    ["O‘zak jamoasi tavsiya qildi", "ozak_jamoasi"],
+    ["uzak guruhidan yozayapman", "ozak_jamoasi"],
+  ];
+
+  for (const [text, expected] of loose) {
+    const found = detectReferral(text);
+    assert.ok(found, `topilmadi: "${text}"`);
+    assert.equal(found.source, expected, `noto'g'ri manba: "${text}"`);
+  }
+});
+
 test("o‘zbekcha apostrof variantlari ham tutiladi", () => {
   /*
    * Telegram klaviaturasi, iPhone tuzatishi va veb forma "o'" ni
@@ -56,9 +87,14 @@ test("oddiy nomzod tasodifan imtiyozli bo‘lib qolmaydi", () => {
   const notReferrals = [
     "Mening ismim Diyorbek",
     "Men Aziz Niyatullayevichman",
-    "Kamolov Aziz",
     "Bu o'zak masala",
-    "Shohruh ismli do'stim aytdi",
+    // Ism TILGA OLINGAN, lekin yo'llanma emas.
+    "Shohruh ismli tanishim bor",
+    "Diyorbek degan odam bor",
+    "Men Toshkentdanman",
+    "Do'stim aytdi sizga yozing deb",
+    "Assalomu alaykum, maqola yozdirmoqchiman",
+    "Narxi qancha?",
     "salom",
     "",
   ];
@@ -67,15 +103,38 @@ test("oddiy nomzod tasodifan imtiyozli bo‘lib qolmaydi", () => {
   }
 });
 
-test("har bir manbaning yorlig‘i va iboralari bor", () => {
+test("har bir manbada yorliq va KO‘RSATUVCHI belgi bor", () => {
   assert.ok(REFERRAL_SOURCES.length >= 3);
   for (const source of REFERRAL_SOURCES) {
     assert.ok(source.label.trim().length > 0, `${source.key}: yorliq yo'q`);
-    assert.ok(source.phrases.length > 0, `${source.key}: ibora yo'q`);
-    for (const phrase of source.phrases) {
-      assert.equal(phrase, phrase.toLowerCase(), `"${phrase}" kichik harfda emas`);
-    }
+    assert.ok(
+      source.markers.some((marker) => marker.identifying),
+      `${source.key}: ko'rsatuvchi belgi yo'q — yo'llanma so'zining o'zi uni ochib yuborardi`,
+    );
   }
+});
+
+test("ism so‘ralayotgan bosqichda tanish nomi IZLANMAYDI", () => {
+  /*
+   * ENG NOZIK NUQTA. Erkin taniqlash kuchli, lekin
+   * `need_full_name` bosqichida mijoz O'Z ismini yozadi.
+   * "Aziz Niyatullayevich" degan oddiy nomzod shu yerda
+   * imtiyozli deb belgilansa, unga to'lov ma'lumoti umuman
+   * yuborilmasdi — ya'ni u to'lay olmasdi.
+   */
+  assert.equal(canDetectReferral("new"), true);
+  assert.equal(canDetectReferral("offer_sent"), true);
+  assert.equal(canDetectReferral("article_decision"), true);
+
+  assert.equal(canDetectReferral("need_full_name"), false);
+  assert.equal(canDetectReferral("intake_link_sent"), false);
+  assert.equal(canDetectReferral("waiting_payment"), false);
+  assert.equal(canDetectReferral("paid"), false);
+});
+
+test("dvigatel taniqlashni faqat boshlang‘ich bosqichlarda chaqiradi", () => {
+  const engine = src("src/lib/sales/flow/engine.ts");
+  assert.match(engine, /canDetectReferral\(conversation\.stage\)/);
 });
 
 /* ===================================================================== *

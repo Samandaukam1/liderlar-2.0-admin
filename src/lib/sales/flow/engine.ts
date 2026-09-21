@@ -31,7 +31,7 @@ import { computeLeadScore, type LeadTemperature } from "./lead-score.ts";
 import { detectOptOut, OPT_OUT_REPLY } from "./optout.ts";
 import { detectHandoff, buildHandoffSummary, type HandoffTrigger } from "./handoff.ts";
 import { detectMinor } from "./minor.ts";
-import { detectReferral, mentionsMoney } from "./referral.ts";
+import { canDetectReferral, detectReferral, mentionsMoney } from "./referral.ts";
 import { buildFallback, isFillerMessage, type FallbackReason } from "./fallback.ts";
 import { newRolloutBucket, type RolloutSettings } from "./rollout.ts";
 import { normalizeForMatch } from "../text-normalize.ts";
@@ -828,7 +828,7 @@ async function runFlowSteps(input: HandleMessageInput): Promise<FlowRunResult | 
    * qayta hisoblansa, ikkinchi xabardayoq o'chib ketardi va
    * mijozga to'lov ma'lumoti ketib qolardi.
    */
-  if (conversation.referralSource == null) {
+  if (conversation.referralSource == null && canDetectReferral(conversation.stage)) {
     const referral = detectReferral(input.text);
     if (referral) {
       conversation.referralSource = referral.source;
