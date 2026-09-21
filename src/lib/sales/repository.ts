@@ -185,6 +185,28 @@ export async function ingestBusinessMessage(
   }
   const conversationId = conversation.id as string;
 
+  /*
+   * SUHBATNI KIM BOSHLAGAN.
+   *
+   * Faqat BIRINCHI xabarda belgilanadi: `first_message_at`
+   * hali bo'sh bo'lsa, bu suhbatdagi birinchi xabar.
+   *
+   * Shartli UPDATE ataylab: upsert qatoriga har xabarda
+   * `entry` qo'shsak, keyingi chiquvchi xabar uni
+   * "outbound" ga qaytarib yuborardi va ssenariy o'rtada
+   * almashib ketardi.
+   *
+   * Standart 'outbound' — ya'ni aniqlab bo'lmagan holatda
+   * mavjud xulq saqlanadi.
+   */
+  if (!conversation.first_message_at && message.direction === "incoming") {
+    await admin
+      .from("sales_conversations")
+      .update({ entry: "inbound" })
+      .eq("id", conversationId)
+      .eq("entry", "outbound");
+  }
+
   // --- takror tekshiruvi ---
   const { data: existing } = await admin
     .from("sales_messages")

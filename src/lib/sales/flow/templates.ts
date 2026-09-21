@@ -35,6 +35,54 @@ export const SALES_TEMPLATES: readonly SalesTemplate[] = [
 Siz “O‘zbekiston Lider Yoshlari Ensiklopediyasi”ga kirish uchun ariza qoldirgansiz. Shunaqami?`,
   },
   {
+    /*
+     * KIRUVCHI SSENARIY — nomzod BIZGA birinchi yozadi.
+     *
+     * Mavjud `application_confirm` "Siz ariza qoldirgansiz.
+     * Shunaqami?" deb so'raydi va bu chiquvchi oqim uchun.
+     * O'zi yozgan odamga shuni yuborish xato bo'lardi: u
+     * hech qanday ariza qoldirmagan va savol uni chalkashtirardi.
+     */
+    key: "inbound_greeting",
+    title: "Kiruvchi: salomlashish",
+    isExact: true,
+    body: `Assalomu alaykum. Bog'langaningiz uchun rahmat!
+
+Yaxshi, sizga hozir batafsil ma'lumot yuboraman.`,
+  },
+  {
+    key: "price_offer_inbound",
+    title: "Kiruvchi: narx va promo",
+    isExact: true,
+    body: `Oldindan aytaman Bizda maqola joylashning yillik badali bor va u hozirda 100 000 so'mni tashkil qiladi.
+
+Bizda homiylar yo'q tushuning — bu narx ichiga maqolani texnik jihatdan ta'minlash, sifatli yuritish va saqlash, YILLIK BARCHA TAHRIRLASHLAR va 24/7 qo'llab-quvvatlash KIRADI.
+
+LEKIN HOZIRDA SIZ PROMO KODDAN FOYDALANGANSIZ VA MEGA CHEGIRMA AMAL QILMOQDA VA KIRISH BADALI ATIGA 38 MING SO'M.
+
+Bunday narx hech qayerda hech qachon bo'lmagan. Shunday ekan chegirmaga ulguring.
+
+Undan keyin esa batafsil tanishib chiqing va ayting.`,
+  },
+  {
+    /*
+     * NAMUNA MAQOLALAR — F.I.Sh. so'rovi bilan BIRGA.
+     *
+     * Alohida xabar qilib yuborish mumkin edi, lekin shunda
+     * odam "nima qilishim kerak?" degan savolga javobni ikki
+     * xabardan yig'ib olishi kerak bo'lardi.
+     */
+    key: "request_full_name_with_samples",
+    title: "Kiruvchi: F.I.Sh. so'rash va namuna maqolalar",
+    isExact: true,
+    body: `Yaxshi unda menga ismingizni to'liq yozib yuboring — men sizga maxsus savollar xabarnomasini yuboraman. Siz havolalar ichiga kirib javoblarni yozib yuborasiz, javoblaringiz asosida biografik maqolangizni shakllantiramiz.
+
+Maqola taxminan quyidagidek bo'ladi — pastdagi nomzodlarning ismi ustiga bossangiz, maqolasiga olib boradi:
+
+https://t.me/uzlye_rasmiy/2405
+https://t.me/uzlye_rasmiy/2344`,
+  },
+  {
     key: "benefits_question",
     title: "Foydalar haqida bilasizmi",
     isExact: true,

@@ -240,10 +240,82 @@ const TRANSITION_INDEX = new Map<string, StageTransition>(
   STAGE_TRANSITIONS.map((t) => [`${t.from}|${t.intent}`, t]),
 );
 
+/* ------------------------- kiruvchi ssenariy -------------------------- */
+
+/**
+ * Suhbat KIM tomonidan boshlangani.
+ *
+ *   "outbound" — biz ariza qoldirgan odamga yozdik.
+ *   "inbound"  — nomzod BIZGA birinchi yozdi.
+ *
+ * Farq faqat ikki joyda seziladi, lekin u muhim: o'zi yozgan
+ * odamga "Siz ariza qoldirgansiz, shunaqami?" deb so'rash xato —
+ * u hech qanday ariza qoldirmagan va savol uni chalkashtiradi.
+ */
+export type ConversationEntry = "inbound" | "outbound";
+
+/**
+ * FAQAT KIRUVCHI SUHBAT UCHUN farq qiladigan o'tishlar.
+ *
+ * Ro'yxat ataylab qisqa: qolgan hamma qadam ikkala yo'lda ham
+ * bir xil va `STAGE_TRANSITIONS` dan olinadi. Butun jadvalni
+ * ikki nusxada saqlash ularning vaqt o'tib ajralib ketishiga
+ * olib kelardi.
+ */
+export const INBOUND_TRANSITIONS: readonly StageTransition[] = [
+  /*
+   * Boshlanish. Ariza tasdig'i bosqichi TUSHIRIB QOLDIRILADI:
+   * o'zi yozgan odam allaqachon qiziqqan, undan "rostdanmi?"
+   * deb so'rash keraksiz qadam.
+   */
+  ...(["other", "yes", "question", "need_info"] as const).map((intent) => ({
+    from: "new" as const,
+    intent,
+    to: "offer_sent" as const,
+    templates: [
+      "inbound_greeting",
+      "benefits_full",
+      "benefits_review_prompt",
+      "price_offer_inbound",
+    ],
+    followup: { type: "offer_review", delayMinutes: 7 },
+  })),
+
+  /*
+   * "Ha, yozamiz" deganda TO'LOV MA'LUMOTI HAM yuboriladi.
+   *
+   * Chiquvchi oqimda to'lov keyinroq, anketadan so'ng so'raladi.
+   * Kiruvchida esa odam o'zi qidirib kelgan va qaror qilgan —
+   * uni ikkinchi marta kutishga majburlash keraksiz.
+   */
+  {
+    from: "article_decision",
+    intent: "yes",
+    to: "need_full_name",
+    templates: ["payment_details", "request_full_name_with_samples"],
+  },
+];
+
+const INBOUND_INDEX = new Map(
+  INBOUND_TRANSITIONS.map((t) => [`${t.from}|${t.intent}`, t]),
+);
+
+/**
+ * Bosqich va niyat bo'yicha o'tishni topadi.
+ *
+ * `entry` ATAYLAB ixtiyoriy va standarti "outbound": shu tufayli
+ * mavjud chaqiruvlar o'zgarishsiz ishlayveradi va kiruvchi yo'l
+ * faqat uni bilgan joydan yoqiladi.
+ */
 export function resolveTransition(
   stage: SalesStage,
   intent: ReplyIntent,
+  entry: ConversationEntry = "outbound",
 ): StageTransition | null {
+  if (entry === "inbound") {
+    const inbound = INBOUND_INDEX.get(`${stage}|${intent}`);
+    if (inbound) return inbound;
+  }
   return TRANSITION_INDEX.get(`${stage}|${intent}`) ?? null;
 }
 

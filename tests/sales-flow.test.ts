@@ -155,12 +155,23 @@ test("jins otasining ismidan aniqlanadi, aniqlanmasa NULL", () => {
 /* ========================= 4. AYNAN SHABLONLAR ========================== */
 
 test("shablonlar migratsiya seed'i bilan HARFMA-HARF bir xil", () => {
-  // Ikki manba ajralib ketsa, bazadagi matn koddagisidan farq qilardi
-  // va "aynan yuborilsin" talabi jimgina buzilardi.
-  const sql = readFileSync(
-    join(ROOT, "supabase/migrations/20260907200000_sales_flow_v02.sql"),
-    "utf8",
-  );
+  /*
+   * Ikki manba ajralib ketsa, bazadagi matn koddagisidan farq
+   * qilardi va "aynan yuborilsin" talabi jimgina buzilardi.
+   *
+   * BARCHA migratsiyalar o'qiladi, bittasi emas: yangi shablon
+   * yangi migratsiyada seed qilinadi — qo'llangan migratsiyani
+   * tahrirlash mumkin emas. Avval bu test bitta faylga
+   * qaragani uchun yangi shablon qo'shilganda yiqilardi,
+   * holbuki seed joyida edi.
+   */
+  const dir = join(ROOT, "supabase/migrations");
+  const sql = readdirSync(dir)
+    .filter((name) => name.endsWith(".sql"))
+    .map((name) => readFileSync(join(dir, name), "utf8"))
+    .filter((text) => text.includes("sales_message_templates"))
+    .join("\n");
+
   for (const template of SALES_TEMPLATES) {
     assert.ok(sql.includes(`$tpl$${template.body}$tpl$`), `seed'da yo‘q yoki farq qiladi: ${template.key}`);
     assert.ok(sql.includes(`('${template.key}',`), `kalit seed'da yo‘q: ${template.key}`);

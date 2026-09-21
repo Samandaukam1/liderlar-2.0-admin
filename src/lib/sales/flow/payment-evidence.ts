@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { INTAKE_BUCKET } from "@/lib/intake/constants";
 import { getSalesFileUrl } from "../telegram-sales-api.ts";
+import { alertCoordinatorsOnPayment } from "./coordinator-alert.ts";
 
 /**
  * TO'LOV CHEKI (skrinshot / PDF).
@@ -105,6 +106,32 @@ export async function recordPaymentEvidence(
     .update({ payment_status: "evidence_received" })
     .eq("id", input.conversationId)
     .neq("payment_status", "paid");
+
+  /*
+   * KOORDINATORGA XABAR.
+   *
+   * Chek kelgani odam aralashuvi kerak bo'lgan lahza. Xabar
+   * yetmasa ham oqim to'xtamaydi: yozuv bazada qoladi va
+   * admin uni panelda ko'radi. Shuning uchun xato yutiladi,
+   * lekin log'ga tushadi.
+   */
+  try {
+    const { data: conversation } = await admin
+      .from("sales_conversations")
+      .select("customer_full_name")
+      .eq("id", input.conversationId)
+      .maybeSingle();
+
+    await alertCoordinatorsOnPayment({
+      conversationId: input.conversationId,
+      customerName: (conversation?.customer_full_name as string | null) ?? null,
+    });
+  } catch (err) {
+    console.error(
+      "COORDINATOR_ALERT_THREW",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 
   return {
     ok: true,

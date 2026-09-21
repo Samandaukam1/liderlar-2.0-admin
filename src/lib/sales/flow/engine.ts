@@ -17,6 +17,7 @@ import {
   isForwardTransition,
   isSalesStage,
   resolveTransition,
+  type ConversationEntry,
   TERMINAL_STAGES,
   type ReplyIntent,
   type SalesStage,
@@ -135,6 +136,12 @@ interface FlowConversation {
   greetedAt: string | null;
   greetingSessionStartedAt: string | null;
   humanRequiredAt: string | null;
+  /*
+   * Suhbatni kim boshlagan. Bu ssenariyning BOSHLANISHINI
+   * belgilaydi: o'zi yozgan odamga "Siz ariza qoldirgansiz,
+   * shunaqami?" deb so'rash xato bo'lardi.
+   */
+  entry: ConversationEntry;
 }
 
 async function loadConversation(conversationId: string): Promise<FlowConversation | null> {
@@ -145,7 +152,7 @@ async function loadConversation(conversationId: string): Promise<FlowConversatio
       "id, business_connection_id, chat_id, sales_stage, ai_enabled, customer_full_name, " +
         "intake_id, payment_status, objections, lead_score, lead_score_reasons, " +
         "lead_temperature, opted_out_at, is_minor, rollout_bucket, " +
-        "memory, greeted_at, greeting_session_started_at, human_required_at",
+        "memory, greeted_at, greeting_session_started_at, human_required_at, entry",
     )
     .eq("id", conversationId)
     .maybeSingle();
@@ -182,6 +189,14 @@ async function loadConversation(conversationId: string): Promise<FlowConversatio
     greetedAt: (row.greeted_at as string | null) ?? null,
     greetingSessionStartedAt: (row.greeting_session_started_at as string | null) ?? null,
     humanRequiredAt: (row.human_required_at as string | null) ?? null,
+    /*
+     * Noma'lum qiymat "outbound" deb qabul qilinadi.
+     *
+     * Yangi xulqni taxminga asoslab yoqish, eskisini
+     * qoldirishdan xavfliroq: noto'g'ri ssenariy mijozga
+     * darhol ko'rinadi.
+     */
+    entry: row.entry === "inbound" ? "inbound" : "outbound",
   };
 }
 
@@ -817,7 +832,7 @@ async function runFlow(input: HandleMessageInput): Promise<FlowRunResult | null>
   result.intent = intent;
 
   /* ---------------------------- o‘tish qidirish -------------------------- */
-  const transition = resolveTransition(conversation.stage, intent);
+  const transition = resolveTransition(conversation.stage, intent, conversation.entry);
 
   if (!transition) {
     // Ssenariyda javobi yo'q — bilim bazasidan javob beramiz.
