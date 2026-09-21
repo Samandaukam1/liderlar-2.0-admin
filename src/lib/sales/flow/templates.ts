@@ -60,7 +60,9 @@ Bizda homiylar yo'q tushuning — bu narx ichiga maqolani texnik jihatdan ta'min
 
 LEKIN HOZIRDA SIZ PROMO KODDAN FOYDALANGANSIZ VA MEGA CHEGIRMA AMAL QILMOQDA VA KIRISH BADALI ATIGA 38 MING SO'M.
 
-Bunday narx hech qayerda hech qachon bo'lmagan. Shunday ekan chegirmaga ulguring.
+Bunday narx hech qayerda hech qachon bo'lmagan.
+
+Men siz uchun chegirmani alohida so'rab beraman — iloji bo'lsa va ruxsat berishsa, shu chegirma siz uchun amal qiladi.
 
 Undan keyin esa batafsil tanishib chiqing va ayting.`,
   },

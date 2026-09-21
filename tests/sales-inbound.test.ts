@@ -233,3 +233,74 @@ test("ism Telegram HTML ni buzmaydi", () => {
   assert.match(code, /function escapeHtml/);
   assert.match(code, /escapeHtml\(name\)/);
 });
+
+// ---------------------------------------------------------------
+// CHIQARISH BOSQICHI — JIM QOLISHNI OGOHLANTIRISH
+// ---------------------------------------------------------------
+
+test("bo'sh ro'yxat bilan saqlash JIM QOLISHNI aytadi", () => {
+  /*
+   * "Tanlangan chatlar" ro'yxat bo'sh bo'lsa ham muvaffaqiyatli
+   * saqlanadi va bot HECH KIMGA javob bermaydi. Admin esa
+   * "yoqdim" deb o'ylab yuradi va nima uchun ishlamayotganini
+   * topa olmaydi — xato hech qayerda chiqmaydi.
+   */
+  const code = src("src/lib/actions/sales.ts");
+  const fn = code.match(/export async function saveSalesRolloutAction\([\s\S]*?\n\}/)?.[0] ?? "";
+
+  assert.ok(fn.length > 0, "action topilmadi");
+  assert.match(fn, /mode === "allowlist" && parsed\.data\.allowlistChatIds\.length === 0/);
+  assert.match(fn, /hech kimga javob bermaydi/);
+
+  // Foiz 0 ham xuddi shunday jim qoldiradi.
+  assert.match(fn, /mode === "percentage" && parsed\.data\.percentage === 0/);
+});
+
+test("saqlash RAD ETILMAYDI — ro'yxatni keyin to'ldirish mumkin", () => {
+  /*
+   * Rad etish admin'ni "avval id top, keyin rejimni o'zgartir"
+   * degan aylanmaga soladi. Ogohlantirish yetarli.
+   */
+  const code = src("src/lib/actions/sales.ts");
+  const fn = code.match(/export async function saveSalesRolloutAction\([\s\S]*?\n\}/)?.[0] ?? "";
+
+  const warning = fn.match(/allowlistChatIds\.length === 0\) \{[\s\S]*?\n  \}/)?.[0] ?? "";
+  assert.ok(warning.length > 0);
+  assert.match(warning, /ok: true/);
+});
+
+test("ro'yxatga qo'shish IDEMPOTENT", () => {
+  const code = src("src/lib/actions/sales.ts");
+  const fn = code.match(/export async function addChatToAllowlistAction\([\s\S]*?\n\}/)?.[0] ?? "";
+
+  assert.ok(fn.length > 0, "action topilmadi");
+  assert.match(fn, /current\.includes\(parsed\.data\.chatId\)/);
+  assert.match(fn, /allaqachon ro'yxatda/);
+});
+
+test("ro'yxatga qo'shish ruxsatni tekshiradi", () => {
+  const code = src("src/lib/actions/sales.ts");
+  const fn = code.match(/export async function addChatToAllowlistAction\([\s\S]*?\n\}/)?.[0] ?? "";
+
+  assert.match(fn, /requirePermission\("sales\.manage"\)/);
+});
+
+test("noto'g'ri rejimda qo'shilsa — buni ochiq aytadi", () => {
+  /*
+   * Ro'yxat faqat "Tanlangan chatlar" rejimida ishlaydi.
+   * Boshqa rejimda qo'shish o'z-o'zidan hech nima bermaydi va
+   * admin "qo'shdim, nega ishlamaydi?" deb qolardi.
+   */
+  const code = src("src/lib/actions/sales.ts");
+  const fn = code.match(/export async function addChatToAllowlistAction\([\s\S]*?\n\}/)?.[0] ?? "";
+
+  assert.match(fn, /mode === "allowlist"/);
+  assert.match(fn, /faqat «Tanlangan chatlar» rejimida ishlaydi/);
+});
+
+test("forma tanlash paytida ogohlantiradi", () => {
+  const code = src("src/app/(admin)/ai-sotuv/sozlamalar/settings-forms.tsx");
+
+  assert.match(code, /selected === "allowlist" && allowlistChatIds\.length === 0/);
+  assert.match(code, /selected === "percentage" && percentage === 0/);
+});

@@ -10,6 +10,8 @@ import { hasPermission } from "@/lib/permissions";
 import { FlowControls } from "./flow-controls";
 import { LEARNING_STATUS_LABELS } from "@/lib/sales/types";
 import { formatDate, cn } from "@/lib/utils";
+import { getSalesSettings } from "@/lib/sales/settings";
+import { AllowlistButton } from "./allowlist-button";
 
 export const metadata = { title: "AI Sotuv — Suhbat" };
 export const dynamic = "force-dynamic";
@@ -31,9 +33,15 @@ export default async function SalesConversationPage({
   const canManage = hasPermission(ctx.roles, "sales.manage");
   const { id } = await params;
 
-  const [conversation, flow] = await Promise.all([
+  const [conversation, flow, salesSettings] = await Promise.all([
     getConversationDetail(id),
     getConversationFlowState(id),
+    /*
+     * Rollout sozlamasi shu yerda kerak: "ro'yxatga qo'shish"
+     * tugmasi allaqachon qo'shilganini bilib turishi kerak,
+     * aks holda admin har safar bosib ko'rardi.
+     */
+    getSalesSettings(),
   ]);
   if (!conversation) notFound();
 
@@ -52,12 +60,22 @@ export default async function SalesConversationPage({
           { label: conversation.contactName },
         ]}
         actions={
-          <Link
-            href="/ai-sotuv/suhbatlar"
-            className="inline-flex items-center gap-1.5 text-sm font-semibold text-ink-soft hover:text-ink"
-          >
-            <ArrowLeft className="h-4 w-4" /> Ro‘yxatga
-          </Link>
+          <span className="flex flex-wrap items-center gap-2">
+            {canManage && (
+              <AllowlistButton
+                chatId={conversation.chatId}
+                alreadyListed={salesSettings.rollout.allowlistChatIds.includes(
+                  conversation.chatId,
+                )}
+              />
+            )}
+            <Link
+              href="/ai-sotuv/suhbatlar"
+              className="inline-flex items-center gap-1.5 text-sm font-semibold text-ink-soft hover:text-ink"
+            >
+              <ArrowLeft className="h-4 w-4" /> Ro‘yxatga
+            </Link>
+          </span>
         }
       />
 

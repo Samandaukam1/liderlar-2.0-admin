@@ -280,6 +280,28 @@ export function RolloutForm({
         ))}
       </div>
 
+      {/*
+        JIM QOLISH OGOHLANTIRISHI.
+        
+        "Tanlangan chatlar" ro'yxat bo'sh bo'lsa ham saqlanadi va
+        bot hech kimga javob bermaydi. Admin esa "yoqdim" deb
+        o'ylab yuradi — xato hech qayerda chiqmaydi. Shuning
+        uchun oqibat TANLASH PAYTIDA ko'rinadi.
+      */}
+      {selected === "allowlist" && allowlistChatIds.length === 0 && (
+        <p className="mt-3 rounded-card border border-amber/50 bg-amber/10 p-3 text-xs font-semibold text-[#946a10]">
+          Ro‘yxat bo‘sh — bu rejimda bot <strong>hech kimga</strong> javob bermaydi.
+          Chat id’ni suhbat sahifasidagi «Ro‘yxatga qo‘shish» tugmasi orqali
+          qo‘shish qulayroq.
+        </p>
+      )}
+
+      {selected === "percentage" && percentage === 0 && (
+        <p className="mt-3 rounded-card border border-amber/50 bg-amber/10 p-3 text-xs font-semibold text-[#946a10]">
+          Foiz 0 — bu rejimda bot <strong>hech kimga</strong> javob bermaydi.
+        </p>
+      )}
+
       <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <Label htmlFor="allowlistChatIds">Tanlangan chat id’lari</Label>

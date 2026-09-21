@@ -848,7 +848,106 @@ export async function saveSalesRolloutAction(formData: FormData): Promise<SalesA
   });
 
   revalidateSales();
+
+  /*
+   * JIM QOLISH — ENG CHALG'ITUVCHI NOSOZLIK.
+   *
+   * "Tanlangan chatlar" rejimi ro'yxat bo'sh bo'lsa ham
+   * muvaffaqiyatli saqlanadi va bot HECH KIMGA javob bermaydi.
+   * Admin esa "yoqdim" deb o'ylab yuradi va nima uchun
+   * ishlamayotganini topa olmaydi — xato hech qayerda
+   * chiqmaydi.
+   *
+   * Saqlashni rad etmaymiz: ro'yxatni keyin to'ldirish
+   * mumkin. Lekin oqibatni OCHIQ aytamiz.
+   */
+  if (parsed.data.mode === "allowlist" && parsed.data.allowlistChatIds.length === 0) {
+    return {
+      ok: true,
+      message:
+        "Saqlandi, lekin ro'yxat BO'SH — bot hozir hech kimga javob bermaydi. " +
+        "Suhbat sahifasidagi «Ro'yxatga qo'shish» tugmasi orqali chat qo'shing.",
+    };
+  }
+
+  if (parsed.data.mode === "percentage" && parsed.data.percentage === 0) {
+    return {
+      ok: true,
+      message: "Saqlandi, lekin foiz 0 — bot hozir hech kimga javob bermaydi.",
+    };
+  }
+
   return { ok: true, message: `Chiqarish rejimi: ${ROLLOUT_MODE_LABELS[parsed.data.mode]}` };
+}
+
+const allowlistAddSchema = z.object({
+  chatId: z.number().int().refine((v) => v !== 0, "Chat id noto'g'ri."),
+});
+
+/**
+ * Suhbatni "tanlangan chatlar" ro'yxatiga qo'shadi.
+ *
+ * NEGA ALOHIDA AMAL: chat id faqat suhbat sahifasida
+ * ko'rinardi va uni sozlamalardagi matn maydoniga QO'LDA
+ * ko'chirish kerak edi. Bir raqamni ikki sahifa orasida
+ * ko'chirish — xato qilish uchun ideal joy, va xato jimgina
+ * "bot javob bermaydi" ga aylanardi.
+ *
+ * IDEMPOTENT: allaqachon ro'yxatda bo'lsa dublikat
+ * qo'shilmaydi.
+ */
+export async function addChatToAllowlistAction(chatId: number): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  const parsed = allowlistAddSchema.safeParse({ chatId });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Chat id noto'g'ri." };
+  }
+
+  const settings = await getSalesSettings();
+  const current = settings.rollout.allowlistChatIds;
+
+  if (current.includes(parsed.data.chatId)) {
+    return { ok: true, message: "Bu chat allaqachon ro'yxatda." };
+  }
+
+  const next = {
+    ...settings.rollout,
+    allowlistChatIds: [...current, parsed.data.chatId],
+  };
+
+  try {
+    await saveSalesSetting("rollout", next, ctx.userId);
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Saqlanmadi." };
+  }
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.settings.allowlist_add",
+    entityType: "sales_settings",
+    entityId: "rollout",
+    oldValue: { count: current.length },
+    newValue: { count: next.allowlistChatIds.length },
+    severity: "info",
+  });
+
+  revalidateSales();
+
+  /*
+   * Rejim "tanlangan chatlar" bo'lmasa, qo'shish o'z-o'zidan
+   * hech nima bermaydi. Buni ham ochiq aytamiz — aks holda
+   * admin "qo'shdim, nega ishlamaydi?" deb qolardi.
+   */
+  const note =
+    settings.rollout.mode === "allowlist"
+      ? ""
+      : ` Diqqat: hozirgi rejim «${ROLLOUT_MODE_LABELS[settings.rollout.mode]}» — ro'yxat faqat «Tanlangan chatlar» rejimida ishlaydi.`;
+
+  return {
+    ok: true,
+    message: `Ro'yxatga qo'shildi (${next.allowlistChatIds.length} ta).${note}`,
+  };
 }
 
 /**
