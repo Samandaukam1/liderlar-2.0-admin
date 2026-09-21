@@ -10,7 +10,7 @@
  * SOF MODUL.
  */
 
-import { normalizeForIntent } from "../text-normalize.ts";
+import { normalizeForIntent, normalizePhrase } from "../text-normalize.ts";
 
 /**
  * ANIQ iboralar.
@@ -47,7 +47,9 @@ export interface OptOutResult {
 }
 
 function contains(haystack: string, phrase: string): boolean {
-  const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Ibora ham matn bilan BIR XIL normalizatsiyadan o'tadi: kirill
+  // ro'yxat lotin matn bilan uchrashmay qolmasligi kerak.
+  const escaped = normalizePhrase(phrase).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escaped}(?:[^\\p{L}\\p{N}]|$)`, "u").test(haystack);
 }
 

@@ -23,6 +23,10 @@
     {
       "path": "/api/cron/monthly-links",
       "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/sales-gap-cleanup",
+      "schedule": "*/30 * * * *"
     }
   ]
 }

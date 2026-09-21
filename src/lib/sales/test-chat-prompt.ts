@@ -178,6 +178,33 @@ export function buildTestChatSystemPrompt(input: SystemPromptInput): string {
    */
   const rules = [
     UZBEK_ONLY_RULE,
+    /*
+     * KONTEKST BIRINCHI (3-band).
+     *
+     * Model qisqa xabarni YAKKA holda talqin qilib, suhbatni
+     * noldan boshlab yuborardi: mijoz anketani yuborgandan
+     * keyin "Assalomu alaykum, sizga qanday yordam beray?"
+     * javobi kelardi. Bu mijozning qadamini o'chirib tashlaydi.
+     */
+    "Javob yozishdan OLDIN suhbat tarixini o‘qi va mijozning hozirgi " +
+      "xabari NIMAGA ishora qilayotganini aniqla. “Mana”, “Yubordim”, " +
+      "“Qildim”, “Bo‘ldimi?”, “Qancha?” — bular oldingi gapga bog‘liq; " +
+      "ularni yakka holda talqin qilma.",
+    "Suhbatni davom ettir, qaytadan boshlama. Salomlashish allaqachon " +
+      "bo‘lgan bo‘lsa, qayta salomlashma va “sizga qanday yordam beray?” " +
+      "deb so‘rama — mijoz nima kutayotgani tarixdan ko‘rinib turibdi.",
+    /*
+     * VA'DA — HAQIQIY TOPSHIRIQQA BOG'LANGAN (12-band).
+     *
+     * Kod "yo'naltirdim" degan matnni topshiriq yaratilgandan
+     * KEYIN o'zi qo'yadi. Model bunday va'dani o'zi
+     * to'qimasligi kerak.
+     */
+    "“Aniqlab xabar beraman”, “tekshirib yozaman”, “sizga xabar beramiz” " +
+      "kabi kelajakdagi va’dani O‘ZING berma. Bilmasang, bilmasligingni ayt.",
+    "Bajarilganini tizim tasdiqlamagan ishni bajarilgan deb aytma: " +
+      "to‘lov tasdiqlangani, maqola chiqqani, ariza qabul bo‘lgani — " +
+      "bularni faqat tasdiqlangan ma’lumot asosida ayt.",
     "Yuqoridagi bilimda BO‘LMAGAN faktni aytma: narx, muddat, sana, foiz, " +
       "shart yoki kafolatni O‘YLAB TOPMA.",
     "Oldingi javoblarni so‘zma-so‘z ko‘chirma — mazmunni saqlab, tabiiy qayta yoz.",
@@ -190,10 +217,17 @@ export function buildTestChatSystemPrompt(input: SystemPromptInput): string {
 
   if (input.missingKnowledge) {
     // Bilim yo'q — bu holatda fakt aytishga URINISH ham xato bo'ladi.
+    /*
+     * ILGARI SHU YERDA "aniqlab, xabar beraman" DEB YOZISH
+     * BUYURILARDI — ya'ni yolg'on va'da modelga O'ZIMIZ
+     * aytardik. Orqada esa hech qanday topshiriq
+     * yaratilmasdi (12-band).
+     */
     rules.unshift(
       "MUHIM: bu savol bo‘yicha tasdiqlangan bilim yo‘q. HECH QANDAY aniq " +
-        "fakt aytma. Buning o‘rniga savolni aniqlashtir yoki “aniqlab, " +
-        "xabar beraman” deb javob ber.",
+        "fakt aytma va kelajakda xabar berishni VA’DA QILMA. Buning " +
+        "o‘rniga savolni aniqlashtir yoki bu ma’lumot sende yo‘qligini " +
+        "ochiq ayt.",
     );
   }
 

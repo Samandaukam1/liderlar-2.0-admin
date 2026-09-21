@@ -45,32 +45,43 @@ export const FALLBACK_REASON_LABELS: Record<FallbackReason, string> = {
 };
 
 /**
- * Bilim yetishmaganda.
+ * Bilim yetishmaganda — IKKI XIL MATN (12-band).
+ *
+ * MUAMMO: hamma variant "tekshirib xabar beraman" deb va'da
+ * berardi, lekin orqada HECH QANDAY topshiriq yaratilmasdi.
+ * Ya'ni bu va'da hech qachon bajarilmasdi — bu aldash.
+ *
+ * ENDI VA'DA TOPSHIRIQQA BOG'LANGAN: `escalated` true bo'lsa,
+ * `sales_case_escalations` ga yozuv haqiqatan tushgan va odam
+ * uni ko'radi. False bo'lsa — va'da umuman berilmaydi.
  *
  * HECH BIR VARIANTDA FAKT YO'Q: na narx, na muddat, na kafolat.
- * Har biri bitta ish qiladi — savolni odamga o'tkazishni va'da
- * qiladi va suhbatni ochiq qoldiradi.
  */
-const MISSING_KNOWLEDGE_VARIANTS: readonly string[] = [
-  "Bu masalada sizga noto‘g‘ri ma’lumot berib qo‘ymaslik uchun aniqlashtirib, " +
-    "qisqa vaqtda javob yozaman. Shu orada maqola jarayoni bo‘yicha savolingiz bo‘lsa, javob beraman.",
-  "Buni aniq aytishim uchun tekshirib ko‘rishim kerak — taxmin qilib aytmayman. " +
-    "Javobini yozib yuboraman. Boshqa savolingiz bormi?",
-  "Savolingizni oldim. Aniq javobini berish uchun hamkasbim bilan aniqlashtiraman, " +
-    "shundan keyin yozaman. Jarayonning qolgan qismi bo‘yicha yordam berib turaymi?",
+const MISSING_KNOWLEDGE_ESCALATED: readonly string[] = [
+  "Bu savolga taxmin qilib javob bermayman — so‘rovingizni mas’ul hamkasbimga " +
+    "yo‘naltirdim, u aniq javob beradi. Shu orada boshqa savolingiz bo‘lsa, yordam beraman.",
+  "Savolingizni mas’ul hamkasbimga yo‘naltirdim — aniq javobni u yozadi. " +
+    "Jarayonning qolgan qismi bo‘yicha yordam berib turaymi?",
+];
+
+const MISSING_KNOWLEDGE_PLAIN: readonly string[] = [
+  "Bu savolga shu yerdagi tasdiqlangan ma’lumotlardan aniq javob bera olmayman " +
+    "va taxmin qilib aytmayman. Savolingizni shu yerda qoldiring — javobsiz qolmaydi.",
+  "Buni aniq aytish uchun tasdiqlangan ma’lumot kerak, menda esa u yo‘q. " +
+    "Taxmin qilmayman. Boshqa savolingiz bo‘lsa, javob beraman.",
 ];
 
 /** Model raqam to'qiganda — javob YUBORILMAYDI, lekin jim ham qolinmaydi. */
 const UNSUPPORTED_NUMBER_VARIANTS: readonly string[] = [
   "Bu savolda aniq raqam muhim, shuning uchun xotiradan aytmayman — " +
-    "tasdiqlangan ma’lumotni tekshirib yozaman.",
-  "Raqamlar bo‘yicha xato qilmaslik uchun aniq ma’lumotni tekshirib, shu yerga yozaman.",
+    "tasdiqlanmagan raqamni aytish xato bo‘lardi.",
+  "Raqamlar bo‘yicha xato qilmaslik uchun tasdiqlanmagan qiymatni aytmayman.",
 ];
 
 /** Model yiqilganda — mijoz buni bilishi shart emas, lekin javobsiz qolmasin. */
 const GENERATION_FAILED_VARIANTS: readonly string[] = [
-  "Xabaringizni oldim. Javobni biroz aniqlashtirib yozaman.",
-  "Yozganingizni ko‘rdim, javobini tayyorlab yuboraman.",
+  "Xabaringizni oldim. Savolingizni qaytadan qisqaroq yozib yuborsangiz, javob beraman.",
+  "Yozganingizni ko‘rdim, lekin javobni tayyorlay olmadim. Qaytadan yozib yuboring.",
 ];
 
 /** Ssenariyda qadam yo'q, lekin suhbat davom etadi. */
@@ -92,6 +103,13 @@ export interface FallbackInput {
   previousFallbackCount: number;
   /** 18 dan kichik bo'lsa bosim o'tkazilmaydi. */
   isMinor?: boolean;
+  /**
+   * Odam topshirig'i HAQIQATAN yaratildimi.
+   *
+   * Faqat `true` bo'lganda "yo'naltirdim" deyiladi. Standart
+   * qiymat `false`: va'da tasodifan berilib qolmasin.
+   */
+  escalated?: boolean;
 }
 
 export interface FallbackReply {
@@ -122,7 +140,10 @@ export function buildFallback(input: FallbackInput): FallbackReply {
   switch (input.reason) {
     case "missing_knowledge":
     case "low_confidence":
-      body = pick(MISSING_KNOWLEDGE_VARIANTS, index);
+      body = pick(
+        input.escalated === true ? MISSING_KNOWLEDGE_ESCALATED : MISSING_KNOWLEDGE_PLAIN,
+        index,
+      );
       break;
     case "unsupported_numbers":
       body = pick(UNSUPPORTED_NUMBER_VARIANTS, index);

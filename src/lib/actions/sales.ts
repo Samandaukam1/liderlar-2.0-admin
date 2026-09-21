@@ -701,12 +701,33 @@ export async function answerKnowledgeGapAction(
   const admin = createSupabaseAdminClient();
   const { data: gap } = await admin
     .from("sales_knowledge_gaps")
-    .select("id, question, status")
+    .select("id, question, status, kind, classification")
     .eq("id", parsed.data.gapId)
     .maybeSingle();
 
   if (!gap) return { ok: false, error: "Savol topilmadi." };
   if (gap.status === "answered") return { ok: false, error: "Bu savolga allaqachon javob berilgan." };
+
+  /*
+   * SHAXSIY JAVOB GLOBAL BILIMGA AYLANMAYDI (8-band).
+   *
+   * "Bo'ldimi?" savoliga "Ha, maqolangiz tayyor" deb javob
+   * yozilsa va u bilim bazasiga tushsa, KEYINGI mijoz ham
+   * shu javobni olardi — maqolasi tayyor bo'lmasa ham.
+   *
+   * Taqiq KODDA turadi, faqat interfeysda emas: tugmani
+   * yashirish yetarli emas, chunki amal to'g'ridan-to'g'ri
+   * chaqirilishi mumkin.
+   */
+  if (gap.kind === "case") {
+    return {
+      ok: false,
+      error:
+        "Bu shaxsiy holat savoli — javobi aynan shu mijozga tegishli. " +
+        "Uni bilim bazasiga qo‘shib bo‘lmaydi: keyingi mijoz ham shu javobni olardi. " +
+        "«Odam kerak» bo‘limidan holatni yoping.",
+    };
+  }
 
   // Qo'lda yozilgan javob ham redaksiyadan o'tadi: admin xom
   // yozishmadan telefon yoki karta raqamini nusxalab qo'yishi mumkin.
@@ -1378,4 +1399,113 @@ export async function reviewObjectionAction(formData: FormData): Promise<SalesAc
 
   revalidateSales();
   return { ok: true, message: decision === "approve" ? "Strategiya tasdiqlandi." : "Rad etildi." };
+}
+
+/* --------------------- javobsiz savollarni tozalash ---------------------- */
+
+/**
+ * Tarixiy navbatni tasniflab, savol bo'lmaganlarini arxivlaydi.
+ *
+ * O'CHIRMAYDI. Har yozuv joyida qoladi, faqat holati
+ * `archived` ga o'tadi va eskisi `previous_status` da saqlanadi
+ * (38-band).
+ */
+export async function runGapCleanupAction(): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  const { reclassifyKnowledgeGaps } = await import("@/lib/sales/gaps/reclassify-service");
+  const result = await reclassifyKnowledgeGaps({ actorId: ctx.userId, note: "panel" });
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.knowledge_gap.cleanup",
+    entityType: "sales_knowledge_gaps",
+    entityId: result.runId ?? "cleanup",
+    newValue: { scanned: result.scanned, archived: result.archived, counts: result.counts },
+    severity: "warning",
+  });
+
+  revalidateSales();
+
+  if (result.error) return { ok: false, error: result.error };
+  if (result.scanned === 0) {
+    return { ok: true, message: "Tasniflanmagan yozuv qolmadi — navbat toza." };
+  }
+
+  return {
+    ok: true,
+    message:
+      `${result.scanned} ta yozuv tasniflandi, ${result.archived} tasi arxivga o‘tdi. ` +
+      `Haqiqiy savol: ${result.counts.real_knowledge_gap}, shaxsiy holat: ${result.counts.case_specific}.`,
+  };
+}
+
+/** Tozalashni qaytaradi — arxivlangan yozuvlar navbatga qaytadi. */
+export async function undoGapCleanupAction(): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  const { undoReclassification } = await import("@/lib/sales/gaps/reclassify-service");
+  const { restored } = await undoReclassification();
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "sales.knowledge_gap.cleanup_undo",
+    entityType: "sales_knowledge_gaps",
+    entityId: "cleanup",
+    newValue: { restored },
+    severity: "warning",
+  });
+
+  revalidateSales();
+  return { ok: true, message: `${restored} ta yozuv navbatga qaytarildi.` };
+}
+
+/* ---------------------------- odam topshiriqlari -------------------------- */
+
+const resolveEscalationSchema = z.object({
+  escalationId: z.string().uuid(),
+  resolution: z.string().trim().max(2000).optional(),
+  dismiss: z.boolean().optional(),
+});
+
+/** Topshiriqni yopadi. Bilim bazasiga HECH NARSA tushmaydi. */
+export async function resolveEscalationAction(
+  formData: FormData,
+): Promise<SalesActionResult> {
+  const ctx = await requirePermission("sales.manage");
+
+  const parsed = resolveEscalationSchema.safeParse({
+    escalationId: formData.get("escalationId"),
+    resolution: formData.get("resolution") ?? undefined,
+    dismiss: formData.get("dismiss") === "1",
+  });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Forma xatosi" };
+  }
+
+  const admin = createSupabaseAdminClient();
+  const { error } = await admin
+    .from("sales_case_escalations")
+    .update({
+      status: parsed.data.dismiss ? "dismissed" : "resolved",
+      resolved_at: new Date().toISOString(),
+      resolved_by: ctx.userId,
+      resolution: parsed.data.resolution?.slice(0, 2000) ?? null,
+    })
+    .eq("id", parsed.data.escalationId)
+    .eq("status", "open");
+
+  if (error) return { ok: false, error: error.message };
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: parsed.data.dismiss
+      ? "sales.escalation.dismissed"
+      : "sales.escalation.resolved",
+    entityType: "sales_case_escalations",
+    entityId: parsed.data.escalationId,
+  });
+
+  revalidateSales();
+  return { ok: true, message: parsed.data.dismiss ? "Yopildi." : "Hal qilindi." };
 }

@@ -317,7 +317,44 @@ test("bilim yo‘qligida promt FAKT AYTISHNI taqiqlaydi", () => {
   });
   assert.match(prompt, /tasdiqlangan bilim YO‘Q/);
   assert.match(prompt, /HECH QANDAY aniq fakt aytma/);
-  assert.match(prompt, /aniqlab, xabar beraman/);
+
+  /*
+   * ILGARI BU YERDA "aniqlab, xabar beraman" DEB YOZISH
+   * BUYURILARDI.
+   *
+   * Ya'ni yolg'on va'dani modelga o'zimiz aytardik: orqada
+   * hech qanday topshiriq yaratilmasdi va hech kim
+   * qaytib yozmasdi (12-band). Endi va'da matnini kod
+   * o'zi, topshiriq YARATILGANDAN keyin qo'yadi.
+   */
+  /*
+   * Eski ko'rsatma: «…yoki “aniqlab, xabar beraman” deb javob
+   * ber». Bu iboralar promtda hali ham uchraydi, lekin endi
+   * FAQAT taqiq ichida — "bunday deb yozma" ma'nosida.
+   */
+  assert.ok(
+    !/xabar beraman[”"]? deb javob ber/.test(prompt),
+    "promt hali ham modelga va'da berishni buyuryapti",
+  );
+  assert.match(prompt, /va’dani O‘ZING berma/);
+  assert.match(prompt, /VA’DA QILMA/);
+});
+
+test("promt KONTEKSTNI o‘qishni talab qiladi", () => {
+  /*
+   * Qisqa xabarni yakka holda talqin qilish — asosiy
+   * nosozlik edi: "Yubordim" ga bot "Assalomu alaykum,
+   * sizga qanday yordam beray?" deb javob qaytarardi.
+   */
+  const prompt = buildTestChatSystemPrompt({
+    knowledge: [],
+    patterns: [],
+    style: null,
+    missingKnowledge: false,
+  });
+  assert.match(prompt, /suhbat tarixini o‘qi/);
+  assert.match(prompt, /qaytadan boshlama/);
+  assert.match(prompt, /Yubordim/);
 });
 
 test("ishonch retrieval kuchidan hisoblanadi", () => {

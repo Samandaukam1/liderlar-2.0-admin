@@ -32,7 +32,21 @@ import { detectOptOut, OPT_OUT_REPLY } from "./optout.ts";
 import { detectHandoff, buildHandoffSummary, type HandoffTrigger } from "./handoff.ts";
 import { detectMinor } from "./minor.ts";
 import { canDetectReferral, detectReferral, mentionsMoney } from "./referral.ts";
-import { buildFallback, isFillerMessage, type FallbackReason } from "./fallback.ts";
+import {
+  classifyMessageIntent,
+  pendingActionForStage,
+  type IntentResult,
+} from "./message-intent.ts";
+import { decideKnowledgeGap } from "./knowledge-gap-gate.ts";
+import { buildConversationalReply } from "./conversational-reply.ts";
+import { answerStatusQuestion, paymentStateFromColumn } from "./status-answer.ts";
+import {
+  categoryForObject,
+  createCaseEscalation,
+  escalationAcknowledgement,
+  NO_ESCALATION_REPLY,
+} from "./case-escalation.ts";
+import { buildFallback, type FallbackReason } from "./fallback.ts";
 import { newRolloutBucket, type RolloutSettings } from "./rollout.ts";
 import { normalizeForMatch } from "../text-normalize.ts";
 import { buildCorrectionInstruction, checkReplyQuality } from "./reply-quality.ts";
@@ -269,6 +283,13 @@ export interface FlowRunResult {
 interface SendContext {
   conversation: FlowConversation;
   stage: SalesStage;
+  /**
+   * Joriy xabarning turi (text, photo, document...).
+   *
+   * Niyat aniqlashda kerak: "Mana" so'zining ma'nosi rasm
+   * biriktirilganiga qarab butunlay o'zgaradi (27-band).
+   */
+  currentMessageType: string;
   autoReplyEnabled: boolean;
   connectionEnabled: boolean;
   connectionCanReply: boolean;
@@ -766,6 +787,7 @@ async function runFlowSteps(input: HandleMessageInput): Promise<FlowRunResult | 
     simulated,
     rollout: settings.rollout,
     currentMessageId: input.messageId,
+    currentMessageType: input.messageType ?? "text",
     result,
   };
 
@@ -1197,6 +1219,56 @@ async function answerFromKnowledge(
 ): Promise<void> {
   const trimmed = question.trim();
 
+  /* ===================================================================== *
+   * QATLAM 1 — BU XABAR UMUMAN SAVOLMI? (2-band)
+   *
+   * ILDIZ SABAB shu yerda edi: bu tekshiruv YO'Q edi. Har qanday
+   * xabar to'g'ridan-to'g'ri bilim bazasiga borardi, bilim
+   * topilmasdi va savol "Javobsiz savollar" ga yozilardi. Shu
+   * tufayli u yerga "Hop", "Rahmat", ".", odam ismlari tushdi.
+   *
+   * Tasniflash SOF va ARZON: "Rahmat" uchun model chaqirilmaydi
+   * (36-band).
+   * ===================================================================== */
+  const pendingAction = pendingActionForStage(context.stage);
+  const intent = classifyMessageIntent(trimmed, {
+    stage: context.stage,
+    pendingUserAction: pendingAction,
+    hasAttachment: isPaymentEvidenceType(context.currentMessageType),
+    hasHistory:
+      context.conversation.greetedAt != null || context.result.stageBefore !== "new",
+  });
+  context.result.notes.push(`niyat: ${intent.intent} (${intent.matched ?? "—"})`);
+
+  /* --------- QATLAM 2 — oddiy muloqot: bilim ham, model ham yo'q ------- */
+  if (!intent.needsKnowledge && !intent.needsSystemState) {
+    const reply = buildConversationalReply({
+      intent: intent.intent,
+      pendingUserAction: pendingAction,
+      hasHistory: context.conversation.greetedAt != null,
+      alreadyGreeted: context.conversation.greetedAt != null,
+    });
+
+    if (reply) {
+      await send(context, {
+        body: reply,
+        kind: "knowledge_reply",
+        templateKey: null,
+        expectedStages: [],
+      });
+    } else {
+      // "." ga javob yozish suhbatni g'alati qiladi.
+      context.result.notes.push("mazmunsiz xabar — javob yozilmadi");
+    }
+    return;
+  }
+
+  /* ------- QATLAM 3 — holat savoli: javob MIJOZNING yozuvidan -------- */
+  if (intent.needsSystemState) {
+    await answerFromSystemState(context, intent, trimmed);
+    return;
+  }
+
   /*
    * KANONIK FOYDALAR MATNI (12-band).
    *
@@ -1224,19 +1296,12 @@ async function answerFromKnowledge(
     context.result.notes.push("kanonik foydalar allaqachon yuborilgan — qisqa javob");
   }
 
-  // Matnsiz xabar (stiker, ovozli). Bilim qidirishning ma'nosi yo'q,
-  // lekin javobsiz qoldirish ham mumkin emas.
-  if (trimmed === "") {
-    await sendFallback(context, "unclear_message");
-    return;
-  }
-
-  // "xa", "ok", "hmm" — bu javob, lekin mazmunsiz. Bilim bazasiga
-  // yuborish tokenni behuda sarflaydi va baribir javob topilmaydi.
-  if (isFillerMessage(trimmed)) {
-    await sendFallback(context, "unclear_message");
-    return;
-  }
+  /*
+   * Eski `isFillerMessage` darvozasi shu yerda turardi. U yigirmata
+   * aniq so'zdan iborat edi va "hop", "rahmat", "tanishib chiqdim",
+   * "хоп", "." — hech birini tutmasdi. Endi uning o'rnida
+   * muloqot niyati qatlami turibdi (2-band).
+   */
 
   const timeline = await loadRecentHistory(
     context.conversation.id,
@@ -1332,11 +1397,16 @@ async function answerFromKnowledge(
   }
 
   if (reply.diagnostics.missingKnowledge) {
-    // Savol YOZIB QO'YILADI: har javobsiz savol keyingi bilim
-    // bazasining bir qatori (25-band).
-    await recordKnowledgeGap(context.conversation.id, trimmed, reply.reply);
+    /*
+     * DARVOZA (6-band): bo'shliq YOZILISHI shart emas.
+     *
+     * Bu yerga faqat bilim savollari yetib keladi, lekin
+     * ular ham har doim qayta ishlatiladigan bo'shliq emas.
+     */
+    const gap = await recordGapIfGenuine(context, intent, trimmed, reply.reply);
     context.result.notes.push("MISSING_KNOWLEDGE — fallback yuborildi");
-    await sendFallback(context, "missing_knowledge");
+    // Va'da FAQAT topshiriq yaratilgan bo'lsa beriladi (12-band).
+    await sendFallback(context, "missing_knowledge", gap.escalated);
     return;
   }
 
@@ -1344,7 +1414,7 @@ async function answerFromKnowledge(
     context.result.notes.push(
       `javobda manbada yo‘q son (${reply.diagnostics.unsupportedNumbers.join(", ")})`,
     );
-    await recordKnowledgeGap(context.conversation.id, trimmed, reply.reply);
+    await recordGapIfGenuine(context, intent, trimmed, reply.reply);
     await sendFallback(context, "unsupported_numbers");
     return;
   }
@@ -1487,13 +1557,18 @@ async function answerFromKnowledge(
  * suhbat odamga o'tadi. "Tekshirib yozaman" degan va'dani cheksiz
  * takrorlash aldashdan farq qilmaydi.
  */
-async function sendFallback(context: SendContext, reason: FallbackReason): Promise<void> {
+async function sendFallback(
+  context: SendContext,
+  reason: FallbackReason,
+  escalated = false,
+): Promise<void> {
   const previous = await countFallbacks(context.conversation.id);
   const fallback = buildFallback({
     reason,
     stage: context.stage,
     previousFallbackCount: previous,
     isMinor: context.conversation.isMinor,
+    escalated,
   });
 
   await send(context, {
@@ -1599,6 +1674,138 @@ async function listExplainedTopics(conversationId: string): Promise<string[]> {
 /* --------------------------- bilim bo'shliqlari -------------------------- */
 
 /**
+ * HOLAT SAVOLIGA JAVOB — TASDIQLANGAN YOZUVDAN (28-band).
+ *
+ * "To'lovim tushdimi?" degan savolning javobi bilim bazasida
+ * yo'q va bo'lishi ham kerak emas. Tizim bilsa — aytadi;
+ * bilmasa — TAXMIN QILMAYDI, odamga topshiriq yaratadi.
+ */
+async function answerFromSystemState(
+  context: SendContext,
+  intent: IntentResult,
+  question: string,
+): Promise<void> {
+  const status = answerStatusQuestion(intent.referencedObject, {
+    /*
+     * JADVAL USTUNI — XOTIRA EMAS.
+     *
+     * Xotiradagi `paymentStatus` modelning xulosasi bo'lishi
+     * mumkin; jadval ustuni esa chek kelgani va admin
+     * tasdiqlaganidan yoziladi (16-band).
+     */
+    payment: paymentStateFromColumn(context.conversation.paymentStatus),
+    intakeCreated: context.conversation.intakeId != null,
+    intake: context.conversation.memory.intakeStatus,
+  });
+
+  if (status.answer) {
+    context.result.notes.push(`holat javobi: ${intent.referencedObject}`);
+    await send(context, {
+      body: status.answer,
+      kind: "knowledge_reply",
+      templateKey: null,
+      expectedStages: [],
+    });
+    return;
+  }
+
+  /*
+   * TASDIQLANGAN JAVOB YO'Q — ODAMGA TOPSHIRIQ.
+   *
+   * Bu savol bilim bo'shlig'i EMAS (7-band): javob har
+   * mijozda boshqacha. Uni bilim bazasiga yozish keyingi
+   * mijozga noto'g'ri javob berilishiga olib kelardi.
+   */
+  const category = categoryForObject(intent.referencedObject);
+  const escalation = await createCaseEscalation({
+    conversationId: context.conversation.id,
+    messageId: context.currentMessageId,
+    category,
+    question,
+    reason: status.reason || "mijozning holati tizimdan aniqlanmadi",
+    contextSummary: `Bosqich: ${context.stage}. To'lov: ${context.conversation.paymentStatus}.`,
+  });
+
+  /*
+   * VA'DA FAQAT TOPSHIRIQ YARATILGANDAN KEYIN (12-band).
+   *
+   * Ilgari bot har holatda "tekshirib xabar beraman" derdi va
+   * orqada hech narsa yaratilmasdi — ya'ni va'da bajarilmasdi.
+   */
+  const body = escalation.created
+    ? escalationAcknowledgement(category)
+    : NO_ESCALATION_REPLY;
+
+  context.result.notes.push(
+    escalation.created
+      ? `topshiriq yaratildi: ${category}${escalation.duplicate ? " (ochiq topshiriq bor edi)" : ""}`
+      : "topshiriq YARATILMADI — va'da berilmadi",
+  );
+
+  await send(context, {
+    body,
+    kind: "knowledge_reply",
+    templateKey: null,
+    expectedStages: [],
+  });
+}
+
+/**
+ * Bo'shliqni FAQAT haqiqiy bo'lsa yozadi (6-band).
+ *
+ * Darvoza sof modulda; bu yerda faqat qarorning bajarilishi.
+ */
+async function recordGapIfGenuine(
+  context: SendContext,
+  intent: IntentResult,
+  question: string,
+  aiFallback: string | null,
+): Promise<{ escalated: boolean }> {
+  const gate = decideKnowledgeGap({
+    intent,
+    modelFoundNoKnowledge: true,
+    text: question,
+    // Model tarixni ko'rib turib bilim topmadi — demak suhbatda
+    // ham javob yo'q edi.
+    answeredInConversation: false,
+  });
+
+  context.result.notes.push(`bo‘shliq qarori: ${gate.decision} (${gate.reason})`);
+
+  if (gate.decision === "none") return { escalated: false };
+
+  if (gate.decision === "knowledge_gap") {
+    await recordKnowledgeGap(context.conversation.id, question, aiFallback, intent);
+  }
+
+  /*
+   * MIJOZ HAM JAVOBSIZ QOLMASLIGI KERAK.
+   *
+   * Bilim bo'shlig'i ro'yxati — BIZNING ichki navbatimiz; u
+   * mijozga javob bermaydi. Shuning uchun haqiqiy savol
+   * kelganda odam uchun ham topshiriq yaratiladi va bot
+   * "yo'naltirdim" deyishga aynan shundan keyin haqli
+   * bo'ladi (12-band).
+   *
+   * Ro'yxat shishib ketmaydi: bir suhbatda bir turdagi OCHIQ
+   * topshiriq bitta bo'ladi (qisman unikal indeks).
+   */
+  const escalation = await createCaseEscalation({
+    conversationId: context.conversation.id,
+    messageId: context.currentMessageId,
+    category:
+      gate.decision === "knowledge_gap"
+        ? "unknown_business_fact"
+        : categoryForObject(intent.referencedObject),
+    question,
+    reason: gate.reason,
+    contextSummary: `Bosqich: ${context.stage}.`,
+  });
+
+  return { escalated: escalation.created };
+}
+
+/**
  * Javobsiz qolgan savolni yozib qo'yadi (25-band).
  *
  * MODEL TAXMINI BILIM EMAS: bu yerga faqat SAVOL va AI nima
@@ -1611,6 +1818,7 @@ async function recordKnowledgeGap(
   conversationId: string,
   question: string,
   aiFallback: string | null,
+  intent: IntentResult,
 ): Promise<void> {
   const normalized = normalizeForMatch(question).replace(/\s+/g, " ").trim().slice(0, 500);
   if (normalized === "") return;
@@ -1645,6 +1853,13 @@ async function recordKnowledgeGap(
   await admin.from("sales_knowledge_gaps").insert({
     normalized_question: normalized,
     question: question.slice(0, 1000),
+    // Panel qaysi niyat bilan kelganini ko'rsatadi va yangi
+    // ifloslanish paydo bo'lsa darhol seziladi.
+    message_intent: intent.intent,
+    kind: "global",
+    classification: "real_knowledge_gap",
+    classification_reason: "darvozadan o‘tgan haqiqiy savol",
+    classified_at: now,
     last_conversation_id: conversationId,
     ai_fallback: aiFallback?.slice(0, 1000) ?? null,
     example_contexts: [{ at: now, question }],
@@ -1803,6 +2018,7 @@ export async function onIntakeSubmitted(intakeId: string): Promise<FlowRunResult
       simulated: false,
       rollout: settings.rollout,
       currentMessageId: null,
+      currentMessageType: "text",
       result,
     };
 
