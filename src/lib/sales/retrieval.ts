@@ -10,7 +10,7 @@
  * testda to'liq tekshiriladi.
  */
 
-import { normalizeForMatch } from "./text-normalize.ts";
+import { normalizePhrase } from "./text-normalize.ts";
 import { rankPatternsByOutcome } from "./aggregate.ts";
 import type { KnowledgeCategory } from "./types.ts";
 
@@ -54,8 +54,20 @@ const STOPWORDS = new Set([
   "ha", "salom", "assalomu", "alaykum", "rahmat", "mumkinmi", "kerak",
 ]);
 
+/**
+ * Qidiruv uchun so'zlarga ajratadi.
+ *
+ * KIRILL LOTINGA O'GIRILADI (17- va 26-band). Ilgari bu yerda
+ * `normalizeForMatch` turardi va u transliteratsiya qilmasdi:
+ * kirillda yozilgan savol lotin bilim bazasi bilan HECH QACHON
+ * uchrashmasdi. Mijoz "нархи қанча?" deb yozsa, javob bor
+ * bo'lsa ham topilmasdi.
+ *
+ * IKKALA TOMON HAM shu funksiyadan o'tadi — savol ham, bilim
+ * yozuvi ham — shuning uchun moslik simmetrik qoladi.
+ */
 export function tokenize(text: string): string[] {
-  return normalizeForMatch(text)
+  return normalizePhrase(text)
     .split(/[^\p{L}\p{N}']+/u)
     .map((token) => token.replace(/^'+|'+$/g, ""))
     .filter((token) => token.length >= 3 && !STOPWORDS.has(token));

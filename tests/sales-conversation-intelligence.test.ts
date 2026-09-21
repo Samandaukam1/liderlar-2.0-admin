@@ -22,6 +22,7 @@ import {
 import { buildFallback } from "../src/lib/sales/flow/fallback.ts";
 import { categoryForObject } from "../src/lib/sales/flow/case-escalation-rules.ts";
 import { buildGapKey } from "../src/lib/sales/gaps/gap-key.ts";
+import { tokenize } from "../src/lib/sales/retrieval.ts";
 
 function src(path: string): string {
   return readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
@@ -712,4 +713,28 @@ test("shovqinga javob YOZILMAYDI, agar kutilayotgan qadam bo‘lmasa", () => {
     alreadyGreeted: true,
   });
   assert.equal(reply, null);
+});
+
+/* ===================================================================== *
+ * BILIM QIDIRUVI — KIRILL (17- va 26-band)
+ * ===================================================================== */
+
+test("kirillda yozilgan savol lotin bilim bilan UCHRASHADI", () => {
+  /*
+   * Ilgari qidiruv transliteratsiya qilmasdi: "нарх" hech
+   * qachon "narx" bilan mos kelmasdi va javob bor bo'lsa ham
+   * topilmasdi.
+   */
+  const cyrillic = tokenize("нархи қанча");
+  const latin = tokenize("narxi qancha");
+  assert.ok(
+    cyrillic.some((token) => latin.includes(token)),
+    `umumiy so'z yo'q: ${JSON.stringify(cyrillic)} vs ${JSON.stringify(latin)}`,
+  );
+});
+
+test("apostrof variantlari qidiruvda birlashadi", () => {
+  const a = tokenize("to‘lov qanday");
+  const b = tokenize("to'lov qanday");
+  assert.deepEqual(a, b);
 });
