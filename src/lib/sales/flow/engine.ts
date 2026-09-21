@@ -1895,15 +1895,27 @@ async function recordKnowledgeGap(
         last_conversation_id: conversationId,
         // Oxirgi 5 ta namuna yetarli: ko'proq saqlash qatorni
         // shishiradi va hech kim o'qimaydi.
-        example_contexts: [...contexts.slice(-4), { at: now, question }],
+        example_contexts: [
+          ...contexts.slice(-4),
+          { at: now, question: redactPii(question).text.slice(0, 500) },
+        ],
       })
       .eq("id", existing.id as string);
     return;
   }
 
+  /*
+   * SAVOL MATNI REDAKSIYADAN O'TADI (34- va 37-band).
+   *
+   * Bu qator panelda ko'rinadi va admin uni bilim bazasiga
+   * ko'chirishi mumkin. Mijoz savolining ichida karta yoki
+   * telefon raqami bo'lsa, u global bilimga tushib ketardi.
+   */
+  const safeQuestion = redactPii(question).text.slice(0, 1000);
+
   await admin.from("sales_knowledge_gaps").insert({
     normalized_question: normalized,
-    question: question.slice(0, 1000),
+    question: safeQuestion,
     // Panel qaysi niyat bilan kelganini ko'rsatadi va yangi
     // ifloslanish paydo bo'lsa darhol seziladi.
     message_intent: intent.intent,
@@ -1913,7 +1925,7 @@ async function recordKnowledgeGap(
     classified_at: now,
     last_conversation_id: conversationId,
     ai_fallback: aiFallback?.slice(0, 1000) ?? null,
-    example_contexts: [{ at: now, question }],
+    example_contexts: [{ at: now, question: safeQuestion }],
   });
 }
 

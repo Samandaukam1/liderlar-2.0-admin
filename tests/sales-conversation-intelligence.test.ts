@@ -7,6 +7,7 @@ import {
   pendingActionForStage,
   looksLikePersonName,
   isNoiseOnly,
+  isNumericIdentifier,
   type IntentContext,
 } from "../src/lib/sales/flow/message-intent.ts";
 import { decideKnowledgeGap } from "../src/lib/sales/flow/knowledge-gap-gate.ts";
@@ -771,4 +772,46 @@ test("«ko‘rdim» to‘lov kutilayotganda CHEK deb o‘qilmaydi", () => {
     pendingUserAction: "send_payment_receipt",
   }));
   assert.notEqual(result.intent, "payment_receipt_reference");
+});
+
+/* ===================================================================== *
+ * 34-BAND. KARTA VA HISOB RAQAMLARI
+ * ===================================================================== */
+
+test("karta/hisob raqami BILIM BO‘SHLIG‘I bo‘la olmaydi", () => {
+  /*
+   * Ro'yxatda raqamli satrlar bor edi. Ularni bilim sifatida
+   * o'rganish xavfli: mijoz yozgan raqam rasmiy to'lov
+   * ma'lumoti bo'lib qolishi mumkin edi.
+   */
+  for (const text of [
+    "5614686500416261",
+    "8600 1234 5678 9012",
+    "9860160101234567",
+    "+998901234567",
+  ]) {
+    assert.equal(isNumericIdentifier(text), true, `"${text}" identifikator deb tanilmadi`);
+    assertNotAQuestion(text);
+  }
+});
+
+test("raqamli savol identifikator deb o‘qilmaydi", () => {
+  // Raqam bor, lekin bu savol.
+  assert.equal(isNumericIdentifier("Narxi 100 000 so‘mmi?"), false);
+  assert.equal(isNumericIdentifier("38 ming so‘m to‘lasam bo‘ladimi?"), false);
+});
+
+test("bo‘shliq matni REDAKSIYADAN o‘tadi", () => {
+  /*
+   * Bu qator panelda ko'rinadi va admin uni bilim bazasiga
+   * ko'chirishi mumkin — ichidagi karta raqami global
+   * bilimga tushib ketardi (34- va 37-band).
+   */
+  const engine = src("src/lib/sales/flow/engine.ts");
+  assert.match(engine, /const safeQuestion = redactPii\(question\)/);
+  assert.match(engine, /question: safeQuestion/);
+  assert.ok(
+    !/question: question\.slice/.test(engine),
+    "xom savol matni hali ham saqlanyapti",
+  );
 });

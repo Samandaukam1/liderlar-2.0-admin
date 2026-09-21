@@ -322,6 +322,29 @@ export function isNoiseOnly(text: string | null | undefined): boolean {
 }
 
 /**
+ * Xabar RAQAMLI IDENTIFIKATORmi (34-band).
+ *
+ * Javobsiz savollar ro'yxatida karta va hisob raqamlari bor
+ * edi. Ular savol emas va ularni bilim sifatida o'rganish
+ * XAVFLI: mijoz yozgan raqam rasmiy to'lov ma'lumoti bo'lib
+ * qolishi mumkin edi.
+ *
+ * Bunday xabar shovqin deb tasniflanadi va bo'shliqqa umuman
+ * tushmaydi.
+ */
+export function isNumericIdentifier(text: string | null | undefined): boolean {
+  const raw = (text ?? "").trim();
+  if (raw === "") return false;
+
+  const digits = (raw.match(/\d/g) ?? []).length;
+  if (digits < 6) return false;
+
+  const letters = (raw.match(/\p{L}/gu) ?? []).length;
+  // Raqamlar hukmron: bir nechta so'z bo'lsa bu savol bo'lishi mumkin.
+  return digits >= letters * 2;
+}
+
+/**
  * Matn ODAM ISMIGA o'xshaydimi.
  *
  * Faqat `validateFullName` yetarli emas: u "narxi qancha deb"
@@ -462,6 +485,11 @@ function decide(text: string | null | undefined, context: IntentContext): Decisi
       matched: "fayl biriktirilgan",
       referencedObject: object,
     };
+  }
+
+  /* --------------------- raqamli identifikator (34-band) ----------------- */
+  if (isNumericIdentifier(raw)) {
+    return { intent: "spam_or_noise", confidence: "high", matched: "raqamli identifikator" };
   }
 
   /* ------------------------------ shovqin ------------------------------- */
