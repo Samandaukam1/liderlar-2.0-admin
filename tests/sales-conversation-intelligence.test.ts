@@ -21,6 +21,7 @@ import {
 } from "../src/lib/sales/gaps/gap-classification.ts";
 import { buildFallback } from "../src/lib/sales/flow/fallback.ts";
 import { categoryForObject } from "../src/lib/sales/flow/case-escalation-rules.ts";
+import { buildGapKey } from "../src/lib/sales/gaps/gap-key.ts";
 
 function src(path: string): string {
   return readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
@@ -496,6 +497,32 @@ test("AD. bir xil savol bitta qatorga yig‘iladi", () => {
   const engine = src("src/lib/sales/flow/engine.ts");
   assert.match(engine, /normalized_question/);
   assert.match(engine, /ask_count/);
+  assert.match(engine, /buildGapKey\(question, intent\.intent\)/);
+});
+
+test("AD2. narx savolining barcha shakllari BITTA bo‘shliq", () => {
+  /*
+   * 29-band: ilgari "narxi qancha?", "qancha turadi?",
+   * "necha pul?" uchta alohida qator bo'lardi va admin bitta
+   * savolga uch marta javob yozishi kerak edi.
+   */
+  const keys = ["Narxi qancha?", "Qancha turadi?", "Necha pul?", "Tolovi qancha"].map((q) =>
+    buildGapKey(q, classifyMessageIntent(q, ctx()).intent),
+  );
+  assert.equal(new Set(keys).size, 1, `birlashmadi: ${JSON.stringify(keys)}`);
+});
+
+test("AD3. TURLI savollar birlashib ketmaydi", () => {
+  const a = buildGapKey("Sertifikat xalqaro bazada tekshiriladimi?", "knowledge_question");
+  const b = buildGapKey("Ensiklopediyaga kim qabul qilinadi?", "knowledge_question");
+  assert.notEqual(a, b);
+});
+
+test("AD4. tinish belgisi va so‘z tartibi kalitni bo‘lmaydi", () => {
+  assert.equal(
+    buildGapKey("Maqola narxi qancha", "knowledge_question"),
+    buildGapKey("qancha maqola narxi?", "knowledge_question"),
+  );
 });
 
 /* ===================================================================== *

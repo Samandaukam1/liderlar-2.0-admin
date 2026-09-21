@@ -38,6 +38,7 @@ import {
   type IntentResult,
 } from "./message-intent.ts";
 import { decideKnowledgeGap } from "./knowledge-gap-gate.ts";
+import { buildGapKey } from "../gaps/gap-key.ts";
 import { buildConversationalReply } from "./conversational-reply.ts";
 import { answerStatusQuestion, paymentStateFromColumn } from "./status-answer.ts";
 import {
@@ -1865,7 +1866,12 @@ async function recordKnowledgeGap(
   aiFallback: string | null,
   intent: IntentResult,
 ): Promise<void> {
-  const normalized = normalizeForMatch(question).replace(/\s+/g, " ").trim().slice(0, 500);
+  /*
+   * KALIT MA'NOGA KO'RA (29-band): "narxi qancha?" va "necha
+   * pul?" bitta bo'shliq. Ilgari ular ikki qator bo'lardi va
+   * admin bitta savolga ikki marta javob yozardi.
+   */
+  const normalized = buildGapKey(question, intent.intent);
   if (normalized === "") return;
 
   const admin = adminClient();
