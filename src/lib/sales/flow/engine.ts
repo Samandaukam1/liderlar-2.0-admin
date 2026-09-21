@@ -34,14 +34,17 @@ import { detectMinor } from "./minor.ts";
 import { canDetectReferral, detectReferral, mentionsMoney } from "./referral.ts";
 import {
   classifyMessageIntent,
+  looksLikePersonName,
   pendingActionForStage,
   type IntentResult,
 } from "./message-intent.ts";
 import { decideKnowledgeGap } from "./knowledge-gap-gate.ts";
 import { buildGapKey } from "../gaps/gap-key.ts";
+import { isRepeatedReply, REPEAT_WINDOW_MS } from "./repeat-guard.ts";
 import { buildConversationalReply } from "./conversational-reply.ts";
 import { answerStatusQuestion, paymentStateFromColumn } from "./status-answer.ts";
 import {
+  categoryForCancellation,
   categoryForObject,
   createCaseEscalation,
   escalationAcknowledgement,
@@ -171,6 +174,15 @@ interface FlowConversation {
    * xabardayoq kuchini yo'qotardi.
    */
   referralSource: string | null;
+  /**
+   * Bu chatga ILGARI chiqqan xabarlar soni (inson yozganlari ham).
+   *
+   * Suhbat "yangi" bosqichda turgani ODAM ISHLAMAGANINI
+   * ANGLATMAYDI: bot 0.2 dan oldin umuman yozmasdi va o'sha
+   * suhbatlar bazada `new` bo'lib qolgan.
+   */
+  outgoingCount: number;
+  firstMessageAt: string | null;
 }
 
 async function loadConversation(conversationId: string): Promise<FlowConversation | null> {
@@ -181,7 +193,7 @@ async function loadConversation(conversationId: string): Promise<FlowConversatio
       "id, business_connection_id, chat_id, sales_stage, ai_enabled, customer_full_name, " +
         "intake_id, payment_status, objections, lead_score, lead_score_reasons, " +
         "lead_temperature, opted_out_at, is_minor, rollout_bucket, " +
-        "memory, greeted_at, greeting_session_started_at, human_required_at, entry, referral_source",
+        "memory, greeted_at, greeting_session_started_at, human_required_at, entry, referral_source, outgoing_count, first_message_at",
     )
     .eq("id", conversationId)
     .maybeSingle();
@@ -227,7 +239,33 @@ async function loadConversation(conversationId: string): Promise<FlowConversatio
      */
     entry: row.entry === "inbound" ? "inbound" : "outbound",
     referralSource: (row.referral_source as string | null) ?? null,
+    outgoingCount: typeof row.outgoing_count === "number" ? row.outgoing_count : 0,
+    firstMessageAt: (row.first_message_at as string | null) ?? null,
   };
+}
+
+/**
+ * Bu suhbat AVVAL ODAM TOMONIDAN yuritilganmi.
+ *
+ * P0, A/F/G/I reproduksiyalari: maqolasi chiqqan, anketasi
+ * tasdiqlangan mijozlarga bot salomlashib, qaytadan F.I.Sh.
+ * so'ragan. Sabab — `sales_stage` ustuni ularda hali ham
+ * `new` edi: bot bu suhbatlarni birinchi marta ko'rayotgan
+ * edi, lekin MIJOZ uchun bu yangi suhbat emas.
+ *
+ * "Yangi lead" belgisi bosqich EMAS, DALIL bo'lishi kerak:
+ * chatga ilgari chiqqan xabar bo'lsa-yu, ularning hech biri
+ * botdan chiqmagan bo'lsa — demak bu chatni odam yuritgan.
+ */
+async function hadPriorHumanContact(conversation: FlowConversation): Promise<boolean> {
+  if (conversation.outgoingCount === 0) return false;
+
+  const { count } = await adminClient()
+    .from("sales_outbound_log")
+    .select("id", { count: "exact", head: true })
+    .eq("conversation_id", conversation.id);
+
+  return (count ?? 0) === 0;
 }
 
 /* ------------------------------- yuborish -------------------------------- */
@@ -357,6 +395,21 @@ async function send(
     optedOut: context.conversation.optedOut,
     referral: context.conversation.referralSource != null,
   });
+
+  /*
+   * TAKROR TO'SIG'I — AVTORIZATSIYADAN OLDIN.
+   *
+   * Bloklangan takror uchun chiqish ruxsati so'ralmaydi va
+   * jurnalga "yuborildi" deb yozilmaydi: u umuman
+   * yuborilmadi.
+   */
+  if (!context.simulated && input.kind !== "followup") {
+    const recent = await recentOutboundBodies(context.conversation.id);
+    if (isRepeatedReply({ body: input.body, recentBodies: recent })) {
+      context.result.notes.push("takroriy javob — yuborilmadi");
+      return "refused";
+    }
+  }
 
   if (!decision.allowed) {
     if (!context.result.refusals.includes(decision.reason)) {
@@ -769,6 +822,47 @@ async function recordCoverageRefusal(
   }
 }
 
+/**
+ * Shu xabardan KEYIN yangi kiruvchi xabar kelganmi.
+ *
+ * P0 (C/D reproduksiyalari): mijoz «salom», «tavsiya»,
+ * «tavsiya beruvchining ismi» ni KETMA-KET uchta xabarda
+ * yuborgan. Bot birinchisiga darhol javob berib, butun
+ * onboarding ketma-ketligini — narx bilan birga — jo'natgan.
+ * Imtiyoz esa uchinchi xabarda aniqlangan.
+ *
+ * Yechim: burst bitta TURN sifatida ko'riladi. Yangiroq xabar
+ * bor bo'lsa, bu ish jim to'xtaydi — javobni eng oxirgi xabar
+ * ishi beradi va u butun kontekstni ko'radi.
+ *
+ * XABAR YO'QOLMAYDI: eng yangi xabar doim ishlanadi.
+ */
+async function hasNewerIncoming(
+  conversationId: string,
+  messageId: string | null,
+): Promise<boolean> {
+  if (!messageId) return false;
+
+  const admin = adminClient();
+  const { data: current } = await admin
+    .from("sales_messages")
+    .select("sent_at")
+    .eq("id", messageId)
+    .maybeSingle();
+
+  const sentAt = current?.sent_at as string | undefined;
+  if (!sentAt) return false;
+
+  const { count } = await admin
+    .from("sales_messages")
+    .select("id", { count: "exact", head: true })
+    .eq("conversation_id", conversationId)
+    .eq("direction", "incoming")
+    .gt("sent_at", sentAt);
+
+  return (count ?? 0) > 0;
+}
+
 async function runFlowSteps(input: HandleMessageInput): Promise<FlowRunResult | null> {
   const conversation = await loadConversation(input.conversationId);
   if (!conversation) return null;
@@ -797,6 +891,17 @@ async function runFlowSteps(input: HandleMessageInput): Promise<FlowRunResult | 
   // ularni o'zi boshqaradi.
   if (!conversation.aiEnabled) {
     result.refusals.push("human_takeover");
+    return result;
+  }
+
+  /*
+   * BURST BITTA TURN (P0, C/D reproduksiyalari).
+   *
+   * Sinov rejimida tekshirilmaydi: u yerda bitta xabar
+   * qo'lda beriladi va "yangiroq xabar" tushunchasi yo'q.
+   */
+  if (!simulated && (await hasNewerIncoming(conversation.id, input.messageId))) {
+    result.notes.push("yangiroq xabar bor — javobni o‘sha ish beradi");
     return result;
   }
 
@@ -1005,12 +1110,56 @@ async function runFlowSteps(input: HandleMessageInput): Promise<FlowRunResult | 
     result.notes.push(`birikma: ${attachment.kind} (${attachment.reason})`);
     intent = attachment.treatAsPayment ? "payment_evidence" : "other";
   } else if (conversation.stage === "need_full_name") {
-    // Bu bosqichda har qanday matn F.I.Sh. bo'lishga da'vogar.
-    intent = validateFullName(input.text).ok ? "full_name" : "other";
+    /*
+     * ILGARI: "bu bosqichda har qanday matn F.I.Sh. bo'lishga
+     * da'vogar" — va aynan shu jonli tizimda ikki marta
+     * qimmatga tushdi (A va B reproduksiyalari):
+     *
+     *   «shu joyi ai notori qib qoyibdi» -> F.I.Sh. bo'lib
+     *   yozilgan va shu nom bilan YANGI ANKETA yaratilgan;
+     *   «Royxatdan oʻtdim endichi» -> F.I.Sh. bo'lib qolgan.
+     *
+     * Endi ikkita shart: matn ism SHAKLIDA bo'lsin VA uning
+     * muloqot niyati ism berish bo'lsin. Shikoyat, tuzatish
+     * so'rovi, savol yoki tan olish ism bo'la olmaydi.
+     */
+    const nameIntent = classifyMessageIntent(input.text, {
+      stage: conversation.stage,
+      pendingUserAction: "send_full_name",
+      hasAttachment: isPaymentEvidenceType(input.messageType),
+      hasHistory: true,
+    });
+    const acceptsAsName =
+      (nameIntent.intent === "form_data" || nameIntent.intent === "identity_data") &&
+      looksLikePersonName(input.text);
+
+    if (!acceptsAsName && validateFullName(input.text).ok) {
+      result.notes.push(`ism deb qabul qilinmadi: niyat ${nameIntent.intent}`);
+    }
+    intent = acceptsAsName ? "full_name" : "other";
   } else {
     intent = classifyReply(input.text).intent;
   }
   result.intent = intent;
+
+  /* ------------------ ESKI SUHBAT — QAYTA ONBOARDING YO'Q ---------------- */
+  /*
+   * P0 (A, F, G, I reproduksiyalari).
+   *
+   * Maqolasi chiqqan, anketasi tasdiqlangan mijozlarga bot
+   * salomlashib, qaytadan F.I.Sh. so'ragan. Bosqich `new`
+   * bo'lgani uchun ssenariy ularni yangi lead deb hisoblagan.
+   *
+   * Endi onboarding o'tishlari FAQAT bot ilgari yozmagan VA
+   * odam ham yozmagan chatlarda ishlaydi. Qolgan hamma holatda
+   * xabar niyat qatlamiga boradi: u kontekstga qarab javob
+   * beradi yoki odamga topshiriq yaratadi.
+   */
+  if (conversation.stage === "new" && (await hadPriorHumanContact(conversation))) {
+    result.notes.push("eski suhbat — onboarding ssenariysi ishga tushirilmadi");
+    await answerFromKnowledge(context, input.text ?? "", "no_transition");
+    return result;
+  }
 
   /* ---------------------------- o‘tish qidirish -------------------------- */
   const transition = resolveTransition(
@@ -1065,6 +1214,35 @@ async function runFlowSteps(input: HandleMessageInput): Promise<FlowRunResult | 
   let intakeLink: string | null = null;
 
   if (transition.action === "request_intake_link") {
+    /*
+     * IKKINCHI ANKETA YARATILMAYDI (P0, A reproduksiyasi).
+     *
+     * Auditda: maqolasi allaqachon chiqqan mijozning tuzatish
+     * so'roviga javoban bot yangi anketa yaratdi va uni
+     * noto'g'ri nom bilan saqladi. Anketa bor bo'lsa, yangisi
+     * KERAK EMAS — bu tuzatish ishi va u odamga boradi.
+     */
+    if (conversation.intakeId != null) {
+      result.notes.push("anketa allaqachon mavjud — yangisi yaratilmadi");
+      const escalated = await createCaseEscalation({
+        conversationId: conversation.id,
+        messageId: input.messageId,
+        category: "content_correction",
+        question: input.text ?? "",
+        reason: "mijozda anketa bor — bu yangi ariza emas, tuzatish so‘rovi",
+        contextSummary: `Bosqich: ${conversation.stage}.`,
+      });
+      await send(context, {
+        body: escalated.created
+          ? "Anketangiz bizda bor. So‘rovingizni mas’ul hamkasbimga yo‘naltirdim — u ko‘rib chiqadi."
+          : NO_ESCALATION_REPLY,
+        kind: "knowledge_reply",
+        templateKey: null,
+        expectedStages: [],
+      });
+      return result;
+    }
+
     const name = validateFullName(input.text);
     if (!name.ok) {
       result.notes.push("F.I.Sh. yetarli emas — havola yaratilmadi");
@@ -1102,7 +1280,14 @@ async function runFlowSteps(input: HandleMessageInput): Promise<FlowRunResult | 
     intakeLink = created.link;
     result.intakeId = created.intakeId ?? null;
     extraFields = {
-      customer_full_name: name.fullName,
+      /*
+       * Tasdiqlangan ism USTUN.
+       *
+       * Mijoz keyin noaniq gap yozsa, mavjud ism o'chib
+       * ketmasligi kerak — uni almashtirish uchun aniq
+       * tuzatish niyati kerak.
+       */
+      customer_full_name: conversation.customerFullName ?? name.fullName,
       intake_id: created.intakeId,
       // Xom havola SAQLANMAYDI — faqat prefiks, mavjud anketa tizimidagi kabi.
       intake_link_prefix: created.prefix,
@@ -1274,11 +1459,30 @@ async function answerFromKnowledge(
    * Tasniflash SOF va ARZON: "Rahmat" uchun model chaqirilmaydi
    * (36-band).
    * ===================================================================== */
-  const pendingAction = pendingActionForStage(context.stage);
+  const paymentRequired = context.conversation.referralSource == null;
+  const pendingAction = pendingActionForStage(context.stage, paymentRequired);
+  /*
+   * ODDIY RASM CHEK EMAS (P0).
+   *
+   * Biriktirma avval tasniflanadi — webhook'dagi bilan
+   * AYNAN bir xil qoida. "Chek qabul qilindi" degan javob
+   * faqat shu tasnif chek desa beriladi.
+   */
+  const hasAttachment = isPaymentEvidenceType(context.currentMessageType);
+  const attachmentIsPayment =
+    hasAttachment &&
+    classifyAttachment({
+      messageType: context.currentMessageType,
+      caption: trimmed,
+      stage: context.stage,
+      paymentStatus: context.conversation.paymentStatus,
+    }).treatAsPayment;
+
   const intent = classifyMessageIntent(trimmed, {
     stage: context.stage,
     pendingUserAction: pendingAction,
-    hasAttachment: isPaymentEvidenceType(context.currentMessageType),
+    hasAttachment,
+    attachmentIsPayment,
     hasHistory:
       context.conversation.greetedAt != null || context.result.stageBefore !== "new",
   });
@@ -1287,11 +1491,23 @@ async function answerFromKnowledge(
 
   /* --------- QATLAM 2 — oddiy muloqot: bilim ham, model ham yo'q ------- */
   if (!intent.needsKnowledge && !intent.needsSystemState) {
+    /*
+     * BEKOR QILISH — ODAM ISHI (P0, F reproduksiyasi).
+     *
+     * Bot nashrni to'xtata olmaydi. Uni "bajardim" deb aytish
+     * yolg'on bo'lardi, jim qolish esa mijozni yo'qotardi.
+     */
+    if (intent.intent === "cancellation") {
+      await handleCancellation(context, intent, trimmed);
+      return;
+    }
+
     const reply = buildConversationalReply({
       intent: intent.intent,
       pendingUserAction: pendingAction,
       hasHistory: context.conversation.greetedAt != null,
       alreadyGreeted: context.conversation.greetedAt != null,
+      paymentRequired,
     });
 
     if (reply) {
@@ -1628,6 +1844,21 @@ async function sendFallback(
   }
 }
 
+/** Yaqinda yuborilgan matnlar — takror qalqoni uchun. */
+async function recentOutboundBodies(conversationId: string): Promise<string[]> {
+  const since = new Date(Date.now() - REPEAT_WINDOW_MS).toISOString();
+  const { data } = await adminClient()
+    .from("sales_outbound_log")
+    .select("body")
+    .eq("conversation_id", conversationId)
+    .gte("created_at", since)
+    .is("error", null)
+    .order("created_at", { ascending: false })
+    .limit(20);
+
+  return (data ?? []).map((row) => (row.body as string | null) ?? "");
+}
+
 /** Shu suhbatda ilgari nechta fallback ketgan. */
 async function countFallbacks(conversationId: string): Promise<number> {
   const { count } = await adminClient()
@@ -1717,6 +1948,58 @@ async function listExplainedTopics(conversationId: string): Promise<string[]> {
 }
 
 /* --------------------------- bilim bo'shliqlari -------------------------- */
+
+/**
+ * BEKOR QILISH SO'ROVI.
+ *
+ * Auditda (F): mijoz «Чикармела ккмас» (chiqarmang, kerakmas)
+ * deb yozgan, keyin «Рахмат» degan. Bot minnatdorchilikni
+ * ko'rib «Arzimaydi. Shartlar bilan tanishib chiqqach ayting»
+ * degan — bekor qilish niyati BUTUNLAY yo'qolgan va savdo
+ * davom etgan.
+ *
+ * Endi: kutilayotgan eslatmalar bekor qilinadi, odamga
+ * topshiriq yaratiladi va mijozga faqat topshiriq
+ * YARATILGANDAN keyin va'da beriladi.
+ */
+async function handleCancellation(
+  context: SendContext,
+  intent: IntentResult,
+  text: string,
+): Promise<void> {
+  // Savdo eslatmalari darhol to'xtaydi.
+  context.result.cancelledFollowups += await cancelPendingFollowups(
+    context.conversation.id,
+    "mijoz bekor qilishni so‘radi",
+  );
+
+  const category = categoryForCancellation(intent.referencedObject);
+  const escalation = await createCaseEscalation({
+    conversationId: context.conversation.id,
+    messageId: context.currentMessageId,
+    category,
+    question: text,
+    reason: "mijoz bekor qilish / chiqarmaslikni so‘radi",
+    contextSummary: `Bosqich: ${context.stage}.`,
+  });
+
+  context.result.gapDecision = "case_escalation";
+  context.result.notes.push(
+    escalation.created
+      ? `bekor qilish topshirig‘i: ${category}`
+      : "bekor qilish topshirig‘i YARATILMADI",
+  );
+
+  await send(context, {
+    body: escalation.created
+      ? "Tushundim, so‘rovingizni mas’ul hamkasbimga yo‘naltirdim — u bilan bog‘lanadi. " +
+        "Bu masala hal bo‘lguncha sizga eslatma yubormaymiz."
+      : NO_ESCALATION_REPLY,
+    kind: "knowledge_reply",
+    templateKey: null,
+    expectedStages: [],
+  });
+}
 
 /**
  * HOLAT SAVOLIGA JAVOB — TASDIQLANGAN YOZUVDAN (28-band).
@@ -2063,20 +2346,42 @@ export async function onIntakeSubmitted(intakeId: string): Promise<FlowRunResult
       result.refusals.push("human_takeover");
       return result;
     }
-    if (!isForwardTransition(conversation.stage, "waiting_payment")) {
-      result.notes.push("to‘lov bosqichi allaqachon o‘tilgan");
+    /*
+     * IMTIYOZLI MIJOZ TO'LOV BOSQICHIGA UMUMAN O'TMAYDI
+     * (P0, B reproduksiyasi).
+     *
+     * ILGARI bu yerda bosqich SHARTSIZ `waiting_payment` ga
+     * surilardi va `payment_status = requested` yozilardi.
+     * Shablonlar chiqish darvozasida to'silgani uchun karta
+     * ma'lumoti ketmasdi — LEKIN holat to'lov kutish holatiga
+     * o'tib qolardi. Natijada:
+     *   · bosqichdan kelib chiqadigan eslatma «To'lov chekini
+     *     shu yerga yuboring» deb yozardi;
+     *   · «Ha toldirdim» degan javob chek deb o'qilardi.
+     *
+     * Ya'ni imtiyoz bitta qatlamda hisobga olingan, holat
+     * mashinasida esa olinmagan edi.
+     */
+    const paymentRequired = conversation.referralSource == null;
+    const nextStage: SalesStage = paymentRequired ? "waiting_payment" : "intake_submitted";
+
+    if (!isForwardTransition(conversation.stage, nextStage)) {
+      result.notes.push(`${nextStage} bosqichi allaqachon o‘tilgan`);
       return result;
     }
 
-    await moveStage(conversation, "waiting_payment", { intent: null, messageId: null }, {
-      payment_status: "requested",
-    });
-    conversation.stage = "waiting_payment";
-    result.stageAfter = "waiting_payment";
+    await moveStage(
+      conversation,
+      nextStage,
+      { intent: null, messageId: null },
+      paymentRequired ? { payment_status: "requested" } : {},
+    );
+    conversation.stage = nextStage;
+    result.stageAfter = nextStage;
 
     const context: SendContext = {
       conversation,
-      stage: "waiting_payment",
+      stage: nextStage,
       autoReplyEnabled: settings.flow.autoReplyEnabled,
       connectionEnabled: connection?.isEnabled ?? false,
       connectionCanReply: connection?.canReply ?? false,
@@ -2087,14 +2392,22 @@ export async function onIntakeSubmitted(intakeId: string): Promise<FlowRunResult
       result,
     };
 
-    for (const key of ["intake_submitted_ack", "payment_details", "payment_note"]) {
+    /*
+     * Imtiyozli mijozga faqat tasdiq ketadi — to'lov
+     * shablonlari ro'yxatga umuman qo'shilmaydi.
+     */
+    const templates = paymentRequired
+      ? ["intake_submitted_ack", "payment_details", "payment_note"]
+      : ["intake_submitted_ack"];
+
+    for (const key of templates) {
       const template = getTemplate(key);
       if (!template) continue;
       await send(context, {
         body: template.body,
         kind: "template",
         templateKey: key,
-        expectedStages: ["waiting_payment"],
+        expectedStages: [nextStage],
       });
     }
 

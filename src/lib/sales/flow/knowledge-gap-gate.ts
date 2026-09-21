@@ -90,7 +90,7 @@ const MAY_BE_A_GAP: readonly MessageIntent[] = [
 ];
 
 /** Shaxsiy holat savollari — bilim emas, topshiriq. */
-const CASE_SPECIFIC: readonly MessageIntent[] = ["status_question"];
+const CASE_SPECIFIC: readonly MessageIntent[] = ["status_question", "cancellation"];
 
 /** Juda qisqa matn qayta ishlatiladigan savol bo'la olmaydi. */
 const MIN_QUESTION_LENGTH = 6;

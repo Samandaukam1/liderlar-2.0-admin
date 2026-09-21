@@ -61,6 +61,12 @@ const INTENT_TO_CLASSIFICATION: Readonly<Record<MessageIntent, GapClassification
 
   spam_or_noise: "noise",
 
+  /*
+   * Bekor qilish — bilim emas, ODAM ishi: mijoz nashrni
+   * to'xtatishni so'rayapti va buni bot o'zi hal qila olmaydi.
+   */
+  cancellation: "case_specific",
+
   status_question: "case_specific",
   complaint: "case_specific",
   human_request: "case_specific",

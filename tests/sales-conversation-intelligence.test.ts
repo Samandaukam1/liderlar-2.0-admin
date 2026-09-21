@@ -119,6 +119,11 @@ test("D. tasdiq javobsiz savol EMAS", () => {
 });
 
 test("E. rad etish javobsiz savol EMAS", () => {
+  /*
+   * «Kerak emas» — RAD JAVOBI, bekor qilish emas. Ularni
+   * aralashtirish har rad javobiga odam topshirig'i
+   * yaratardi.
+   */
   for (const text of ["Yo'q", "Kerak emas", "Qiziqmayman"]) {
     assertNotAQuestion(text);
   }
@@ -166,15 +171,31 @@ test("ism aniqlash SAVOLNI ism deb o‘qimaydi", () => {
  * H–J. KONTEKSTDAN HAL QILINADIGAN QISQA XABARLAR
  * ===================================================================== */
 
-test("H. chek so‘ralgandan keyin rasm + «Mana» — CHEKKA ISHORA", () => {
+test("H. chek so‘ralgandan keyin CHEK deb tasniflangan rasm", () => {
   const result = classifyMessageIntent("Mana", ctx({
     stage: "waiting_payment",
     pendingUserAction: "send_payment_receipt",
     hasAttachment: true,
+    attachmentIsPayment: true,
   }));
   assert.equal(result.intent, "payment_receipt_reference");
   assert.equal(result.referencedObject, "payment");
   assert.equal(result.needsKnowledge, false);
+});
+
+test("H1b. tasniflanmagan rasm CHEK deb qabul qilinmaydi", () => {
+  /*
+   * Mijozlar eng ko'p MAQOLA UCHUN PORTRET yuboradi. Uni chek
+   * deb hisoblash to'lov voronkasini ham buzadi, mijozga
+   * to'lov kelgandek javob berishga ham olib boradi.
+   */
+  const result = classifyMessageIntent("Mana", ctx({
+    stage: "waiting_payment",
+    pendingUserAction: "send_payment_receipt",
+    hasAttachment: true,
+    attachmentIsPayment: false,
+  }));
+  assert.notEqual(result.intent, "payment_receipt_reference");
 });
 
 test("H2. chek javobida TO‘LOV TASDIQLANDI deyilmaydi", () => {
@@ -204,12 +225,31 @@ test("I. anketa so‘ralgandan keyin «Yubordim» — BAJARDIM", () => {
   assertNotAQuestion("Yubordim", ctx({ stage: "waiting_intake", pendingUserAction: "submit_intake" }));
 });
 
-test("I2. to‘lov kutilayotganda «Yubordim» — CHEK", () => {
+test("I2. noaniq «Yubordim» to‘lov dalili YASAMAYDI", () => {
+  /*
+   * Ilgari bu yerda `payment_receipt_reference` kutilardi:
+   * ya'ni bosqich `waiting_payment` bo'lgani uchun har qanday
+   * "yubordim" chek hisoblanardi. Auditda shu sabab imtiyozli
+   * mijozga «Chek qabul qilindi» deb javob ketgan.
+   *
+   * Dalil yo'q — chek ham yo'q.
+   */
   const result = classifyMessageIntent("Yubordim", ctx({
     stage: "waiting_payment",
     pendingUserAction: "send_payment_receipt",
   }));
-  assert.equal(result.intent, "payment_receipt_reference");
+  assert.equal(result.intent, "action_confirmation");
+  assert.notEqual(result.referencedObject, "payment");
+});
+
+test("I3. «To‘ladim» — MIJOZ DA’VOSI, chek emas", () => {
+  const result = classifyMessageIntent("To'ladim", ctx({
+    stage: "waiting_payment",
+    pendingUserAction: "send_payment_receipt",
+  }));
+  assert.equal(result.intent, "action_confirmation");
+  assert.equal(result.referencedObject, "payment");
+  assert.notEqual(result.intent, "payment_receipt_reference");
 });
 
 test("J. «Qildim», «Tashladim», «Tushdi» — BAJARDIM", () => {

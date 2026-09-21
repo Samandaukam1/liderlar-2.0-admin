@@ -36,6 +36,7 @@ export const MESSAGE_INTENTS = [
   "acknowledgement",
   "confirmation",
   "decline",
+  "cancellation",
   "affirmation",
   "negation",
   "identity_data",
@@ -64,6 +65,7 @@ export const MESSAGE_INTENT_LABELS: Record<MessageIntent, string> = {
   acknowledgement: "Tan olish / tushundim",
   confirmation: "Tasdiq",
   decline: "Rad etish",
+  cancellation: "Bekor qilish / chiqarmang",
   affirmation: "Rozilik",
   negation: "Inkor",
   identity_data: "Shaxs ma’lumoti (ism)",
@@ -116,6 +118,15 @@ export interface IntentContext {
   pendingUserAction: PendingUserAction;
   /** Xabarga rasm/hujjat biriktirilganmi. */
   hasAttachment: boolean;
+  /**
+   * Biriktirma CHEK deb tasniflanganmi.
+   *
+   * ODDIY RASM CHEK EMAS (P0). Mijozlar eng ko'p MAQOLA UCHUN
+   * PORTRET yuboradi. "Chek qabul qilindi" degan javob faqat
+   * biriktirma chek deb tasniflanganda beriladi — aks holda
+   * bot to'lov kelgandek muomala qilardi.
+   */
+  attachmentIsPayment?: boolean;
   /** Suhbatda oldin xabar bo'lganmi. */
   hasHistory: boolean;
 }
@@ -215,13 +226,43 @@ const REVIEW_CONFIRMATION: SemanticGroup = {
   patterns: [/tanish[dt]im|tanishib chiq|o'?qidim|o'?qib chiq|ko'?rdim|ko'?rib chiq/u],
 };
 
-/** Mijoz so'ralgan ishni BAJARGANINI aytdi. */
+/**
+ * AYNAN TO'LOV haqidagi fe'llar.
+ *
+ * Auditda (B reproduksiyasi): anketa topshirilgandan keyin
+ * mijoz «Ha toldirdim» degan va bot «Chek qabul qilindi» deb
+ * javob bergan. Sabab — «bajardim» fe'li kutilayotgan
+ * harakatga KO'R-KO'RONA bog'langan edi: bosqich
+ * `waiting_payment` bo'lgani uchun «to'ldirdim» ham chek
+ * hisoblangan.
+ *
+ * "to'ldirdim" — ANKETANI to'ldirdim; "to'ladim" — PUL to'ladim.
+ * Bir harf farq qiladi va ma'no butunlay boshqa.
+ */
+const PAYMENT_ACTION: SemanticGroup = {
+  id: "payment_action",
+  patterns: [
+    /to'?la[dt]im|to'?lov qildim|pul (?:tashla|yubor|o'?tkaz)/u,
+    /kartaga (?:tashla|yubor|o'?tkaz)|hisobga o'?tkaz/u,
+    /chekni yubordim|chek yubordim|chekni tashladim/u,
+  ],
+};
+
+/** AYNAN ANKETA haqidagi fe'llar. */
+const INTAKE_ACTION: SemanticGroup = {
+  id: "intake_action",
+  patterns: [
+    /to'?ldir[dt]im|to'?ldirib yubordim|javob(?:lar)?(?:ni)? (?:berdim|yubordim|yozdim)/u,
+    /anketani (?:to'?ldir|yubor)|savollarga javob berdim/u,
+  ],
+};
+
+/** Mijoz so'ralgan ishni BAJARGANINI aytdi (fe'l aniq emas). */
 const ACTION_CONFIRMATION: SemanticGroup = {
   id: "action_confirmation",
   patterns: [
     /yubor[dt]i?m|yubordm|jo'?nat[dt]im|tashla[dt]im|otkaz[dt]im|o'?tkaz[dt]im/u,
     /\bqil[dt]im\b|\bto'?la[dt]im\b|\btushir[dt]im\b|\bsolib yubordim\b/u,
-    /to'?ldir[dt]im|javob berdim|to'?ldirib yubordim/u,
   ],
 };
 
@@ -248,6 +289,14 @@ const STATUS_QUESTION: SemanticGroup = {
      */
     /qabul bo'?l[dt]imi|qabul qilin[dt]imi/u,
     /qachon (?:tayyor|chiqa|bo'?la)|nima bo'?ldi|qanaqa bo'?ldi/u,
+    /*
+     * «Qachon javobi chiqadi» — ARIZA natijasi haqida
+     * (E reproduksiyasi). Ilgari bu bilim savoli bo'lib
+     * ketardi va bot Google'da indekslanish haqida javob
+     * berardi: mijoz umuman bu haqda so'ramagan edi.
+     */
+    /javob(?:i|lar)?(?:ni)? (?:qachon )?(?:chiq|kel|bo'?l)/u,
+    /natija(?:si)?(?:ni)? (?:qachon )?(?:chiq|kel|bo'?l|ayt)/u,
     /holati?\b|status/u,
   ],
 };
@@ -283,6 +332,44 @@ const AFFIRMATION: SemanticGroup = {
   patterns: [
     /(?:^|[^\p{L}])(?:ha+|xa+|da)(?:[^\p{L}]|$)/u,
     /roziman|albatta|to'?g'?ri\b|shunaqa|shundoq|\bok\b|okey/u,
+  ],
+};
+
+/**
+ * BEKOR QILISH / CHIQARMANG (2-band, F reproduksiyasi).
+ *
+ * Auditda: mijoz «Чикармела ккмас» (chiqarmang, kerakmas) deb
+ * yozgan, keyin «Рахмат» degan. Bot minnatdorchilikni birinchi
+ * ko'rib, «Arzimaydi. Shartlar bilan tanishib chiqqach ayting»
+ * deb javob bergan — ya'ni BEKOR QILISH NIYATI YO'QOLGAN.
+ *
+ * Shu sababli bu guruh minnatdorchilikdan ham, tan olishdan ham
+ * OLDIN tekshiriladi: bitta xabarda ikkalasi bo'lsa, bekor
+ * qilish ustun.
+ */
+const CANCELLATION: SemanticGroup = {
+  id: "cancellation",
+  patterns: [
+    /*
+     * chiqarmang / chikarmela / chiqarma — nashr etilmasin.
+     *
+     * Oxirgi unli OLINIB TASHLANDI: jonli xabar «Чикармела»
+     * ko'rinishida kelgan va `chiqarma` naqshi uni tutmagan.
+     * `chiqarm` esa tutadi.
+     *
+     * "chiqaring" (nashr eting) tutilmaydi — unda `m` yo'q.
+     */
+    /chi[qk]arm|chop etma|joylama|nashr qilma/u,
+    /bekor qil|to'?xtat|olib tashla|o'?chirib tashla|o'?chiring/u,
+    /*
+     * «Kerak emas» YOLG'IZ — bu BEKOR QILISH EMAS, oddiy rad
+     * javobi ("taklif kerak emas"). Uni bekor qilish deb
+     * o'qish har rad javobiga odam topshirig'i yaratardi.
+     *
+     * Shuning uchun faqat BEKOR QILUVCHI FE'L bilan birga:
+     * «chiqarmang, kerakmas» — bu boshqa gap.
+     */
+    /voz kech(?:dim|aman)|hojat yo'?q/u,
   ],
 };
 
@@ -347,23 +434,102 @@ export function isNumericIdentifier(text: string | null | undefined): boolean {
 /**
  * Matn ODAM ISMIGA o'xshaydimi.
  *
- * Faqat `validateFullName` yetarli emas: u "narxi qancha deb"
- * kabi ikki so'zli matnni ham qabul qiladi. Shuning uchun
- * o'zbek ism-familiya qo'shimchalari ham talab qilinadi.
+ * AUDITDA IKKI JIDDIY XATO (A va B reproduksiyalari):
+ *   · «shu joyi ai notori qib qoyibdi» F.I.Sh. bo'lib yozilgan
+ *     va shu nom bilan YANGI ANKETA yaratilgan;
+ *   · «Royxatdan oʻtdim endichi» ham F.I.Sh. bo'lib qolgan.
+ *
+ * Sabab: `validateFullName` faqat "kamida ikkita ma'noli
+ * bo'lak" talab qiladi — har qanday gap shu shartni bajaradi.
+ *
+ * YECHIM QO'SHIMCHAGA BOG'LANMAYDI. Ilgari bu yerda
+ * `-ov/-ova/-qizi` qo'shimchasi TALAB qilinardi va u
+ * «Dilnoza Sobir» kabi haqiqiy ismni rad etardi. Endi
+ * tekshiruv SALBIY SIGNALLARGA asoslanadi: gap bo'lagi,
+ * fe'l, savol yoki xizmat so'zi bo'lsa — ism emas.
  */
-const NAME_SUFFIXES =
-  /(?:ov|ova|yev|yeva|ev|eva|zoda|zade|xo'?ja|qizi|o'?g'?li|ugli|vich|vna|jon|bek|bboy)$/u;
 
-export function looksLikePersonName(text: string | null | undefined): boolean {
+/** Ism bo'lagi bo'la olmaydigan so'zlar. */
+const NON_NAME_WORDS = new Set([
+  // ko'rsatish va bog'lovchilar
+  "shu", "bu", "u", "ana", "mana", "endi", "endichi", "yana", "hozir",
+  "deb", "uchun", "bilan", "ham", "lekin", "ammo", "yoki", "va",
+  // xizmatga oid otlar
+  "anketa", "ariza", "maqola", "post", "chek", "tolov", "to'lov",
+  "narx", "narxi", "pul", "link", "havola", "sayt", "rasm", "video",
+  "joyi", "joy", "ai", "bot", "admin", "sertifikat", "royxat", "ro'yxat",
+  // odatiy fe'l shakllari
+  "qildim", "qilib", "qib", "qoyibdi", "qo'yibdi", "otdim", "o'tdim",
+  "boldi", "bo'ldi", "keldim", "yozdim", "yubordim", "tashladim",
+  "toldirdim", "to'ldirdim", "oldim", "berdim", "ketdim", "bordim",
+  "bolsa", "bo'lsa", "kerak", "mumkin", "notori", "notog'ri", "noto'g'ri",
+  // buyruq shakllari va xushmuomalalik so'zlari
+  "iltimos", "bekor", "qiling", "yuboring", "ayting", "bering", "qilib",
+  "tashlang", "toxtating", "to'xtating", "chiqaring", "chiqarmang",
+]);
+
+/**
+ * O'ZBEK FE'L QO'SHIMCHALARI.
+ *
+ * Ism bo'lagi bunday tugamaydi. Rad etish ARZON: mijozdan
+ * ismni qayta so'raymiz. Noto'g'ri qabul qilish QIMMAT:
+ * anketa va maqola chala nom bilan chiqadi.
+ */
+const VERB_ENDINGS = /(?:dim|tim|dik|tik|ibdi|yapti|moqda|ganman|yapman|masdan|mayman|sizmi|dimi)$/u;
+
+/** Ism-familiyaga xos qo'shimchalar — MAJBURIY emas, faqat signal. */
+const NAME_SUFFIXES =
+  /(?:ov|ova|yev|yeva|ev|eva|zoda|zade|qizi|o'?g'?li|ugli|vich|vna|bek|jon)$/u;
+
+/**
+ * Ismga xos IJOBIY signal bormi.
+ *
+ * Ism kutilmayotgan joyda bitta salbiy tekshiruv yetarli
+ * emas: "falon pismadon narsa" ham undan o'tib ketadi va
+ * tasodifiy matn "ism" bo'lib qolardi. Odamlar ismni bosh
+ * harf bilan yozadi — shu eng ishonchli signal.
+ */
+function hasNameSignal(tokens: readonly string[], raw: string): boolean {
+  if (tokens.some((token) => NAME_SUFFIXES.test(token.toLowerCase()))) return true;
+
+  const words = raw.trim().split(/[\s,]+/).filter((word) => word !== "");
+  return (
+    words.length >= 2 &&
+    words.every((word) => {
+      const first = word[0] ?? "";
+      return first === first.toLocaleUpperCase("uz") && first !== first.toLocaleLowerCase("uz");
+    })
+  );
+}
+
+export function looksLikePersonName(
+  text: string | null | undefined,
+  /** Ism AYNAN shu bosqichda so'ralganmi. */
+  expectingName = false,
+): boolean {
   const check = validateFullName(text);
   if (!check.ok) return false;
-  if (check.tokens.length > 5) return false;
+  // Ikkitadan kam — F.I.Sh. emas; beshtadan ko'p — bu gap.
+  if (check.tokens.length < 2 || check.tokens.length > 5) return false;
 
-  const normalized = normalizeForIntent(text ?? "");
-  // Savol yoki fe'l bo'lsa — ism emas.
+  const raw = (text ?? "").trim();
+  // Raqam bor bo'lsa bu ism emas (identifikator yoki sana).
+  if (/\d/.test(raw)) return false;
+
+  const normalized = normalizeForIntent(raw);
   if (QUESTION_MARKERS.test(normalized)) return false;
 
-  return check.tokens.some((token) => NAME_SUFFIXES.test(token.toLowerCase()));
+  for (const token of check.tokens) {
+    const lower = normalizeForIntent(token).trim();
+    if (lower.length < 2 || lower.length > 24) return false;
+    if (NON_NAME_WORDS.has(lower)) return false;
+    if (VERB_ENDINGS.test(lower)) return false;
+    // Harf, apostrof va defisdan boshqa narsa bo'lmasin.
+    if (!/^[\p{L}'\-]+$/u.test(lower)) return false;
+  }
+
+  // Ism so'ralgan bo'lsa shakl yetarli; aks holda ijobiy signal kerak.
+  return expectingName || hasNameSignal(check.tokens, raw);
 }
 
 /* ========================================================================= *
@@ -395,7 +561,18 @@ export function objectOfPendingAction(action: PendingUserAction): ReferencedObje
  * haqiqiy voqealardan yangilanadi. Ikkinchi holat tizimi
  * yaratilsa, ikkovi vaqt o'tib ajralib ketardi (4-band).
  */
-export function pendingActionForStage(stage: SalesStage): PendingUserAction {
+export function pendingActionForStage(
+  stage: SalesStage,
+  /**
+   * Bu mijozdan pul so'ralishi kerakmi.
+   *
+   * IMTIYOZ BUTUN ZANJIRDA HISOBGA OLINADI (P0, B reproduksiyasi).
+   * Auditda imtiyozli mijozga «To'lov chekini shu yerga yuboring»
+   * deb yozilgan: shablonlar to'silgan edi, LEKIN bosqichdan
+   * kelib chiqadigan eslatma to'silmagan edi.
+   */
+  paymentRequired = true,
+): PendingUserAction {
   switch (stage) {
     case "need_full_name":
       return "send_full_name";
@@ -404,7 +581,7 @@ export function pendingActionForStage(stage: SalesStage): PendingUserAction {
       return "submit_intake";
     case "payment_requested":
     case "waiting_payment":
-      return "send_payment_receipt";
+      return paymentRequired ? "send_payment_receipt" : "none";
     case "offer_sent":
     case "waiting_offer_review":
       return "review_offer";
@@ -471,7 +648,7 @@ function decide(text: string | null | undefined, context: IntentContext): Decisi
    */
   if (context.hasAttachment) {
     const object = objectOfPendingAction(context.pendingUserAction);
-    if (object === "payment") {
+    if (object === "payment" && context.attachmentIsPayment === true) {
       return {
         intent: "payment_receipt_reference",
         confidence: "high",
@@ -517,6 +694,22 @@ function decide(text: string | null | undefined, context: IntentContext): Decisi
     return { intent: "complaint", confidence: "high", matched: "shikoyat" };
   }
 
+  /*
+   * BEKOR QILISH — MINNATDORCHILIKDAN OLDIN (P0, F reproduksiyasi).
+   *
+   * «Chiqarmang, kerakmas. Rahmat» — bitta xabarda ikkalasi.
+   * Minnatdorchilik oldin tekshirilsa, bekor qilish butunlay
+   * yo'qolardi va bot savdoni davom ettiraverardi.
+   */
+  if (matches(CANCELLATION, normalized)) {
+    return {
+      intent: "cancellation",
+      confidence: "high",
+      matched: "bekor qilish",
+      referencedObject: cancellationObject(normalized, context),
+    };
+  }
+
   /* --------------------- ko'rib chiqqanini aytdi ------------------------- */
   if (matches(REVIEW_CONFIRMATION, normalized)) {
     return {
@@ -533,21 +726,50 @@ function decide(text: string | null | undefined, context: IntentContext): Decisi
    * o'zgarishi. Nimani yuborgani kutilayotgan harakatdan
    * kelib chiqadi.
    */
+  /*
+   * FE'L OBYEKTNI BELGILAYDI, BOSQICH EMAS (P0, B reproduksiyasi).
+   *
+   * Ilgari «bajardim» ma'nosidagi har qanday fe'l kutilayotgan
+   * harakatga ko'r-ko'rona bog'lanardi. Natijada anketani
+   * to'ldirgan mijozga «Chek qabul qilindi» deb javob ketgan.
+   */
+  if (matches(INTAKE_ACTION, normalized)) {
+    return {
+      intent: "action_confirmation",
+      confidence: "high",
+      matched: "anketani to'ldirdim",
+      referencedObject: "intake",
+    };
+  }
+  if (matches(PAYMENT_ACTION, normalized)) {
+    /*
+     * MIJOZ "TO'LADIM" DEDI — BU CHEK EMAS.
+     *
+     * Dalil yo'q: na fayl, na tizim yozuvi. Shuning uchun bu
+     * "chek keldi" emas, faqat MIJOZNING DA'VOSI (18-band).
+     */
+    return {
+      intent: "action_confirmation",
+      confidence: "high",
+      matched: "to'ladim (da'vo)",
+      referencedObject: "payment",
+    };
+  }
   if (matches(ACTION_CONFIRMATION, normalized)) {
-    const object = objectOfPendingAction(context.pendingUserAction);
-    if (object === "payment") {
-      return {
-        intent: "payment_receipt_reference",
-        confidence: "high",
-        matched: "bajardim + to'lov kutilyapti",
-        referencedObject: "payment",
-      };
-    }
     return {
       intent: "action_confirmation",
       confidence: context.pendingUserAction === "none" ? "medium" : "high",
-      matched: "bajardim",
-      referencedObject: object,
+      matched: "bajardim (fe'l aniq emas)",
+      /*
+       * Fe'l aniq emas — obyekt ham aniq emas. Kutilayotgan
+       * harakatga bog'lash mumkin, LEKIN to'lov bundan
+       * mustasno: noaniq fe'ldan chek dalilini yasab
+       * bo'lmaydi.
+       */
+      referencedObject:
+        objectOfPendingAction(context.pendingUserAction) === "payment"
+          ? "none"
+          : objectOfPendingAction(context.pendingUserAction),
     };
   }
 
@@ -563,7 +785,7 @@ function decide(text: string | null | undefined, context: IntentContext): Decisi
   }
 
   /* ------------------------------ ism / anketa --------------------------- */
-  if (looksLikePersonName(raw)) {
+  if (looksLikePersonName(raw, context.pendingUserAction === "send_full_name")) {
     /*
      * ISM HECH QACHON BILIM SAVOLI EMAS (20-band).
      *
@@ -622,6 +844,34 @@ function decide(text: string | null | undefined, context: IntentContext): Decisi
     return { intent: "affirmation", confidence: "high", matched: "rozilik" };
   }
 
+  /* --------------------- QISQA ANIQLASHTIRISH (P1) ----------------------- */
+  /*
+   * «Qanaqa chek», «Qanaqa shart», «qaysi» — bular BIZNING
+   * oldingi xabarimizga tegishli savol, umumiy bilim savoli
+   * emas (B, G reproduksiyalari). Ilgari ular bilim bazasiga
+   * borardi, javob topilmasdi va «Javobsiz savollar» ga
+   * yozilardi — ya'ni bot o'z tushunmovchiligini bilim
+   * bo'shlig'i deb qayd etardi.
+   */
+  const tokens = normalized.split(/\s+/).filter((token) => token !== "");
+  if (
+    context.hasHistory &&
+    /*
+     * IKKITA SO'ZGACHA. «Qanday hujjat kerak?» — uchta so'z va
+     * u HAQIQIY bilim savoli; uni aniqlashtirish deb o'qish
+     * mijozni javobsiz qoldirardi.
+     */
+    tokens.length <= 2 &&
+    /^(?:qanaqa|qaysi|qanday|nimaga|nega)\b/u.test(normalized)
+  ) {
+    return {
+      intent: "clarification",
+      confidence: "medium",
+      matched: "qisqa aniqlashtirish",
+      referencedObject: objectOfPendingAction(context.pendingUserAction),
+    };
+  }
+
   /* ------------------------------ bilim savoli --------------------------- */
   /*
    * BILIM SAVOLI KUTILAYOTGAN OBYEKTNI MEROS QILIB OLMAYDI.
@@ -648,6 +898,14 @@ function decide(text: string | null | undefined, context: IntentContext): Decisi
   }
 
   return { intent: "ambiguous", confidence: "low", matched: null };
+}
+
+/** Bekor qilish NIMAGA tegishli. */
+function cancellationObject(normalized: string, context: IntentContext): ReferencedObject {
+  if (/maqola|post|nashr|chi[qk]ar/u.test(normalized)) return "article";
+  if (/to'?lov|pul|chek/u.test(normalized)) return "payment";
+  if (/anketa|ariza/u.test(normalized)) return "intake";
+  return objectOfPendingAction(context.pendingUserAction);
 }
 
 /** Holat savoli NIMA haqida. */

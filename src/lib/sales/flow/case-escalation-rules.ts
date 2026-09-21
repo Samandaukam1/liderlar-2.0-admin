@@ -32,6 +32,17 @@ export const ESCALATION_CATEGORY_LABELS: Record<EscalationCategory, string> = {
 };
 
 /** Savol qaysi obyekt haqida bo'lsa — shu turdagi topshiriq. */
+/**
+ * Bekor qilish so'rovi — ALOHIDA tur.
+ *
+ * "Maqolani chiqarmang" — bu holat savoli emas, ochiq
+ * so'rov. Uni "maqola holati" deb yozish koordinatorni
+ * chalg'itardi.
+ */
+export function categoryForCancellation(object: ReferencedObject): EscalationCategory {
+  return object === "payment" ? "payment_check" : "content_correction";
+}
+
 export function categoryForObject(object: ReferencedObject): EscalationCategory {
   switch (object) {
     case "payment":

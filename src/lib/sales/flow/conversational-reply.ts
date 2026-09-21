@@ -22,6 +22,13 @@ export interface ConversationalInput {
   hasHistory: boolean;
   /** Shu suhbatda allaqachon salomlashganmizmi. */
   alreadyGreeted: boolean;
+  /**
+   * Bu mijozdan pul so'ralishi kerakmi.
+   *
+   * false bo'lsa, javobda to'lov, chek va narx haqida BIR
+   * OG'IZ ham gapirilmaydi — hatto eslatma sifatida ham.
+   */
+  paymentRequired?: boolean;
 }
 
 /** Kutilayotgan qadamni bir jumlada eslatadi. */
@@ -50,7 +57,18 @@ function pendingReminder(action: PendingUserAction): string | null {
  * "." ga javob yozish suhbatni g'alati qiladi.
  */
 export function buildConversationalReply(input: ConversationalInput): string | null {
-  const reminder = pendingReminder(input.pendingUserAction);
+  const paymentRequired = input.paymentRequired !== false;
+
+  /*
+   * IMTIYOZLI MIJOZGA TO'LOV ESLATMASI YO'Q.
+   *
+   * Bosqich `waiting_payment` bo'lib qolgan bo'lsa ham — eski
+   * suhbat yoki eski holat tufayli — eslatma chiqmasligi kerak.
+   */
+  const reminder =
+    !paymentRequired && input.pendingUserAction === "send_payment_receipt"
+      ? null
+      : pendingReminder(input.pendingUserAction);
 
   switch (input.intent) {
     case "greeting": {
@@ -66,7 +84,15 @@ export function buildConversationalReply(input: ConversationalInput): string | n
     }
 
     case "thanks":
-      return reminder ? `Arzimaydi. ${reminder}` : "Arzimaydi 😊";
+      /*
+       * «RAHMAT» GA CTA QO'SHILMAYDI (4-band).
+       *
+       * Auditda har "rahmat" ga keyingi qadam eslatmasi
+       * qo'shilardi va u suhbat tugagandan keyin ham
+       * takrorlanaverardi. Minnatdorchilikka qisqa javob
+       * yetarli.
+       */
+      return "Arzimaydi 😊";
 
     case "confirmation":
       /*
@@ -98,8 +124,24 @@ export function buildConversationalReply(input: ConversationalInput): string | n
       return "Rahmat, oldim.";
 
     case "payment_receipt_reference":
+      /*
+       * IMTIYOZLI MIJOZDAN CHEK KUTILMAYDI — shuning uchun
+       * "chek qabul qilindi" degan javob ham ma'nosiz.
+       */
+      if (!paymentRequired) return "Rahmat, oldim.";
       // ATAYLAB "to'lov tasdiqlandi" EMAS.
       return "Chek qabul qilindi, tekshirib chiqamiz va tasdiqlagach xabar beramiz.";
+
+    case "cancellation":
+      /*
+       * BEKOR QILISHGA SOTUV SHABLONI BERILMAYDI (2-band).
+       *
+       * Botning o'zi bekor qila olmaydi: bu odam ishi.
+       * Shuning uchun bu yerda faqat qabul qilish — va'da
+       * matnini dvigatel topshiriq yaratilgandan keyin
+       * o'zi qo'yadi.
+       */
+      return null;
 
     case "identity_data":
       return "Rahmat. Sizga qanday yordam bera olaman?";
