@@ -85,6 +85,36 @@ https://t.me/uzlye_rasmiy/2405
 https://t.me/uzlye_rasmiy/2344`,
   },
   {
+    /*
+     * IMTIYOZLI YO'NALISH — tanish nomidan yozgan odam.
+     *
+     * Bu matnda narx ham, to'lov ham YO'Q va bu ataylab:
+     * bunday odamdan pul so'ralmaydi. Uning yagona vazifasi —
+     * suhbatni darhol ism so'rashga olib borish.
+     */
+    key: "referral_greeting",
+    title: "Imtiyozli: salomlashish",
+    isExact: true,
+    body: `Assalomu alaykum. Bog'langaningiz uchun rahmat!
+
+Yaxshi, sizga hozir maqola uchun savollar havolasini tayyorlab beraman.`,
+  },
+  {
+    /*
+     * Imtiyozli suhbatda mijoz narx haqida so'rab qolsa.
+     *
+     * Bilim bazasidagi javob narxni aytib yuborishi mumkin
+     * edi — bu esa "pul so'ralmasin" qoidasini buzardi.
+     * Shunday javob o'rniga shu matn ketadi.
+     */
+    key: "referral_no_payment_reply",
+    title: "Imtiyozli: narx savoliga javob",
+    isExact: true,
+    body: `Bu savol bo'yicha mas'ul hamkasbim o'zi bog'lanadi.
+
+Siz faqat ismingizni to'liq yozib yuboring — qolganini o'zimiz hal qilamiz.`,
+  },
+  {
     key: "benefits_question",
     title: "Foydalar haqida bilasizmi",
     isExact: true,

@@ -227,6 +227,7 @@ test("opt-out qilgan mijozga HECH NARSA yuborilmaydi", () => {
     kind: "template",
     templateKey: "x",
     body: "matn",
+    referral: false,
     autoReplyEnabled: true,
     aiEnabled: true,
     connectionEnabled: true,

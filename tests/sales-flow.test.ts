@@ -223,6 +223,8 @@ const baseContext = (over: Partial<OutboundContext> = {}): OutboundContext => ({
   // rollout to'liq ochiq qilinadi va o'z testlari alohida yoziladi.
   rollout: { mode: "full", allowlistChatIds: [], percentage: 100 },
   rolloutBucket: 0,
+  // Imtiyozli yo'nalish o'z testlarida tekshiriladi.
+  referral: false,
   optedOut: false,
   connectionEnabled: true,
   connectionCanReply: true,

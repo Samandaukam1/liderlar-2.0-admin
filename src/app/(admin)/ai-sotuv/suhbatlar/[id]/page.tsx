@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/admin/page-header";
 import { Badge } from "@/components/admin/badges";
 import { getConversationDetail, getConversationFlowState } from "@/lib/sales/repository";
 import { SALES_STAGE_LABELS, isSalesStage } from "@/lib/sales/flow/stages";
+import { REFERRAL_SOURCE_LABELS } from "@/lib/sales/flow/referral";
 import {
   OUTBOUND_REFUSAL_FIXES,
   OUTBOUND_REFUSAL_LABELS,
@@ -117,6 +118,19 @@ export default async function SalesConversationPage({
             <Badge accent="brand">
               {isSalesStage(flow.stage) ? SALES_STAGE_LABELS[flow.stage] : flow.stage}
             </Badge>
+            {/*
+              IMTIYOZLI YO'NALISH BELGISI.
+
+              Admin suhbatni ochganda BIRINCHI bilishi kerak
+              bo'lgan narsa: bu odamdan pul so'ralmaydi. Belgi
+              bo'lmasa, admin o'zi qo'lda to'lov so'rab yuborishi
+              mumkin edi.
+            */}
+            {flow.referralSource ? (
+              <Badge accent="mint">
+                imtiyozli: {referralLabel(flow.referralSource)} — pul so‘ralmaydi
+              </Badge>
+            ) : null}
             {!flow.aiEnabled ? (
               <Badge accent="peach">inson nazoratida — AI jim</Badge>
             ) : (
@@ -285,4 +299,9 @@ function refusalFix(reason: string): string {
   return isRefusalReason(reason)
     ? OUTBOUND_REFUSAL_FIXES[reason]
     : "Sabab noma\u2019lum — jurnalga qarang.";
+}
+
+/** Noma'lum manba kaliti ham ko'rsatiladi — sahifa yiqilmasin. */
+function referralLabel(source: string): string {
+  return REFERRAL_SOURCE_LABELS[source] ?? source;
 }

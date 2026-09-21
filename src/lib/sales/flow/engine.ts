@@ -31,6 +31,7 @@ import { computeLeadScore, type LeadTemperature } from "./lead-score.ts";
 import { detectOptOut, OPT_OUT_REPLY } from "./optout.ts";
 import { detectHandoff, buildHandoffSummary, type HandoffTrigger } from "./handoff.ts";
 import { detectMinor } from "./minor.ts";
+import { detectReferral, mentionsMoney } from "./referral.ts";
 import { buildFallback, isFillerMessage, type FallbackReason } from "./fallback.ts";
 import { newRolloutBucket, type RolloutSettings } from "./rollout.ts";
 import { normalizeForMatch } from "../text-normalize.ts";
@@ -146,6 +147,15 @@ interface FlowConversation {
    * shunaqami?" deb so'rash xato bo'lardi.
    */
   entry: ConversationEntry;
+  /*
+   * Tanish nomidan kelgan bo'lsa — manba kaliti.
+   *
+   * SUHBAT QATORIDA saqlanadi, xabarda emas: odam tanish nomini
+   * BIR MARTA, birinchi xabarda aytadi. Keyingi xabarlarida u
+   * yo'q va har safar matndan qidirilsa, qoida ikkinchi
+   * xabardayoq kuchini yo'qotardi.
+   */
+  referralSource: string | null;
 }
 
 async function loadConversation(conversationId: string): Promise<FlowConversation | null> {
@@ -156,7 +166,7 @@ async function loadConversation(conversationId: string): Promise<FlowConversatio
       "id, business_connection_id, chat_id, sales_stage, ai_enabled, customer_full_name, " +
         "intake_id, payment_status, objections, lead_score, lead_score_reasons, " +
         "lead_temperature, opted_out_at, is_minor, rollout_bucket, " +
-        "memory, greeted_at, greeting_session_started_at, human_required_at, entry",
+        "memory, greeted_at, greeting_session_started_at, human_required_at, entry, referral_source",
     )
     .eq("id", conversationId)
     .maybeSingle();
@@ -201,6 +211,7 @@ async function loadConversation(conversationId: string): Promise<FlowConversatio
      * darhol ko'rinadi.
      */
     entry: row.entry === "inbound" ? "inbound" : "outbound",
+    referralSource: (row.referral_source as string | null) ?? null,
   };
 }
 
@@ -312,6 +323,7 @@ async function send(
     rollout: context.rollout,
     rolloutBucket: context.conversation.rolloutBucket,
     optedOut: context.conversation.optedOut,
+    referral: context.conversation.referralSource != null,
   });
 
   if (!decision.allowed) {
@@ -802,6 +814,36 @@ async function runFlowSteps(input: HandleMessageInput): Promise<FlowRunResult | 
     return result;
   }
 
+  /* ------------------------ IMTIYOZLI YO'NALISH ------------------------- */
+  /*
+   * TANISH NOMIDAN KELGAN ODAM.
+   *
+   * O'tkazish va opt-out'dan KEYIN, lekin ssenariy qarorlaridan
+   * OLDIN: bu bayroq o'tish jadvalini ham, yuborish darvozasini
+   * ham o'zgartiradi, shuning uchun u shu xabarning o'zida
+   * kuchga kirishi kerak — keyingi xabarda emas.
+   *
+   * BIR MARTA YOZILADI. Odam tanish nomini birinchi xabarda
+   * aytadi; keyin uni qayta aytmaydi. Agar bayroq har xabarda
+   * qayta hisoblansa, ikkinchi xabardayoq o'chib ketardi va
+   * mijozga to'lov ma'lumoti ketib qolardi.
+   */
+  if (conversation.referralSource == null) {
+    const referral = detectReferral(input.text);
+    if (referral) {
+      conversation.referralSource = referral.source;
+      await adminClient()
+        .from("sales_conversations")
+        .update({
+          referral_source: referral.source,
+          referral_matched_at: new Date().toISOString(),
+        })
+        .eq("id", conversation.id)
+        .is("referral_source", null);
+      result.notes.push(`imtiyozli yo‘nalish: ${referral.label} (${referral.matched})`);
+    }
+  }
+
   /* ---------------------- e'tiroz, yosh, harorat ------------------------ */
   const detectedObjections = detectObjections(input.text);
   const objections = mergeObjections(conversation.objections, detectedObjections);
@@ -905,7 +947,12 @@ async function runFlowSteps(input: HandleMessageInput): Promise<FlowRunResult | 
   result.intent = intent;
 
   /* ---------------------------- o‘tish qidirish -------------------------- */
-  const transition = resolveTransition(conversation.stage, intent, conversation.entry);
+  const transition = resolveTransition(
+    conversation.stage,
+    intent,
+    conversation.entry,
+    conversation.referralSource != null,
+  );
 
   if (!transition) {
     // Ssenariyda javobi yo'q — bilim bazasidan javob beramiz.
@@ -1245,7 +1292,17 @@ async function answerFromKnowledge(
     greetingInstruction: greetingInstruction(greeting, null),
   });
 
-  const extraContext = [memoryBlock, commercial, alreadySaid]
+  /*
+   * IMTIYOZLI SUHBATDA NARX BLOKI MODELGA BERILMAYDI.
+   *
+   * Pastdagi tekshiruv narx aytilgan javobni baribir to'sadi,
+   * lekin modelga narxni umuman bermaslik arzonroq: aks holda
+   * har savolda javob yaratiladi, to'siladi va o'rniga boshqa
+   * xabar ketadi — mijoz esa kutib turadi.
+   */
+  const referralConversation = context.conversation.referralSource != null;
+
+  const extraContext = [memoryBlock, referralConversation ? "" : commercial, alreadySaid]
     .filter((block) => block !== "")
     .join("\n\n");
 
@@ -1368,6 +1425,31 @@ async function answerFromKnowledge(
   if (!greeting.shouldGreet && startsWithGreeting(body)) {
     body = stripGreeting(body);
     context.result.notes.push("takroriy salomlashish olib tashlandi");
+  }
+
+  /*
+   * OXIRGI TO'SIQ: IMTIYOZLI SUHBATDA PUL GAPI.
+   *
+   * Shablonlar kalit bo'yicha to'silgan, lekin bu javobni MODEL
+   * yozgan va unda kalit yo'q. Bilim bazasida narx haqidagi
+   * yozuvlar bor, shuning uchun savol boshqacha qo'yilsa javob
+   * narxni aytib qo'yishi mumkin edi.
+   *
+   * Javob TASHLANADI va o'rniga tayyor matn ketadi — mijoz
+   * javobsiz qolmaydi va suhbat ismga qarab davom etadi.
+   */
+  if (referralConversation && mentionsMoney(body)) {
+    context.result.notes.push("imtiyozli suhbat: pul haqidagi javob to‘xtatildi");
+    const template = getTemplate("referral_no_payment_reply");
+    if (template) {
+      await send(context, {
+        body: template.body,
+        kind: "template",
+        templateKey: "referral_no_payment_reply",
+        expectedStages: [],
+      });
+    }
+    return;
   }
 
   const outcome = await send(context, {

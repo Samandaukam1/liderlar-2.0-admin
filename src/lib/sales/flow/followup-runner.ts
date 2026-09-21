@@ -123,7 +123,7 @@ export async function runFollowupTick(now: Date = new Date()): Promise<FollowupT
       .from("sales_conversations")
       // Bitta satr literal: Supabase tip xulosasi birlashtirilgan
       // ifodadan ustunlarni o'qiy olmaydi va natija `any` bo'lib qoladi.
-      .select("id, business_connection_id, chat_id, sales_stage, ai_enabled, opted_out_at, rollout_bucket, human_required_at, payment_status, memory, last_incoming_at")
+      .select("id, business_connection_id, chat_id, sales_stage, ai_enabled, opted_out_at, rollout_bucket, human_required_at, payment_status, memory, last_incoming_at, referral_source")
       .eq("id", conversationId)
       .maybeSingle();
 
@@ -222,6 +222,15 @@ export async function runFollowupTick(now: Date = new Date()): Promise<FollowupT
       // Follow-up YUBORISHDAN OLDIN qayta tekshiriladi (20-band):
       // rejalashtirilgandan keyin mijoz "yozmang" degan bo'lishi mumkin.
       optedOut: conversation.opted_out_at != null || memory.optOut,
+      /*
+       * IMTIYOZLI SUHBAT — eslatma ham bundan mustasno emas.
+       *
+       * Eslatmalar ssenariy jadvalidan o'tmaydi, shuning uchun
+       * u yerdagi taqiq bu yo'lni qamramaydi. "To'lovni
+       * unutmang" degan avtomatik eslatma aynan shu yerdan
+       * chiqib ketishi mumkin edi.
+       */
+      referral: conversation.referral_source != null,
     });
 
     if (!decision.allowed) {

@@ -300,6 +300,46 @@ const INBOUND_INDEX = new Map(
   INBOUND_TRANSITIONS.map((t) => [`${t.from}|${t.intent}`, t]),
 );
 
+/* ------------------------ imtiyozli yo'nalish ------------------------- */
+
+/**
+ * TANISH NOMIDAN yozgan odam uchun o'tishlar.
+ *
+ * Bu odamdan PUL SO'RALMAYDI: narx ham, to'lov ma'lumoti ham
+ * yuborilmaydi. Undan kerak bo'lgan yagona narsa — ism, chunki
+ * anketa havolasi ismsiz yaratilmaydi.
+ *
+ * Shu sababli `offer_sent` va `article_decision` bosqichlari
+ * BUTUNLAY tushirib qoldiriladi: ular narx va qaror bosqichlari
+ * va imtiyozli odam uchun ma'nosi yo'q.
+ */
+export const REFERRAL_TRANSITIONS: readonly StageTransition[] = [
+  ...(["other", "yes", "question", "need_info"] as const).map((intent) => ({
+    from: "new" as const,
+    intent,
+    to: "need_full_name" as const,
+    templates: ["referral_greeting", "request_full_name_with_samples"],
+  })),
+
+  /*
+   * Suhbat oddiy yo'ldan boshlanib, odam tanish nomini
+   * KEYINROQ aytgan bo'lishi mumkin — u holda narxni
+   * allaqachon olgan bo'ladi va uni qaytarib bo'lmaydi.
+   * Lekin to'lov ma'lumoti bundan keyin ham ketmaydi:
+   * `payment_details` bu o'tishdan olib tashlangan.
+   */
+  {
+    from: "article_decision",
+    intent: "yes",
+    to: "need_full_name",
+    templates: ["request_full_name_with_samples"],
+  },
+];
+
+const REFERRAL_INDEX = new Map(
+  REFERRAL_TRANSITIONS.map((t) => [`${t.from}|${t.intent}`, t]),
+);
+
 /**
  * Bosqich va niyat bo'yicha o'tishni topadi.
  *
@@ -311,7 +351,19 @@ export function resolveTransition(
   stage: SalesStage,
   intent: ReplyIntent,
   entry: ConversationEntry = "outbound",
+  referral = false,
 ): StageTransition | null {
+  /*
+   * IMTIYOZLI YO'NALISH ENG USTUN.
+   *
+   * U kiruvchi jadvaldan ham oldin tekshiriladi, chunki
+   * kiruvchi jadvalda narx va to'lov shablonlari bor va bu
+   * odamga ular ketmasligi kerak.
+   */
+  if (referral) {
+    const special = REFERRAL_INDEX.get(`${stage}|${intent}`);
+    if (special) return special;
+  }
   if (entry === "inbound") {
     const inbound = INBOUND_INDEX.get(`${stage}|${intent}`);
     if (inbound) return inbound;

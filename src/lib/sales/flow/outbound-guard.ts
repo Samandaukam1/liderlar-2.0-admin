@@ -23,6 +23,7 @@
 
 import type { SalesStage } from "./stages.ts";
 import { decideRollout, type RolloutSettings } from "./rollout.ts";
+import { isMoneyTemplate } from "./referral.ts";
 
 /**
  * Muhr. Modul ichida yaratiladi va eksport QILINMAYDI, shuning uchun
@@ -54,6 +55,9 @@ export const OUTBOUND_REFUSAL_REASONS = [
   "missing_chat",
   // Mijoz "boshqa yozmang" degan — bu HAMMA NARSADAN ustun.
   "opted_out",
+  // Imtiyozli suhbat: tanish nomidan kelgan odamdan pul
+  // so'ralmaydi va unga narx/to'lov matni yuborilmaydi.
+  "referral_no_payment",
   // Chiqarish bosqichi (28-band): kod yoqiq, lekin bu suhbat hali
   // qamrovda emas.
   "rollout_off",
@@ -72,6 +76,7 @@ export const OUTBOUND_REFUSAL_LABELS: Record<OutboundRefusalReason, string> = {
   empty_body: "Xabar matni bo‘sh",
   missing_chat: "Chat yoki ulanish identifikatori yo‘q",
   opted_out: "Mijoz avtomatik aloqadan chiqqan",
+  referral_no_payment: "Imtiyozli suhbat — narx va to‘lov matni yuborilmaydi",
   rollout_off: "Chiqarish o‘chiq",
   rollout_test_only: "Faqat sinov rejimi",
   rollout_not_allowlisted: "Bu chat tanlangan ro‘yxatda yo‘q",
@@ -96,6 +101,8 @@ export const OUTBOUND_REFUSAL_FIXES: Record<OutboundRefusalReason, string> = {
     "Telegram Business sozlamasida botga «xabar yuborish» huquqini bering.",
   opted_out:
     "Mijoz «boshqa yozmang» degan. Bu qaror — avtomatik javob qaytarilmaydi.",
+  referral_no_payment:
+    "Bu odam tanish nomidan yozgan, shuning uchun undan pul so‘ralmaydi. To‘lov kerak bo‘lsa, suhbatni o‘zingiz davom ettiring.",
   unexpected_stage: "Texnik holat — tahlil uchun jurnalga qarang.",
   empty_body: "Texnik holat — shablon matni bo‘sh.",
   missing_chat: "Texnik holat — chat identifikatori yo‘q.",
@@ -143,6 +150,9 @@ export const COVERAGE_REFUSAL_REASONS = [
 export const DELIBERATE_REFUSAL_REASONS = [
   "human_takeover",
   "opted_out",
+  // Bu ham QAROR: mijoz xabar olmadi, lekin holat haqiqiy —
+  // shu suhbatda narx matni umuman ketmasligi kerak.
+  "referral_no_payment",
   "unexpected_stage",
   "empty_body",
 ] as const;
@@ -176,6 +186,14 @@ export interface OutboundContext {
   rolloutBucket: number | null;
   /** Mijoz avtomatik aloqadan chiqqanmi. */
   optedOut: boolean;
+  /**
+   * Suhbat imtiyozli yo'nalishdami (tanish nomidan kelgan).
+   *
+   * Shunday bo'lsa narx va to'lov shablonlari SHU YERDA
+   * to'xtatiladi. Taqiqni ssenariy jadvaliga qo'yish yetarli
+   * emas edi: follow-up va bilim javobi jadvaldan o'tmaydi.
+   */
+  referral: boolean;
 }
 
 export type OutboundDecision =
@@ -196,6 +214,17 @@ export function authorizeOutbound(context: OutboundContext): OutboundDecision {
    * edi (sinov va jonli yo'l bitta funksiyadan o'tadi).
    */
   if (context.optedOut) return { allowed: false, reason: "opted_out" };
+
+  /*
+   * IMTIYOZLI SUHBATDA PUL MATNI — SINOV REJIMIDAN HAM OLDIN.
+   *
+   * Sinov rejimi Telegram tekshiruvlarini o'tkazib yuboradi.
+   * Agar bu taqiq pastda tursa, sinovda narx matni "yuborildi"
+   * deb ko'rinardi va admin qoidani ishlayapti deb o'ylardi.
+   */
+  if (context.referral && isMoneyTemplate(context.templateKey)) {
+    return { allowed: false, reason: "referral_no_payment" };
+  }
 
   // Inson nazorati: sozlama yoqiq bo'lsa ham AI jim.
   if (!context.aiEnabled) return { allowed: false, reason: "human_takeover" };

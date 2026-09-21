@@ -1252,6 +1252,8 @@ export interface ConversationFlowState {
    */
   lastRefusalReason: string | null;
   lastRefusalAt: string | null;
+  /** Tanish nomidan kelgan bo'lsa — manba kaliti. */
+  referralSource: string | null;
   evidence: Array<{
     id: string;
     fileKind: string;
@@ -1286,7 +1288,7 @@ export async function getConversationFlowState(
       admin
         .from("sales_conversations")
         .select(
-          "sales_stage, stage_updated_at, ai_enabled, takeover_at, customer_full_name, intake_id, intake_link_prefix, intake_link_expires_at, payment_status, paid_at, last_refusal_reason, last_refusal_at",
+          "sales_stage, stage_updated_at, ai_enabled, takeover_at, customer_full_name, intake_id, intake_link_prefix, intake_link_expires_at, payment_status, paid_at, last_refusal_reason, last_refusal_at, referral_source",
         )
         .eq("id", conversationId)
         .maybeSingle(),
@@ -1324,6 +1326,7 @@ export async function getConversationFlowState(
     paidAt: (conversation.paid_at as string | null) ?? null,
     lastRefusalReason: (conversation.last_refusal_reason as string | null) ?? null,
     lastRefusalAt: (conversation.last_refusal_at as string | null) ?? null,
+    referralSource: (conversation.referral_source as string | null) ?? null,
     evidence: (evidence ?? []).map((row) => ({
       id: row.id as string,
       fileKind: row.file_kind as string,
