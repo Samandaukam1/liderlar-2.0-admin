@@ -738,3 +738,37 @@ test("apostrof variantlari qidiruvda birlashadi", () => {
   const b = tokenize("to'lov qanday");
   assert.deepEqual(a, b);
 });
+
+test("«Tanishib chiqdim» ga TAKROR eslatma qaytarilmaydi", () => {
+  /*
+   * Mijoz ko'rib chiqqanini aytdi. "Shartlar bilan tanishib
+   * chiqqach ayting" degan javob botning uni o'qimaganini
+   * ko'rsatadi — bu 9- va 25-banddagi aynan o'sha nosozlik.
+   */
+  const result = classifyMessageIntent("Tanishib chiqdim", ctx({
+    stage: "offer_sent",
+    pendingUserAction: "review_offer",
+  }));
+  assert.equal(result.intent, "confirmation");
+
+  const reply = buildConversationalReply({
+    intent: result.intent,
+    pendingUserAction: "review_offer",
+    hasHistory: true,
+    alreadyGreeted: true,
+  });
+  assert.ok(reply);
+  assert.ok(
+    !/tanishib chiq/i.test(reply),
+    `bot o‘zi so‘ragan narsani qayta so‘rayapti: ${reply}`,
+  );
+});
+
+test("«ko‘rdim» to‘lov kutilayotganda CHEK deb o‘qilmaydi", () => {
+  // "ko'rdim" — ko'rib chiqdim, chek yubordim EMAS.
+  const result = classifyMessageIntent("Ko‘rdim", ctx({
+    stage: "waiting_payment",
+    pendingUserAction: "send_payment_receipt",
+  }));
+  assert.notEqual(result.intent, "payment_receipt_reference");
+});

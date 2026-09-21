@@ -68,9 +68,19 @@ export function buildConversationalReply(input: ConversationalInput): string | n
     case "thanks":
       return reminder ? `Arzimaydi. ${reminder}` : "Arzimaydi 😊";
 
+    case "confirmation":
+      /*
+       * "TANISHDIM" GA "TANISHIB CHIQQACH AYTING" DEB JAVOB
+       * BERISH — botning mijozni o'qimaganini ko'rsatadi.
+       *
+       * Shu sababli bu yerda eslatma TAKRORLANMAYDI. Keyingi
+       * qadamni ssenariy jadvali o'zi yuradi; bu javob faqat
+       * jadvalda qadam bo'lmagan holat uchun.
+       */
+      return "Yaxshi, rahmat.";
+
     case "acknowledgement":
     case "affirmation":
-    case "confirmation":
       // Tan olishga uzun javob kerak emas — faqat keyingi qadam.
       return reminder ?? "Yaxshi.";
 

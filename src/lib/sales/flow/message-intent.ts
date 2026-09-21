@@ -202,6 +202,19 @@ const ACKNOWLEDGEMENT: SemanticGroup = {
   ],
 };
 
+/**
+ * Ko'rib chiqqanini aytdi: "tanishdim", "o'qidim", "ko'rdim".
+ *
+ * Bu ALOHIDA guruh, chunki uni oddiy tan olish deb o'qish
+ * botni kulgili qilardi: mijoz "tanishib chiqdim" deganda
+ * "shartlar bilan tanishib chiqqach ayting" degan eslatma
+ * qaytardi — ya'ni bot uni o'qimagani ko'rinib turardi.
+ */
+const REVIEW_CONFIRMATION: SemanticGroup = {
+  id: "review_confirmation",
+  patterns: [/tanish[dt]im|tanishib chiq|o'?qidim|o'?qib chiq|ko'?rdim|ko'?rib chiq/u],
+};
+
 /** Mijoz so'ralgan ishni BAJARGANINI aytdi. */
 const ACTION_CONFIRMATION: SemanticGroup = {
   id: "action_confirmation",
@@ -474,6 +487,16 @@ function decide(text: string | null | undefined, context: IntentContext): Decisi
   }
   if (matches(COMPLAINT, normalized)) {
     return { intent: "complaint", confidence: "high", matched: "shikoyat" };
+  }
+
+  /* --------------------- ko'rib chiqqanini aytdi ------------------------- */
+  if (matches(REVIEW_CONFIRMATION, normalized)) {
+    return {
+      intent: "confirmation",
+      confidence: "high",
+      matched: "ko'rib chiqdim",
+      referencedObject: context.pendingUserAction === "review_offer" ? "offer" : "none",
+    };
   }
 
   /* --------------------- bajarganini aytdi (kontekst) -------------------- */
