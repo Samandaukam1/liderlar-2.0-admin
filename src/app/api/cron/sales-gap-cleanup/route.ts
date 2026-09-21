@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { reclassifyKnowledgeGaps } from "@/lib/sales/gaps/reclassify-service";
+import { gapCounts, reclassifyKnowledgeGaps } from "@/lib/sales/gaps/reclassify-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,7 +49,25 @@ export async function GET(request: NextRequest) {
         (result.error ? ` XATO=${result.error}` : ""),
     );
 
-    return NextResponse.json({ ok: result.error === null, ...result });
+    /*
+     * JORIY HOLAT HAM YOZILADI, faqat shu yurishning natijasi
+     * emas.
+     *
+     * NEGA: ish idempotent — birinchi yurish hammasini
+     * tasniflaydi, keyingilari nol qaytaradi. Faqat delta
+     * yozilsa, "navbat hozir qanday?" degan savolga javob
+     * birinchi yurishdan keyin abadiy yo'qolardi.
+     */
+    const totals = await gapCounts();
+    console.log(
+      `[gap-cleanup] holat: navbat=${totals.open} arxiv=${totals.archived} ` +
+        `odam_kerak=${totals.escalationsOpen} taqsimot=` +
+        Object.entries(totals.byClassification)
+          .map(([key, value]) => `${key}:${value}`)
+          .join(","),
+    );
+
+    return NextResponse.json({ ok: result.error === null, ...result, totals });
   } catch (err) {
     console.error(
       "[gap-cleanup] xato:",
