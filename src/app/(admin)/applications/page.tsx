@@ -1,4 +1,5 @@
 import { ClipboardList } from "lucide-react";
+import { PromoReportPanel } from "./promo-report-panel";
 import { requirePermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { parseListParams, listRange, PAGE_SIZE } from "@/lib/list";
@@ -123,6 +124,7 @@ export default async function ApplicationsPage(props: {
         description="Platformaga qo‘shilish arizalari — ko‘rib chiqish va nomzodga aylantirish"
         breadcrumbs={[{ label: "Arizalar" }]}
       />
+      <PromoReportPanel />
       <DataTableToolbar
         searchPlaceholder="Ism, telefon, Telegram yoki promo kod…"
         filters={[
