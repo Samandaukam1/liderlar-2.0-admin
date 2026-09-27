@@ -316,6 +316,19 @@ export interface BotStatusCounts {
   posts: number;
   /** Saytda chop etilgan nomzodlar. */
   published: number;
+  /**
+   * TEKINGA chiqarilganlar: chop etilgan, lekin to'lov qilmagan.
+   *
+   * `published` ichida ular ham bor — bu son uning QISMI, ustiga
+   * qo'shiladigan alohida guruh emas. Aks holda jami noto'g'ri
+   * chiqardi.
+   *
+   * Manba — `candidate_intakes.payment_status = 'unpaid'`, ya'ni
+   * admin tasdiqlagan va to'lovsiz chiqqan nomzod. To'lov holati
+   * noma'lum bo'lganlar bu yerga KIRMAYDI: "noma'lum" tekin
+   * degani emas.
+   */
+  publishedFree: number;
 }
 
 /**
@@ -377,6 +390,7 @@ export function buildBotStatusReportText(input: BotStatusReportInput): string {
     `❔ Javob berilmagan: ${today.paymentUnknown}`,
     `🖼 Postga aylantirilgan: ${today.posts}`,
     `🌐 Saytda chop etilgan: ${today.published}`,
+    `🎁 Shundan TEKIN chiqarilgan: ${today.publishedFree}`,
     "",
     "— JAMI —",
     `✍️ To‘ldirmoqda: ${total.filling}`,
@@ -386,5 +400,6 @@ export function buildBotStatusReportText(input: BotStatusReportInput): string {
     `❔ Javob berilmagan: ${total.paymentUnknown}`,
     `🖼 Postga aylantirilgan: ${total.posts}`,
     `🌐 Saytda chop etilgan: ${total.published}`,
+    `🎁 Shundan TEKIN chiqarilgan: ${total.publishedFree}`,
   ].join("\n");
 }

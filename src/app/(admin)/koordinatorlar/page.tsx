@@ -32,7 +32,7 @@ export default async function CoordinatorsPage() {
       .from("coordinators")
       .select(
         "id, full_name, photo_url, region_id, phone, public_phone, show_phone_publicly, " +
-          "public_email, bio, telegram_user_id, telegram_username, status, backup_priority, " +
+          "public_email, bio, telegram_user_id, telegram_username, promo_code, status, backup_priority, " +
           "daily_lead_limit, is_active, regions(name)",
       )
       .eq("is_active", true)
@@ -60,6 +60,7 @@ export default async function CoordinatorsPage() {
        */
       hasTelegram: row.telegram_user_id != null,
       telegramUsername: (row.telegram_username as string | null) ?? null,
+      promoCode: (row.promo_code as string | null) ?? null,
       status: (row.status as string) ?? "active",
       backupPriority: (row.backup_priority as number) ?? 100,
       dailyLeadLimit: (row.daily_lead_limit as number | null) ?? null,

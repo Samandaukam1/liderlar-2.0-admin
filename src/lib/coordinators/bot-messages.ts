@@ -56,30 +56,92 @@ export const CLAIM_BUTTON_LABEL = "🙋 BAND QILISH";
 
 /* ------------------------------ xabarlar --------------------------------- */
 
+export interface LeadContact {
+  phone: string | null;
+  /** Telegram: @username yoki telefon raqam. */
+  telegram: string | null;
+  /** Yosh oralig'i: 14-18, 19-24, ... */
+  ageRange: string | null;
+}
+
 export interface LeadNotification {
   fullName: string;
   regionName: string | null;
   appliedAt: string | null;
   claimWindowMinutes: number;
+  /**
+   * PROMO LID — egasi allaqachon aniq.
+   *
+   * Bunday lid FAQAT kod egasiga boradi va muddat tugaganda ham
+   * boshqasiga o'tmaydi, chunki nomzod tekinga chiqariladi.
+   */
+  promo?: {
+    /** Nomzod arizada yozgan kod. */
+    code: string | null;
+  } | null;
+  /**
+   * Kontakt ma'lumoti — FAQAT promo lidda.
+   *
+   * Oddiy lidda bu maydon bo'sh qoldiriladi; sababi quyida.
+   */
+  contact?: LeadContact | null;
 }
 
 /**
  * Yangi lid xabari.
  *
- * TELEFON RAQAM VA BOSHQA SHAXSIY MA'LUMOT YO'Q. Bu xabar hali
- * hech kimga biriktirilmagan lid haqida va u bir nechta
- * koordinatorga ketishi mumkin. Kontakt band qilingandan KEYIN
- * beriladi — mas'ul aniq bo'lgach.
+ * ODDIY LIDDA TELEFON VA BOSHQA SHAXSIY MA'LUMOT YO'Q. U xabar
+ * hali hech kimga biriktirilmagan lid haqida va bir nechta
+ * koordinatorga ketishi mumkin — kontakt band qilingandan KEYIN
+ * beriladi, mas'ul aniq bo'lgach.
+ *
+ * PROMO LID — ISTISNO, VA U XAVFSIZ. Bunday lid qurilishi bo'yicha
+ * BITTA odamga boradi: kod egasiga. Boshqa koordinator uni ko'rmaydi,
+ * muddat tugaganda ham olmaydi. Ya'ni "bir nechta koordinatorga
+ * tarqalib ketadi" degan xavf bu yerda yo'q va kontaktni darhol
+ * berish nomzodni kuttirmaydi.
  */
 export function buildLeadNotification(input: LeadNotification): string {
-  const lines = [
-    "🆕 YANGI LID",
-    "",
-    `Hudud: ${input.regionName ?? "aniqlanmagan"}`,
-    `Nomzod: ${input.fullName}`,
-  ];
+  const promo = input.promo ?? null;
+
+  const lines = promo
+    ? ["🎟 PROMO LID — SIZGA BIRIKTIRILDI", ""]
+    : ["🆕 YANGI LID", ""];
+
+  if (promo?.code) lines.push(`Promo kod: ${promo.code}`);
+  lines.push(`Hudud: ${input.regionName ?? "aniqlanmagan"}`);
+  lines.push(`Nomzod: ${input.fullName}`);
+
+  /*
+   * KONTAKT FAQAT PROMO LIDDA VA FAQAT MAVJUD BO'LSA.
+   *
+   * Bo'sh maydon "—" bo'lib chiqsa, koordinator raqam bor deb
+   * o'ylab qidirib yuradi. Yo'q narsa yozilmaydi.
+   */
+  if (promo && input.contact) {
+    if (input.contact.phone) lines.push(`Telefon: ${input.contact.phone}`);
+    if (input.contact.telegram) lines.push(`Telegram: ${input.contact.telegram}`);
+    if (input.contact.ageRange) lines.push(`Yosh: ${input.contact.ageRange}`);
+  }
+
   if (input.appliedAt) lines.push(`Ariza vaqti: ${formatTime(input.appliedAt)}`);
-  lines.push("", `⏱ Band qilish uchun: ${input.claimWindowMinutes} daqiqa`);
+
+  if (promo) {
+    /*
+     * MUDDAT AYTILMAYDI, chunki muddat YO'Q.
+     *
+     * "10 daqiqa" deb yozib, keyin muddatni qo'llamaslik —
+     * koordinatorni chalg'itish. Bu lid kutib turadi.
+     */
+    lines.push(
+      "",
+      "Bu nomzod TEKINGA chiqariladi — sizning promo kodingiz bilan keldi.",
+      "Lid boshqa koordinatorga o‘tmaydi, shoshilmasdan band qiling.",
+    );
+  } else {
+    lines.push("", `⏱ Band qilish uchun: ${input.claimWindowMinutes} daqiqa`);
+  }
+
   return lines.join("\n");
 }
 

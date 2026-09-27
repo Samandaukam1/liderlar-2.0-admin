@@ -108,6 +108,7 @@ const counts = (n: number): BotStatusCounts => ({
   unpaid: n,
   paymentUnknown: n,
   posts: n,
+  publishedFree: n,
   published: n,
 });
 

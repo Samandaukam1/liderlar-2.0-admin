@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { requirePermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
+import { promoCodesMatch, validatePromoCode } from "@/lib/coordinators/promo-code";
 import { COORDINATOR_SETTING_KEYS } from "@/lib/coordinators/settings";
 import { ensureLeadIntakeSince } from "@/lib/coordinators/lead-intake";
 
@@ -54,6 +55,27 @@ const coordinatorSchema = z.object({
     .transform((v) => (v && v !== "" ? v : null))
     .refine((v) => v === null || /^\d{5,15}$/.test(v), "Telegram ID faqat raqamlardan iborat"),
   telegramUsername: optionalText(64),
+  /**
+   * PROMO KOD.
+   *
+   * Nomzod arizada shu kodni yozsa, lid AYNAN shu koordinatorga
+   * biriktiriladi va boshqa koordinatorlarga o'tmaydi. Kod
+   * normallashtirilgan holda saqlanadi, aks holda "ALI-1" va
+   * "ali 1" ikki boshqa kod bo'lib qolardi.
+   */
+  promoCode: z
+    .string()
+    .trim()
+    .optional()
+    .transform((v) => v ?? "")
+    .superRefine((value, ctx) => {
+      const check = validatePromoCode(value);
+      if (!check.ok) ctx.addIssue({ code: "custom", message: check.reason ?? "Promo kod xato" });
+    })
+    .transform((v) => {
+      const code = validatePromoCode(v).code;
+      return code === "" ? null : code;
+    }),
   status: z.enum(["active", "paused", "offline", "suspended"]),
   backupPriority: z.coerce.number().int().min(0).max(9999),
   dailyLeadLimit: z
@@ -77,11 +99,32 @@ function parseForm(formData: FormData) {
     bio: formData.get("bio") ?? "",
     telegramUserId: formData.get("telegramUserId") ?? "",
     telegramUsername: formData.get("telegramUsername") ?? "",
+    promoCode: formData.get("promoCode") ?? "",
     status: formData.get("status") ?? "active",
     backupPriority: formData.get("backupPriority") ?? 100,
     dailyLeadLimit: formData.get("dailyLeadLimit") ?? "",
     notes: formData.get("notes") ?? "",
   });
+}
+
+/**
+ * Promo kod boshqa FAOL koordinatorda bandmi.
+ *
+ * Bazada ham registrga sezgir bo'lmagan unikal indeks bor — bu
+ * tekshiruv faqat ODAMGA tushunarli xato berish uchun. Indeks
+ * bo'lmasa, ikki koordinator bir kodni olib, lid tasodifiy
+ * birontasiga ketardi.
+ */
+async function promoCodeTaken(code: string, excludeId: string | null): Promise<boolean> {
+  const db = createSupabaseAdminClient();
+  let query = db
+    .from("coordinators")
+    .select("id, promo_code")
+    .not("promo_code", "is", null)
+    .eq("is_active", true);
+  if (excludeId) query = query.neq("id", excludeId);
+  const { data } = await query;
+  return (data ?? []).some((row) => promoCodesMatch(row.promo_code as string | null, code));
 }
 
 /** Telegram id boshqa FAOL koordinatorda bandmi. */
@@ -112,6 +155,7 @@ function toRow(data: z.infer<typeof coordinatorSchema>) {
     bio: data.bio,
     telegram_user_id: data.telegramUserId ? Number(data.telegramUserId) : null,
     telegram_username: data.telegramUsername,
+    promo_code: data.promoCode,
     status: data.status,
     backup_priority: data.backupPriority,
     daily_lead_limit: data.dailyLeadLimit,
@@ -132,6 +176,10 @@ export async function createCoordinatorAction(
     // Aks holda bot bir odamni ikki koordinator deb bilib, lidni
     // ikki marta taklif qilardi.
     return { ok: false, error: "Bu Telegram ID boshqa faol koordinatorga biriktirilgan." };
+  }
+
+  if (parsed.data.promoCode && (await promoCodeTaken(parsed.data.promoCode, null))) {
+    return { ok: false, error: "Bu promo kod boshqa faol koordinatorda band." };
   }
 
   const db = createSupabaseAdminClient();
@@ -171,11 +219,14 @@ export async function updateCoordinatorAction(
   if (parsed.data.telegramUserId && (await telegramIdTaken(parsed.data.telegramUserId, id))) {
     return { ok: false, error: "Bu Telegram ID boshqa faol koordinatorga biriktirilgan." };
   }
+  if (parsed.data.promoCode && (await promoCodeTaken(parsed.data.promoCode, id))) {
+    return { ok: false, error: "Bu promo kod boshqa faol koordinatorda band." };
+  }
 
   const db = createSupabaseAdminClient();
   const { data: before } = await db
     .from("coordinators")
-    .select("region_id, telegram_user_id, status")
+    .select("region_id, telegram_user_id, status, promo_code")
     .eq("id", id)
     .maybeSingle();
 
@@ -196,7 +247,11 @@ export async function updateCoordinatorAction(
         ? "coordinator.region_changed"
         : String(before?.telegram_user_id ?? "") !== String(parsed.data.telegramUserId ?? "")
           ? "coordinator.telegram_changed"
-          : "coordinator.updated",
+          // Promo kod ham "kimga lid ketadi" ni o'zgartiradi, ya'ni
+          // u ham alohida ko'rinishi kerak.
+          : String(before?.promo_code ?? "") !== String(parsed.data.promoCode ?? "")
+            ? "coordinator.promo_code_changed"
+            : "coordinator.updated",
     entityType: "coordinator",
     entityId: id,
     oldValue: before ?? undefined,
@@ -204,6 +259,7 @@ export async function updateCoordinatorAction(
       regionId: parsed.data.regionId,
       status: parsed.data.status,
       hasTelegram: Boolean(parsed.data.telegramUserId),
+      promoCode: parsed.data.promoCode,
     },
   });
 

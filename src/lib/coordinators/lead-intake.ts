@@ -2,11 +2,13 @@ import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 import { offerLead } from "./routing-service.ts";
+import { resolvePromoRouting } from "./promo-code.ts";
 import { getCoordinatorSettings } from "./settings.ts";
 import {
   buildLeadNotification,
   claimCallbackData,
   CLAIM_BUTTON_LABEL,
+  type LeadContact,
 } from "./bot-messages.ts";
 import { sendCoordinatorMessage, isCoordinatorBotConfigured } from "./bot-api.ts";
 
@@ -45,11 +47,30 @@ export async function createLeadFromApplication(
 
   const { data: application } = await db
     .from("applications")
-    .select("id, full_name, region_id, created_at")
+    .select("id, full_name, region_id, created_at, promo_code")
     .eq("id", applicationId)
     .maybeSingle();
 
   if (!application) return { ok: false, leadId: null, reason: "error", offered: false };
+
+  /*
+   * PROMO KOD — HUDUDDAN USTUN.
+   *
+   * Nomzod arizada koordinatorning kodini yozgan bo'lsa, lid AYNAN
+   * o'sha koordinatorga biriktiriladi. Hudud bu yerda ahamiyatsiz:
+   * kodni bergan odam mijozni o'zi topgan.
+   */
+  const { data: owners } = await db
+    .from("coordinators")
+    .select("id, promo_code, is_active")
+    .not("promo_code", "is", null)
+    .eq("is_active", true);
+
+  const promo = resolvePromoRouting(application.promo_code as string | null, (owners ?? []).map((row) => ({
+    id: row.id as string,
+    promoCode: row.promo_code as string | null,
+    isActive: row.is_active !== false,
+  })));
 
   /*
    * HUDUDSIZ LID YARATILMAYDI.
@@ -61,7 +82,15 @@ export async function createLeadFromApplication(
    * Ariza formasida hudud MAJBURIY, ya'ni bu holat faqat eski
    * yozuvlarda uchraydi.
    */
-  if (!application.region_id) {
+  /*
+   * PROMO LIDGA HUDUD SHART EMAS.
+   *
+   * Hududiy marshrutlashning ma'nosi hududda, lekin promo lid
+   * marshrutlanmaydi — u allaqachon egasiga biriktirilgan.
+   * Hududsiz deb rad etish esa tekinga chiqariladigan nomzodni
+   * butunlay yo'qotardi.
+   */
+  if (!application.region_id && promo.coordinatorId == null) {
     return { ok: false, leadId: null, reason: "no_region", offered: false };
   }
 
@@ -70,8 +99,10 @@ export async function createLeadFromApplication(
     .insert({
       application_id: application.id,
       full_name: application.full_name as string,
-      lead_region_id: application.region_id as string,
+      lead_region_id: (application.region_id as string | null) ?? null,
       state: "new",
+      promo_code: (application.promo_code as string | null) ?? null,
+      promo_coordinator_id: promo.coordinatorId,
     })
     .select("id")
     .maybeSingle();
@@ -95,7 +126,14 @@ export async function createLeadFromApplication(
     {
       lead_id: leadId,
       event: "region_resolved",
-      metadata: { source: "application", regionId: application.region_id },
+      metadata: {
+        source: "application",
+        regionId: application.region_id,
+        // Kod MATNI emas, QARORI yoziladi: marshrutlash tarixida
+        // promo kodning o'zi turishi shart emas.
+        promo: promo.reason,
+        promoCoordinatorId: promo.coordinatorId,
+      },
     },
   ]);
 
@@ -135,7 +173,9 @@ export async function offerAndNotify(leadId: string): Promise<boolean> {
       .maybeSingle(),
     db
       .from("coordinator_leads")
-      .select("full_name, created_at, regions:lead_region_id(name)")
+      .select(
+        "full_name, created_at, promo_code, promo_coordinator_id, application_id, regions:lead_region_id(name)",
+      )
       .eq("id", leadId)
       .maybeSingle(),
     getCoordinatorSettings(),
@@ -154,11 +194,38 @@ export async function offerAndNotify(leadId: string): Promise<boolean> {
   }
 
   const row = lead as unknown as Record<string, unknown> | null;
+  const isPromo = (row?.promo_coordinator_id as string | null) != null;
+
+  /*
+   * KONTAKT FAQAT PROMO LIDDA O'QILADI.
+   *
+   * Oddiy lidda u umuman kerak emas (kontakt band qilingandan
+   * keyin beriladi), shuning uchun so'rov ham qilinmaydi: shaxsiy
+   * ma'lumotni keraksiz joyda o'qimaslik eng arzon himoya.
+   */
+  let contact: LeadContact | null = null;
+  if (isPromo && row?.application_id) {
+    const { data: application } = await db
+      .from("applications")
+      .select("phone, telegram, age_range")
+      .eq("id", row.application_id as string)
+      .maybeSingle();
+    if (application) {
+      contact = {
+        phone: (application.phone as string | null) ?? null,
+        telegram: (application.telegram as string | null) ?? null,
+        ageRange: (application.age_range as string | null) ?? null,
+      };
+    }
+  }
+
   const text = buildLeadNotification({
     fullName: (row?.full_name as string) ?? "",
     regionName: ((row?.regions as { name?: string } | null)?.name) ?? null,
     appliedAt: (row?.created_at as string | null) ?? null,
     claimWindowMinutes: settings.claimWindowMinutes,
+    promo: isPromo ? { code: (row?.promo_code as string | null) ?? null } : null,
+    contact,
   });
 
   const sent = await sendCoordinatorMessage(chatId, text, {

@@ -478,8 +478,8 @@ test("the payment question goes out the moment a form is submitted", () => {
 test("the report leads with today and puts the running totals underneath", () => {
   const text = buildBotStatusReportText({
     todayDate: "2026-09-05",
-    total: { filling: 57, submitted: 200, paid: 3, unpaid: 1, paymentUnknown: 196, posts: 47, published: 16 },
-    today: { filling: 2, submitted: 9, paid: 3, unpaid: 1, paymentUnknown: 5, posts: 1, published: 0 },
+    total: { filling: 57, submitted: 200, paid: 3, unpaid: 1, paymentUnknown: 196, posts: 47, published: 16, publishedFree: 4 },
+    today: { filling: 2, submitted: 9, paid: 3, unpaid: 1, paymentUnknown: 5, posts: 1, published: 0, publishedFree: 0 },
     applications: { today: 4, total: 11, since: "2026-09-05T04:00:00.000Z" },
     applicationWindowLabel: "04-sen 19:00 → 19:00",
   });
@@ -504,6 +504,7 @@ test("the report separates 'no answer yet' from 'did not pay'", () => {
       paymentUnknown: 11,
       posts: 19,
       published: 21,
+      publishedFree: 0,
     },
     today: {
       filling: 3,
@@ -513,6 +514,7 @@ test("the report separates 'no answer yet' from 'did not pay'", () => {
       paymentUnknown: 1,
       posts: 19,
       published: 18,
+      publishedFree: 0,
     },
   });
   assert.match(text, /To‘ldirmoqda: 12/);

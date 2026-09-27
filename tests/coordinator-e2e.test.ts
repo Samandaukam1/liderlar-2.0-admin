@@ -180,15 +180,31 @@ test("bitta arizadan IKKINCHI lid yaratilmaydi — BAZA darajasida", () => {
   assert.ok(code(leadIntake).includes('reason: duplicate ? "duplicate" : "error"'));
 });
 
-test("HUDUDSIZ ariza lid yaratmaydi", () => {
-  // Hududiy marshrutlashning butun ma'nosi hududda; "noma'lum"
-  // bilan yaratilgan lid darhol tasodifiy koordinatorga ketardi.
+test("HUDUDSIZ ariza lid yaratmaydi — PROMO liddan tashqari", () => {
+  /*
+   * Hududiy marshrutlashning butun ma'nosi hududda; "noma'lum"
+   * bilan yaratilgan lid darhol tasodifiy koordinatorga ketardi.
+   *
+   * PROMO LID — ISTISNO va u xavfsiz: bunday lid umuman
+   * marshrutlanmaydi, u kod egasiga biriktirilgan. Hududsiz deb
+   * rad etish esa tekinga chiqariladigan nomzodni butunlay
+   * yo'qotardi.
+   */
   assert.ok(code(leadIntake).includes('reason: "no_region"'));
-  assert.ok(code(leadIntake).includes("if (!application.region_id)"));
+  assert.ok(
+    code(leadIntake).includes("!application.region_id && promo.coordinatorId == null"),
+    "hudud sharti promo lidni istisno qilmayapti",
+  );
 });
 
 test("lid hududi ARIZADAN olinadi", () => {
-  assert.ok(code(leadIntake).includes("lead_region_id: application.region_id"));
+  // Hudud bo'lmasa `null` — "noma'lum" degan soxta qiymat emas.
+  assert.match(code(leadIntake), /lead_region_id:[^,]*application\.region_id/);
+});
+
+test("promo kod liddan ham, koordinatordan ham o‘qiladi", () => {
+  assert.ok(code(leadIntake).includes("resolvePromoRouting"));
+  assert.ok(code(leadIntake).includes("promo_coordinator_id: promo.coordinatorId"));
 });
 
 test("ESKI arizalar to‘kilib ketmaydi", () => {

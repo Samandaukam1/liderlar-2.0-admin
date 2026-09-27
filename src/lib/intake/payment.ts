@@ -844,6 +844,8 @@ export async function buildBotStatusReport(): Promise<string> {
     unpaidToday,
     postsToday,
     publishedToday,
+    publishedFreeTotal,
+    publishedFreeToday,
   ] = await Promise.all([
     intakes().eq("status", "draft"),
     submitted(),
@@ -867,6 +869,20 @@ export async function buildBotStatusReport(): Promise<string> {
       .eq("status", "published")
       .gte("published_at", day.startIso)
       .lt("published_at", day.endIso),
+    /*
+     * TEKINGA CHIQARILGANLAR.
+     *
+     * Chop etilgan VA to'lov holati aynan `unpaid` — ya'ni admin
+     * tasdiqlagan, lekin pul kelmagan. `unknown` ATAYLAB
+     * hisoblanmaydi: "so'ralmagan / javob yo'q" holatini tekin
+     * deb ko'rsatish sonni oshirib yuborardi.
+     */
+    intakes().eq("status", "published").eq("payment_status", "unpaid"),
+    intakes()
+      .eq("status", "published")
+      .eq("payment_status", "unpaid")
+      .gte("published_at", day.startIso)
+      .lt("published_at", day.endIso),
   ]);
 
   const n = (result: { count: number | null }) => result.count ?? 0;
@@ -879,6 +895,7 @@ export async function buildBotStatusReport(): Promise<string> {
     paymentUnknown: n(unknownTotal),
     posts: n(postsTotal),
     published: n(publishedTotal),
+    publishedFree: n(publishedFreeTotal),
   };
   const todayCounts: BotStatusCounts = {
     filling: n(fillingToday),
@@ -888,6 +905,7 @@ export async function buildBotStatusReport(): Promise<string> {
     paymentUnknown: Math.max(0, n(submittedToday) - n(paidToday) - n(unpaidToday)),
     posts: n(postsToday),
     published: n(publishedToday),
+    publishedFree: n(publishedFreeToday),
   };
 
   return buildBotStatusReportText({

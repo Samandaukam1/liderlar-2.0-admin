@@ -125,7 +125,9 @@ export async function offerLead(
   const db = createSupabaseAdminClient();
   const { data: lead } = await db
     .from("coordinator_leads")
-    .select("id, lead_region_id, state, offer_round, assigned_coordinator_id")
+    .select(
+      "id, lead_region_id, state, offer_round, assigned_coordinator_id, promo_coordinator_id",
+    )
     .eq("id", leadId)
     .maybeSingle();
 
@@ -135,6 +137,41 @@ export async function offerLead(
   }
 
   const round = (lead.offer_round as number) ?? 0;
+  const promoCoordinatorId = (lead.promo_coordinator_id as string | null) ?? null;
+
+  /*
+   * PROMO LID — TANLOV YO'Q, EGASI BOR.
+   *
+   * Hududiy tanlov ham, overflow ham chetlab o'tiladi va MUDDAT
+   * QO'YILMAYDI: nomzod tekinga chiqariladi, ya'ni bu lid boshqa
+   * koordinatorning ishi emas. Muddat qo'yilsa, muddat yig'uvchisi
+   * uni bir kun kelib boshqasiga berib yuborishi mumkin edi.
+   *
+   * Koordinator holati tekshirilmaydi: "pauza" holati YANGI
+   * lid olmaslik uchun, o'ziga tegishli lidni to'sish uchun emas.
+   */
+  if (promoCoordinatorId) {
+    await db
+      .from("coordinator_leads")
+      .update({
+        state: "offered",
+        offered_at: now.toISOString(),
+        claim_deadline: null,
+        offer_round: round + 1,
+      })
+      .eq("id", leadId);
+
+    await db.from("lead_routing_events").insert({
+      lead_id: leadId,
+      event: "offered",
+      coordinator_id: promoCoordinatorId,
+      to_state: "offered",
+      metadata: { round: round + 1, promo: true, deadline: null },
+    });
+
+    return { ok: true, coordinatorId: promoCoordinatorId, reason: "offered" };
+  }
+
   const pool = await loadEligibleCoordinators(now);
 
   // Allaqachon taklif qilinganlarga qayta yuborilmaydi.
@@ -228,11 +265,20 @@ export async function runExpirySweep(now: Date = new Date()): Promise<ExpirySwee
   if (!settings.routingEnabled) return result;
 
   const db = createSupabaseAdminClient();
+  /*
+   * PROMO LIDLAR BU YERGA TUSHMAYDI.
+   *
+   * Ularda `claim_deadline` umuman yo'q, shuning uchun `lte` sharti
+   * ham ularni o'tkazmaydi. Lekin shart AYNAN yozilgan: eski
+   * yozuvda muddat qolib ketgan bo'lsa ham, promo lid boshqa
+   * koordinatorga berilmasligi kerak.
+   */
   const { data: expired } = await db
     .from("coordinator_leads")
     .select("id")
     .eq("state", "offered")
     .is("assigned_coordinator_id", null)
+    .is("promo_coordinator_id", null)
     .lte("claim_deadline", now.toISOString())
     .limit(50);
 

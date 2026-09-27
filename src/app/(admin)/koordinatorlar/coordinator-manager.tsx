@@ -28,6 +28,7 @@ export interface CoordinatorRow {
   /** Bot bilan bog'langanmi — RAQAMNING O'ZI ko'rsatilmaydi. */
   hasTelegram: boolean;
   telegramUsername: string | null;
+  promoCode: string | null;
   status: string;
   backupPriority: number;
   dailyLeadLimit: number | null;
@@ -161,6 +162,17 @@ function CoordinatorRowView({
           {coordinator.regionName ?? "hudud biriktirilmagan"} · {STATUS_LABELS[coordinator.status]}
           {coordinator.dailyLeadLimit ? ` · kuniga ${coordinator.dailyLeadLimit} ta` : ""}
         </span>
+        {/*
+          PROMO KOD RO'YXATDA KO'RINADI.
+          Telegram id'dan farqli: kod maxfiy emas — uni nomzodga
+          berish kerak. Ko'rinmasa, admin qaysi kod kimda ekanini
+          bilish uchun har birini ochib tekshirishga majbur bo'ladi.
+        */}
+        {coordinator.promoCode ? (
+          <span className="mt-1 inline-block rounded-full bg-lime/20 px-2 py-0.5 text-[11px] font-bold text-ink">
+            🎟 {coordinator.promoCode}
+          </span>
+        ) : null}
       </span>
 
       {/*
@@ -308,6 +320,29 @@ function CoordinatorForm({
             placeholder="@username"
           />
         </div>
+        {/* ------------------------- PROMO KOD ------------------------- */}
+        <div>
+          <Label htmlFor="promoCode">Promo kod</Label>
+          <Input
+            id="promoCode"
+            name="promoCode"
+            defaultValue={initial?.promoCode ?? ""}
+            placeholder="masalan ALI2026"
+            autoCapitalize="characters"
+          />
+          {/*
+            Oqibatini AYNAN yozamiz. "Promo kod" degan yorliqning
+            o'zi bu maydon lid marshrutini butunlay o'zgartirishini
+            ko'rsatmaydi.
+          */}
+          <p className="mt-1 text-[11px] leading-relaxed text-ink-soft">
+            Nomzod arizada shu kodni yozsa, lid <b>faqat shu koordinatorga</b>{" "}
+            boradi — hududga qaramasdan. Band qilinmasa ham boshqa
+            koordinatorlarga <b>o‘tmaydi</b>, chunki bunday nomzod tekinga
+            chiqariladi. Bo‘shliq va defis hisobga olinmaydi.
+          </p>
+        </div>
+
         <div>
           <Label htmlFor="status">Holat</Label>
           <Select id="status" name="status" defaultValue={initial?.status ?? "active"}>
