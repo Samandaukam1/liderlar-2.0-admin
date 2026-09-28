@@ -236,8 +236,6 @@ export default async function LegacyPostsPage(props: {
         page={page}
         pageSize={PAGE_SIZE}
         total={count ?? 0}
-        basePath="/liderlar-1-0"
-        params={{ q, ...filters }}
       />
     </>
   );

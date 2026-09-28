@@ -237,8 +237,6 @@ export default async function MonthlyLinksPage(props: {
           page={page}
           pageSize={PAGE_SIZE}
           total={count ?? 0}
-          basePath="/monthly-links"
-          params={{ q, ...filters }}
         />
       </div>
     </>

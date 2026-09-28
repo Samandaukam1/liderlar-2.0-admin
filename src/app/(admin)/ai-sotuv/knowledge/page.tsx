@@ -107,8 +107,6 @@ export default async function SalesKnowledgePage({
         page={page}
         pageSize={PAGE_SIZE}
         total={total}
-        basePath="/ai-sotuv/knowledge"
-        params={{ status: params.status, category: params.category, q: params.q }}
       />
     </div>
   );

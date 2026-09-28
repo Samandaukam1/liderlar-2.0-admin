@@ -117,3 +117,50 @@ test("tugma nomi xulqqa mos", () => {
    */
   assert.match(PANEL, /Promo kodsizlar tepada/);
 });
+
+/* ===================================================================== *
+ * SAHIFALASH FILTRNI YO'QOTMAYDI
+ * ===================================================================== */
+
+const PAGINATION = src("src/components/admin/pagination.tsx");
+
+test("sahifalash JORIY parametrlarni o‘zi ko‘chiradi", () => {
+  /*
+   * Jonli nosozlik: admin vaqt oralig'ini belgilaydi, "promo
+   * kodsizlar tepada" ni bosadi, ikkinchi sahifaga o'tadi — va
+   * hammasi o'chib, oddiy ro'yxat qaytadi. Hech qanday xato
+   * chiqmaydi.
+   *
+   * Sabab: har sahifa saqlanadigan parametrlarni QO'LDA sanab
+   * berardi va yangi filtr o'sha ro'yxatga qo'shilmagan edi.
+   */
+  assert.match(PAGINATION, /useSearchParams\(\)/);
+  assert.match(PAGINATION, /new URLSearchParams\(params\.toString\(\)\)/);
+  assert.match(PAGINATION, /usePathname\(\)/);
+});
+
+test("birinchi sahifada `page` manzildan chiqariladi", () => {
+  // "?page=1" manzilni keraksiz uzaytiradi va ulashishni qiyinlashtiradi.
+  assert.match(PAGINATION, /if \(target <= 1\) next\.delete\("page"\)/);
+});
+
+test("unutish mumkin bo‘lgan proplar OLIB TASHLANGAN", () => {
+  /*
+   * `basePath` va `params` bir xil bilimni takrorlardi. Ular
+   * qolsa, keyingi filtr yana o'sha ro'yxatga qo'shilmasdan
+   * qolishi mumkin edi.
+   */
+  assert.ok(!/basePath/.test(PAGINATION), "basePath propi qaytib kelgan");
+  assert.ok(!/params\?:/.test(PAGINATION), "params propi qaytib kelgan");
+
+  for (const page of [
+    "src/app/(admin)/applications/page.tsx",
+    "src/app/(admin)/candidates/page.tsx",
+    "src/app/(admin)/audit-log/page.tsx",
+  ]) {
+    const body = src(page);
+    const tag = body.match(/<Pagination[\s\S]*?\/>/);
+    assert.ok(tag, `${page}: Pagination topilmadi`);
+    assert.ok(!/basePath|params=/.test(tag[0]), `${page}: eski proplar qolgan`);
+  }
+});

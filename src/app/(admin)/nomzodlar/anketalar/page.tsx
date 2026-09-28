@@ -225,7 +225,7 @@ export default async function IntakesPipelinePage(props: {
         }
       />
 
-      <Pagination page={page} pageSize={PAGE_SIZE} total={count ?? 0} basePath="/nomzodlar/anketalar" params={{ q, tab: tab.key }} />
+      <Pagination page={page} pageSize={PAGE_SIZE} total={count ?? 0} />
     </>
   );
 }

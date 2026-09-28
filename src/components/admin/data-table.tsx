@@ -1,7 +1,13 @@
 import Link from "next/link";
-import { cn } from "@/lib/utils";
-import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
+import { cn } from "@/lib/utils";
+
+/*
+ * Sahifalash ALOHIDA, MIJOZ komponentida: u manzil qatoridagi
+ * filtrlarni o'zi o'qiydi. Bu yerdan qayta eksport qilinadi,
+ * shuning uchun mavjud importlar o'zgarishsiz ishlaydi.
+ */
+export { Pagination } from "./pagination";
 
 export interface Column<T> {
   key: string;
@@ -105,73 +111,3 @@ export function DataTable<T extends { id: string }>({
   );
 }
 
-export function Pagination({
-  page,
-  pageSize,
-  total,
-  basePath,
-  params,
-}: {
-  page: number;
-  pageSize: number;
-  total: number;
-  basePath: string;
-  params?: Record<string, string | undefined>;
-}) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  if (totalPages <= 1) return null;
-
-  const href = (p: number) => {
-    const sp = new URLSearchParams();
-    for (const [k, v] of Object.entries(params ?? {})) {
-      if (v) sp.set(k, v);
-    }
-    sp.set("page", String(p));
-    return `${basePath}?${sp.toString()}`;
-  };
-
-  return (
-    <nav
-      className="mt-4 flex items-center justify-between gap-3"
-      aria-label="Sahifalash"
-    >
-      <p className="text-xs text-ink-soft">
-        Jami <b className="text-ink">{total}</b> ta yozuv · {page}/{totalPages}-sahifa
-      </p>
-      <div className="flex items-center gap-1.5">
-        <PaginationLink href={href(page - 1)} disabled={page <= 1}>
-          <ChevronLeft className="h-4 w-4" />
-        </PaginationLink>
-        <PaginationLink href={href(page + 1)} disabled={page >= totalPages}>
-          <ChevronRight className="h-4 w-4" />
-        </PaginationLink>
-      </div>
-    </nav>
-  );
-}
-
-function PaginationLink({
-  href,
-  disabled,
-  children,
-}: {
-  href: string;
-  disabled?: boolean;
-  children: ReactNode;
-}) {
-  if (disabled) {
-    return (
-      <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-line text-ink-soft/40">
-        {children}
-      </span>
-    );
-  }
-  return (
-    <Link
-      href={href}
-      className="flex h-9 w-9 items-center justify-center rounded-xl border border-line bg-card text-ink transition hover:border-brand/50 hover:bg-surface"
-    >
-      {children}
-    </Link>
-  );
-}

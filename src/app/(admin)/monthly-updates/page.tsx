@@ -98,7 +98,7 @@ export default async function MonthlyUpdatesPage(props: {
           />
         }
       />
-      <Pagination page={page} pageSize={PAGE_SIZE} total={count ?? 0} basePath="/monthly-updates" params={{ q, ...filters }} />
+      <Pagination page={page} pageSize={PAGE_SIZE} total={count ?? 0} />
     </>
   );
 }

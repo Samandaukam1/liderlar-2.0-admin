@@ -155,7 +155,7 @@ export default async function MediaPage(props: {
         </div>
       )}
 
-      <Pagination page={page} pageSize={MEDIA_PAGE_SIZE} total={count ?? 0} basePath="/media" params={{ q, ...filters }} />
+      <Pagination page={page} pageSize={MEDIA_PAGE_SIZE} total={count ?? 0} />
     </>
   );
 }

@@ -142,8 +142,6 @@ export default async function SalesConversationsPage({
         page={page}
         pageSize={PAGE_SIZE}
         total={total}
-        basePath="/ai-sotuv/suhbatlar"
-        params={{ status: params.status, q: params.q }}
       />
     </div>
   );

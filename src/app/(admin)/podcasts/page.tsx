@@ -132,7 +132,7 @@ export default async function PodcastsPage(props: {
           />
         }
       />
-      <Pagination page={page} pageSize={PAGE_SIZE} total={count ?? 0} basePath="/podcasts" params={{ q, ...filters }} />
+      <Pagination page={page} pageSize={PAGE_SIZE} total={count ?? 0} />
     </>
   );
 }

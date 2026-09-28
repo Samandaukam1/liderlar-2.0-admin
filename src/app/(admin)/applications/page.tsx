@@ -254,7 +254,7 @@ export default async function ApplicationsPage(props: {
           />
         }
       />
-      <Pagination page={page} pageSize={PAGE_SIZE} total={count ?? 0} basePath="/applications" params={{ q, ...filters }} />
+      <Pagination page={page} pageSize={PAGE_SIZE} total={count ?? 0} />
     </>
   );
 }

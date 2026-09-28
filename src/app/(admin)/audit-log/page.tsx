@@ -155,7 +155,7 @@ export default async function AuditLogPage(props: {
           />
         }
       />
-      <Pagination page={page} pageSize={PAGE_SIZE} total={count ?? 0} basePath="/audit-log" params={{ q, ...filters }} />
+      <Pagination page={page} pageSize={PAGE_SIZE} total={count ?? 0} />
     </>
   );
 }

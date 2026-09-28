@@ -169,8 +169,6 @@ export default async function CandidatesPage(props: {
         page={page}
         pageSize={PAGE_SIZE}
         total={count ?? 0}
-        basePath="/candidates"
-        params={{ q, ...filters }}
       />
     </>
   );
