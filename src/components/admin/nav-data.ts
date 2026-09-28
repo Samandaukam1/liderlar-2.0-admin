@@ -34,6 +34,7 @@ import {
   Scale,
   ArrowDownUp,
   History,
+  Ticket,
   type LucideIcon,
 } from "lucide-react";
 
@@ -118,6 +119,20 @@ export const NAV_GROUPS: NavGroup[] = [
         permission: "coordinators.view",
         keywords:
           "koordinator hudud viloyat xarita lid marshrut talab komissiya reyting nominatsiya",
+      },
+      {
+        /*
+         * Promo kodlar — koordinator kodidan BOSHQA savol.
+         *
+         * Koordinatordagi kod "bu nomzod kimning odami" degan
+         * marshrut uchun; bu bo'lim esa "bu kod hali ishlaydimi"
+         * degan amal qilish muddati uchun.
+         */
+        label: "Promo kodlar",
+        href: "/promo-kodlar",
+        icon: Ticket,
+        permission: "coordinators.view",
+        keywords: "promo kod muddat amal qilish tugatish kampaniya tavsiya chegirma",
       },
     ],
   },
