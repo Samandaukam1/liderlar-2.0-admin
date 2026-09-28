@@ -3,6 +3,8 @@ import { PromoReportPanel } from "./promo-report-panel";
 import { requirePermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { parseListParams, listRange, PAGE_SIZE } from "@/lib/list";
+import { parseTashkentDateTime } from "@/lib/tashkent-day";
+import { ApplicationFilters } from "./application-filters";
 import type { Application } from "@/lib/types";
 import { APPLICATION_AGE_RANGES, APPLICATION_GENDER_LABELS, genderLabel } from "@/lib/application-fields";
 import { PageHeader } from "@/components/admin/page-header";
@@ -15,6 +17,20 @@ import { formatDate } from "@/lib/utils";
 export const metadata = { title: "Arizalar" };
 export const dynamic = "force-dynamic";
 
+/**
+ * So'rov quruvchisining shu sahifa ishlatadigan qismi.
+ *
+ * supabase-js ning to'liq tipi generiklarga to'la; bu yerda
+ * faqat to'rtta usul kerak va tuzilmaviy tip ularni aniq
+ * ko'rsatib turadi.
+ */
+interface ScopedQuery {
+  eq(column: string, value: unknown): ScopedQuery;
+  gte(column: string, value: string): ScopedQuery;
+  lt(column: string, value: string): ScopedQuery;
+  or(filter: string): ScopedQuery;
+}
+
 export default async function ApplicationsPage(props: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
@@ -23,20 +39,75 @@ export default async function ApplicationsPage(props: {
   const { page, q, filters } = parseListParams(sp, ["status", "gender", "age_range"]);
   const admin = createSupabaseAdminClient();
 
-  let query = admin
-    .from("applications")
-    .select("*, regions(name), categories(name)", { count: "exact" })
-    .order("created_at", { ascending: false });
-  if (filters.status) query = query.eq("status", filters.status);
-  if (filters.gender) query = query.eq("gender", filters.gender);
-  if (filters.age_range) query = query.eq("age_range", filters.age_range);
-  if (q) {
-    query = query.or(
-      `full_name.ilike.%${q}%,phone.ilike.%${q}%,telegram.ilike.%${q}%,promo_code.ilike.%${q}%`,
-    );
-  }
-  const [from, to] = listRange(page);
-  const { data, count, error } = await query.range(from, to);
+  const one = (value: string | string[] | undefined) =>
+    Array.isArray(value) ? value[0] : (value ?? "");
+
+  /*
+   * VAQT ORALIG'I — TOSHKENT DEVOR SOATI.
+   *
+   * Admin "kecha 17:30 dan" deb belgilaydi va Toshkent vaqtini
+   * nazarda tutadi; `created_at` esa UTC da yotadi. Ikkovini
+   * to'g'ridan-to'g'ri solishtirish besh soatlik xatoga olib
+   * kelardi va buni sezish qiyin: ro'yxat baribir to'lgan
+   * ko'rinadi, faqat kechqurungi arizalar tushib qolardi.
+   *
+   * Noto'g'ri qiymat "chegara yo'q" deb qaraladi: butun ro'yxatni
+   * bo'sh ko'rsatishdan ko'ra filtrni e'tiborsiz qoldirish
+   * yaxshiroq.
+   */
+  const fromIso = parseTashkentDateTime(one(sp.from));
+  const toIso = parseTashkentDateTime(one(sp.to));
+  const noPromoFirst = one(sp.promo) === "kodsiz";
+
+  /*
+   * Uchala so'rov (ro'yxat + ikki sanoq) BIR XIL chegarada
+   * bo'lishi shart. Shartlarni uch joyga ko'chirsak, biri
+   * unutilib, sanoq ro'yxatga mos kelmay qolardi.
+   */
+  const applyScope = <T,>(builder: T): T => {
+    let next = builder as unknown as ScopedQuery;
+    if (filters.status) next = next.eq("status", filters.status);
+    if (filters.gender) next = next.eq("gender", filters.gender);
+    if (filters.age_range) next = next.eq("age_range", filters.age_range);
+    if (fromIso) next = next.gte("created_at", fromIso);
+    // Yuqori chegara EKSKLYUZIV: aynan o'sha daqiqada kelgan ariza
+    // ikkala oynaga ham tushib qolmasin.
+    if (toIso) next = next.lt("created_at", toIso);
+    if (q) {
+      next = next.or(
+        `full_name.ilike.%${q}%,phone.ilike.%${q}%,telegram.ilike.%${q}%,promo_code.ilike.%${q}%`,
+      );
+    }
+    return next as unknown as T;
+  };
+
+  let query = applyScope(
+    admin.from("applications").select("*, regions(name), categories(name)", { count: "exact" }),
+  );
+
+  /*
+   * TARTIB: avval promo kodsizlar, keyin sana bo'yicha yangisi.
+   *
+   * `has_promo` — bazadagi hisoblanadigan ustun. `promo_code`
+   * bo'yicha `nulls first` yetarli emas edi: "kod yo'q" ikki xil
+   * yozilgan (null va bo'sh satr) va bo'sh satrlilar promo
+   * kodlilar orasida qolib ketardi.
+   */
+  query = noPromoFirst
+    ? query.order("has_promo", { ascending: true }).order("created_at", { ascending: false })
+    : query.order("created_at", { ascending: false });
+
+  const [range, withoutPromo, withPromo] = await Promise.all([
+    query.range(...listRange(page)),
+    applyScope(
+      admin.from("applications").select("id", { count: "exact", head: true }),
+    ).eq("has_promo", false),
+    applyScope(
+      admin.from("applications").select("id", { count: "exact", head: true }),
+    ).eq("has_promo", true),
+  ]);
+
+  const { data, count, error } = range;
   const rows = (data ?? []) as unknown as Application[];
 
   const columns: Column<Application>[] = [
@@ -124,6 +195,25 @@ export default async function ApplicationsPage(props: {
         description="Platformaga qo‘shilish arizalari — ko‘rib chiqish va nomzodga aylantirish"
         breadcrumbs={[{ label: "Arizalar" }]}
       />
+      <ApplicationFilters />
+
+      {/*
+        SANOQ — TARTIB O'ZGARGANINI TASDIQLAYDI.
+        Tugma bosilgach ro'yxat boshqacha ko'rinadi; bu ikki son
+        "nechtasi kodsiz edi" degan savolga darhol javob beradi.
+      */}
+      <p className="mb-4 flex flex-wrap items-center gap-2 text-xs text-ink-soft">
+        <span className="rounded-full bg-surface px-2.5 py-1 font-bold text-ink">
+          Promo kodsiz: {withoutPromo.count ?? 0}
+        </span>
+        <span className="rounded-full bg-surface px-2.5 py-1">
+          Promo kodli: {withPromo.count ?? 0}
+        </span>
+        {noPromoFirst ? (
+          <span className="font-semibold text-brand">Kodsizlar tepada</span>
+        ) : null}
+      </p>
+
       <PromoReportPanel />
       <DataTableToolbar
         searchPlaceholder="Ism, telefon, Telegram yoki promo kod…"

@@ -107,6 +107,38 @@ export function parseCalendarDate(value: string | null | undefined): string | nu
 }
 
 /**
+ * Toshkent devor soati -> UTC lahza.
+ *
+ * Admin "kecha 17:30 dan" deb belgilaydi va u TOSHKENT vaqtini
+ * nazarda tutadi; `created_at` esa bazada UTC da yotadi. Ikkovini
+ * to'g'ridan-to'g'ri solishtirish besh soatlik xatoga olib keladi
+ * — kechqurungi arizalar oynadan tushib qolardi va buni hech kim
+ * sezmasdi, chunki ro'yxat baribir to'lgan ko'rinardi.
+ *
+ * Qabul qilinadigan shakl: `YYYY-MM-DDTHH:mm` (brauzerdagi
+ * `datetime-local` maydoni aynan shuni beradi). Noto'g'ri qiymat
+ * `null` qaytaradi — chaqiruvchi uni "chegara yo'q" deb qaraydi.
+ */
+export function parseTashkentDateTime(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+
+  const [, year, month, day, hour, minute] = match.map(Number);
+  // Sana haqiqatan mavjudmi (31-fevral shakl tekshiruvidan o'tadi).
+  if (parseCalendarDate(`${match[1]}-${match[2]}-${match[3]}`) === null) return null;
+  if (hour > 23 || minute > 59) return null;
+
+  /*
+   * Ofset AYNAN shu lahza uchun o'qiladi, qotib qolgan +5 emas:
+   * zona qachondir yozgi vaqtga o'tsa, kod o'zi to'g'ri qoladi.
+   */
+  const naiveUtcMs = Date.UTC(year, month - 1, day, hour, minute);
+  const offsetMinutes = tashkentOffsetMinutes(new Date(naiveUtcMs));
+  return new Date(naiveUtcMs - offsetMinutes * 60000).toISOString();
+}
+
+/**
  * The UTC instants bounding one Tashkent calendar date.
  *
  * Takes the date rather than an instant, so the board can show any day the
