@@ -10,6 +10,8 @@ import { createActivation, revokeActivation } from "@/lib/accounts/activation-se
 import { activationUrl } from "@/lib/accounts/activation-token";
 import { createRecovery } from "@/lib/accounts/recovery-service";
 import { recoveryUrl } from "@/lib/accounts/recovery-token";
+import { addYears, annualFeeStatus } from "@/lib/accounts/annual-fee";
+import { tashkentToday } from "@/lib/tashkent-day";
 
 /**
  * Nomzod hisoblarini boshqarish.
@@ -278,4 +280,61 @@ export async function createRecoveryLinkAction(profileId: string): Promise<Accou
     linkKind: "recovery",
     expiresAt: result.expiresAt,
   };
+}
+
+const feeSchema = z.object({ candidateId: uuid, note: z.string().trim().max(300).optional() });
+
+/**
+ * Yillik texnik badal to'lovini QAYD ETADI (38 000 so'm).
+ *
+ * "To'langan" holati kabinetda FAQAT shu yozuvdan ko'rinadi. Sikl serverda
+ * hisoblanadi (birinchi nashr sanasidan) — brauzerdan sana olinmaydi.
+ * Muddati o'tgan yoki yaqinlashgan sikl uchun qayd etiladi; bitta siklga
+ * ikki marta yozilmaydi (bazada unikal).
+ */
+export async function recordAnnualFeeAction(input: z.input<typeof feeSchema>): Promise<AccountActionResult> {
+  const ctx = await requirePermission("members.manage");
+  const parsed = feeSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Ma'lumot noto'g'ri." };
+
+  const db = createSupabaseAdminClient();
+  const [{ data: candidate }, { data: payments }] = await Promise.all([
+    db.from("candidates").select("id, status, published_at").eq("id", parsed.data.candidateId).maybeSingle(),
+    db.from("annual_fee_payments").select("cycle_start").eq("candidate_id", parsed.data.candidateId),
+  ]);
+  if (!candidate || candidate.status !== "published") return { ok: false, error: "Nomzod chop etilmagan." };
+
+  const status = annualFeeStatus({
+    publishedAt: (candidate.published_at as string | null) ?? null,
+    paidCycleStarts: (payments ?? []).map((p) => p.cycle_start as string),
+    today: tashkentToday(),
+  });
+  if (!status.dueDate || status.state === "unknown") return { ok: false, error: "Nashr sanasi noma'lum — sikl aniqlanmadi." };
+  if (status.state === "paid") return { ok: false, error: "Joriy sikl allaqachon to'langan." };
+
+  const { error } = await db.from("annual_fee_payments").insert({
+    candidate_id: parsed.data.candidateId,
+    cycle_start: status.dueDate,
+    cycle_end: addYears(status.dueDate, 1),
+    amount_uzs: status.amountUzs,
+    recorded_by: ctx.userId,
+    note: parsed.data.note ?? null,
+  });
+  if (error) {
+    if (error.code === "23505") return { ok: false, error: "Bu sikl uchun to'lov allaqachon qayd etilgan." };
+    console.error("ANNUAL_FEE_RECORD_FAILED", { code: error.code, message: error.message });
+    return { ok: false, error: "To'lovni qayd etib bo'lmadi." };
+  }
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "account.annual_fee.recorded",
+    entityType: "candidate",
+    entityId: parsed.data.candidateId,
+    severity: "warning",
+    newValue: { cycle_start: status.dueDate, amount_uzs: status.amountUzs },
+  });
+
+  revalidate();
+  return { ok: true, message: `Yillik badal qayd etildi (${status.dueDate} siklidan).` };
 }

@@ -10,6 +10,7 @@ import {
   blockAccountAction,
   restoreAccountAction,
   createRecoveryLinkAction,
+  recordAnnualFeeAction,
   type AccountActionResult,
 } from "@/lib/actions/accounts";
 import { VipControl } from "./vip-control";
@@ -298,6 +299,50 @@ export function AccountTable({
 
                 {row.profileId && (
                   <VipControl profileId={row.profileId} vip={row.vip} canManage={canManageVip} />
+                )}
+
+                {row.annualFee && (
+                  /*
+                   * YILLIK TEXNIK BADAL — kabinetdagi karta shu yozuvga tayanadi.
+                   * "To'langan" faqat shu tugma bilan qayd etiladi (SQL'siz).
+                   */
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                    <span className="text-ink-soft">Yillik badal (38 000):</span>
+                    <Badge
+                      accent={
+                        row.annualFee.state === "paid"
+                          ? "green"
+                          : row.annualFee.state === "overdue"
+                            ? "coral"
+                            : row.annualFee.state === "soon"
+                              ? "amber"
+                              : "neutral"
+                      }
+                    >
+                      {row.annualFee.state === "paid"
+                        ? "to‘langan"
+                        : row.annualFee.state === "overdue"
+                          ? "muddati o‘tgan"
+                          : row.annualFee.state === "unknown"
+                            ? "sana noma’lum"
+                            : `${row.annualFee.daysLeft} kun qoldi`}
+                    </Badge>
+                    {row.annualFee.dueDate && (
+                      <span className="text-ink-soft">
+                        {row.annualFee.state === "overdue" ? "to‘lov kuni edi" : "keyingi"}: {row.annualFee.dueDate}
+                      </span>
+                    )}
+                    {canManage && row.annualFee.state !== "paid" && row.annualFee.state !== "unknown" && (
+                      <button
+                        type="button"
+                        disabled={pending}
+                        onClick={() => run(row.candidateId, () => recordAnnualFeeAction({ candidateId: row.candidateId }))}
+                        className="rounded-badge border border-green/50 bg-green/10 px-2.5 py-1 font-bold text-[#2e7d44] transition hover:bg-green/20 disabled:opacity-40"
+                      >
+                        To‘lovni qayd etish
+                      </button>
+                    )}
+                  </div>
                 )}
 
                 {result && (

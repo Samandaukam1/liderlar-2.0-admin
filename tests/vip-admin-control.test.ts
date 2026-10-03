@@ -250,3 +250,20 @@ test("Telegram bot: VIP tugmalari va faol suhbat serverda tekshiriladi", () => {
   assert.ok(message.indexOf("vipGate(") < message.indexOf("handleIncomingPhoto("));
   assert.ok(message.indexOf("vipGate(") < message.indexOf("handleConversationText("));
 });
+
+test("yillik badal moduli admin va saytda bayt-baytigacha bir xil (sikl bitta qoida)", {
+  skip: existsSync("../liderlar-web/src/lib/kabinet/annual-fee.ts") ? false : "../liderlar-web topilmadi",
+}, () => {
+  assert.equal(
+    readFileSync("src/lib/accounts/annual-fee.ts", "utf8"),
+    readFileSync("../liderlar-web/src/lib/kabinet/annual-fee.ts", "utf8"),
+  );
+});
+
+test("badal to'lovi faqat members.manage bilan, sikl serverda hisoblanadi", () => {
+  const code = readFileSync("src/lib/actions/accounts.ts", "utf8");
+  const fn = code.match(/export async function recordAnnualFeeAction\([\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(fn, /requirePermission\("members\.manage"\)/);
+  assert.match(fn, /annualFeeStatus\(/);
+  assert.match(fn, /cycle_start: status\.dueDate/);
+});

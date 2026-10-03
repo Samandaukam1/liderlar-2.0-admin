@@ -9,6 +9,7 @@
  */
 
 import type { VipDisplayStatus } from "../vip/subscription-rules.ts";
+import type { AnnualFeeStatus } from "./annual-fee.ts";
 
 export type AccountState =
   | "no_account"
@@ -67,6 +68,9 @@ export interface AccountRow {
 
   /** VIP holati. `null` — hisob yo'q (VIP faqat hisobga beriladi). */
   vip: AccountVip | null;
+
+  /** Yillik texnik badal (faqat chop etilgan nomzod). */
+  annualFee: AnnualFeeStatus | null;
 }
 
 /**

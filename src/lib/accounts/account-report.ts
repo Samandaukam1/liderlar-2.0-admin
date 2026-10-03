@@ -8,6 +8,8 @@ import type {
   AccountVip,
 } from "./account-types.ts";
 import { vipDisplay, type SubscriptionState } from "@/lib/vip/subscription-rules";
+import { tashkentToday } from "@/lib/tashkent-day";
+import { annualFeeStatus } from "./annual-fee";
 
 /**
  * Nomzod hisoblari hisoboti.
@@ -127,7 +129,7 @@ export async function loadAccountReport(options: LoadOptions = {}): Promise<Acco
   let query = db
     .from("candidates")
     .select(
-      "id, slug, full_name, avatar_url, status, user_id, created_at, regions(name)",
+      "id, slug, full_name, avatar_url, status, user_id, created_at, published_at, regions(name)",
       { count: "exact" },
     )
     .is("deleted_at", null);
@@ -159,6 +161,7 @@ export async function loadAccountReport(options: LoadOptions = {}): Promise<Acco
     status: string;
     user_id: string | null;
     created_at: string;
+    published_at: string | null;
     regions: { name?: string } | null;
   }[];
 
@@ -169,7 +172,7 @@ export async function loadAccountReport(options: LoadOptions = {}): Promise<Acco
   const candidateIds = rows.map((r) => r.id);
   const userIds = rows.map((r) => r.user_id).filter((v): v is string => Boolean(v));
 
-  const [activationsRes, accountsRes, telegramLinksRes, vipRes] = await Promise.all([
+  const [activationsRes, accountsRes, telegramLinksRes, vipRes, feeRes] = await Promise.all([
     db
       .from("candidate_activations")
       .select("candidate_id, expires_at, consumed_at, revoked_at, created_at")
@@ -203,7 +206,18 @@ export async function loadAccountReport(options: LoadOptions = {}): Promise<Acco
           .in("profile_id", userIds)
           .order("created_at", { ascending: false })
       : Promise.resolve({ data: [] as VipRow[], error: null }),
+
+    // Yillik badal: FAQAT qayd etilgan to'lovlar ("to'langan" shundan).
+    db.from("annual_fee_payments").select("candidate_id, cycle_start").in("candidate_id", candidateIds),
   ]);
+
+  const feesByCandidate = new Map<string, string[]>();
+  for (const row of (feeRes.data ?? []) as { candidate_id: string; cycle_start: string }[]) {
+    const list = feesByCandidate.get(row.candidate_id) ?? [];
+    list.push(row.cycle_start);
+    feesByCandidate.set(row.candidate_id, list);
+  }
+  const feeToday = tashkentToday();
 
   if ("error" in vipRes && vipRes.error) {
     // Xato "VIP yo'q" deb ko'rsatilmaydi — admin yolg'on holatni ko'rmasin.
@@ -285,6 +299,15 @@ export async function loadAccountReport(options: LoadOptions = {}): Promise<Acco
       telegramUsername: telegram?.telegram_username ?? null,
 
       vip: r.user_id && !vipFailed ? toAccountVip(vipByUser.get(r.user_id) ?? null, vipNow) : null,
+
+      annualFee:
+        r.status === "published"
+          ? annualFeeStatus({
+              publishedAt: r.published_at,
+              paidCycleStarts: feesByCandidate.get(r.id) ?? [],
+              today: feeToday,
+            })
+          : null,
     };
   });
 
