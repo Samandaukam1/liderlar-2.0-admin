@@ -42,6 +42,13 @@ export interface FieldRule {
   /** Foydalanuvchiga ko'rinadigan nom — texnik ustun nomi EMAS (§5). */
   label: string;
   maxLength?: number;
+  /**
+   * RO'YXAT MAYDONI (`text[]`): teglar, tillar.
+   *
+   * Massiv yoki vergul/qator bilan ajratilgan matn qabul qilinadi;
+   * bo'sh va takror elementlar tashlanadi.
+   */
+  list?: { maxItems: number; maxItemLength: number };
 }
 
 /* ========================================================================= *
@@ -109,6 +116,60 @@ export const CANDIDATE_FIELDS: Readonly<Record<string, FieldRule>> = {
     policy: "direct",
     label: "Email",
     maxLength: 160,
+  },
+
+  /*
+   * BIOGRAFIYA SAHIFASIDAGI QOLGAN MAYDONLAR (2026-10-04).
+   *
+   * Ommaviy profilda ko'rinadigan har bir ma'lumot muharrirda bo'lsin —
+   * "sahifada bor, lekin hech qayerda boshqarib bo'lmaydi" degan holat
+   * qolmasin. Shaxs va faktlar (ism, tug'ilgan yil/joy, ta'lim) — KO'RIK;
+   * o'zini taqdim etish (manzil, soha, teglar, tillar) — DARHOL.
+   */
+  full_name: {
+    /*
+     * ISM — KO'RIK. U ensiklopediya yozuvining sarlavhasi; darhol
+     * o'zgartirish profilni boshqa odamga o'xshatib qo'yishi mumkin edi.
+     * Manzil (slug) O'ZGARMAYDI — eski havolalar ishlayveradi.
+     */
+    policy: "review",
+    label: "To'liq ism",
+    maxLength: 200,
+  },
+  birth_year: {
+    policy: "review",
+    label: "Tug'ilgan yil",
+    maxLength: 20,
+  },
+  birth_place: {
+    policy: "review",
+    label: "Tug'ilgan joy",
+    maxLength: 200,
+  },
+  education_summary: {
+    policy: "review",
+    label: "Ta'lim (qisqacha)",
+    maxLength: 1000,
+  },
+  current_location: {
+    policy: "direct",
+    label: "Hozirgi manzil",
+    maxLength: 200,
+  },
+  activity_field: {
+    policy: "direct",
+    label: "Faoliyat sohasi",
+    maxLength: 300,
+  },
+  description_items: {
+    policy: "direct",
+    label: "Kim sifatida tanilgan (teglar)",
+    list: { maxItems: 8, maxItemLength: 80 },
+  },
+  languages: {
+    policy: "direct",
+    label: "Tillar",
+    list: { maxItems: 12, maxItemLength: 40 },
   },
 };
 
@@ -378,8 +439,8 @@ export function filterCandidateChanges(
       continue;
     }
 
-    const before = current[field] ?? null;
-    const normalized = normalizeValue(after);
+    const before = rule.list ? normalizeList(current[field]) : (current[field] ?? null);
+    const normalized = rule.list ? normalizeList(after) : normalizeValue(after);
 
     // O'ZGARMAGAN MAYDON — umuman tegilmaydi.
     if (sameValue(before, normalized)) continue;
@@ -412,13 +473,49 @@ function normalizeValue(value: unknown): unknown {
   return trimmed === "" ? null : trimmed;
 }
 
+/**
+ * Ro'yxatni me'yorlaydi: massiv yoki "a, b" / qatorlar -> toza massiv.
+ * Bo'sh ro'yxat `null` (ustun bo'sh).
+ */
+export function normalizeList(value: unknown): string[] | null {
+  const raw: unknown[] = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[\n,]+/)
+      : [];
+  const seen = new Set<string>();
+  const items: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    const clean = item.trim().replace(/\s+/g, " ");
+    const key = clean.toLowerCase();
+    if (clean === "" || seen.has(key)) continue;
+    seen.add(key);
+    items.push(clean);
+  }
+  return items.length > 0 ? items : null;
+}
+
 function sameValue(before: unknown, after: unknown): boolean {
   if (before === null && after === null) return true;
+  if (Array.isArray(before) || Array.isArray(after)) {
+    return JSON.stringify(before ?? null) === JSON.stringify(after ?? null);
+  }
   return String(before ?? "") === String(after ?? "");
 }
 
 function validate(rule: FieldRule, value: unknown): string | null {
   if (value === null) return null;
+
+  if (rule.list) {
+    if (!Array.isArray(value)) return `${rule.label}: ro'yxat bo'lishi kerak.`;
+    if (value.length > rule.list.maxItems) {
+      return `${rule.label}: ko'pi bilan ${rule.list.maxItems} ta.`;
+    }
+    const long = value.find((item) => typeof item !== "string" || item.length > rule.list!.maxItemLength);
+    if (long !== undefined) return `${rule.label}: har biri ${rule.list.maxItemLength} belgidan oshmasin.`;
+    return null;
+  }
 
   if (typeof value !== "string") {
     return `${rule.label}: qiymat matn bo'lishi kerak.`;
