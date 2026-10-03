@@ -95,6 +95,17 @@ export const PERMISSIONS = [
   "certificates.manage",
   "referrals.view",
   "referrals.manage",
+
+  /*
+   * VIP — IKKI DARAJA.
+   *
+   * `vip.view` obunani va huquqlarni ko'rish; `vip.manage` esa
+   * faollashtirish, uzaytirish, to'xtatish. Ajratilgani ataylab:
+   * obunani o'zgartirish PUL bilan bog'liq amal va u ko'rish
+   * huquqiga qo'shib yuborilmasligi kerak.
+   */
+  "vip.view",
+  "vip.manage",
   "notifications.view",
   "notifications.manage",
   "admins.manage",
@@ -162,6 +173,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "mehr.view",
     "mehr.review",
     "points.view",
+    "vip.view",
   ],
   analyst: [
     "dashboard.view",
@@ -180,6 +192,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "mehr.view",
     "points.view",
     "referrals.view",
+    "vip.view",
     "export.run",
   ],
   viewer: VIEW_ONLY,

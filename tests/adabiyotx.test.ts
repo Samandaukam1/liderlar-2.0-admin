@@ -16,10 +16,10 @@ import {
 import {
   mapCandidateAdabiyotXRow,
   mapPublicCandidateAdabiyotXRow,
+  type PublicCandidateAdabiyotXRow,
 } from "../src/lib/adabiyotx/types.ts";
 
 const candidateId = "3c583fcb-36f5-4d8c-886d-bafb08451ea9";
-const integrationKey = "51c53c6e-339d-48da-9688-d37716368008";
 const itemIdA = "45f0ef23-1c59-4f49-ae84-96e66adf6d3a";
 const itemIdB = "e5a60204-cb84-43f0-901e-3ad874af3146";
 
@@ -153,27 +153,31 @@ test("manual create own_work va read_book semantikasini validatsiya qiladi", () 
 });
 
 test("sort order takrorlangan IDlarni rad etadi", () => {
-  assert.equal(
-    hasUniqueAdabiyotXReorderIds([
-      { id: itemIdA, sortOrder: 0 },
-      { id: itemIdB, sortOrder: 1 },
-    ]),
-    true,
-  );
-  assert.equal(
-    hasUniqueAdabiyotXReorderIds([
-      { id: itemIdA, sortOrder: 0 },
-      { id: itemIdA, sortOrder: 1 },
-    ]),
-    false,
-  );
+  /*
+   * RO'YXAT O'ZGARUVCHIGA YOZILADI, to'g'ridan-to'g'ri berilmaydi.
+   *
+   * Funksiya `{ id: string }` kutadi, haqiqiy chaqiruvchi esa
+   * `sortOrder` ham bor obyektlarni beradi (`validation.ts`). TypeScript
+   * ortiqcha maydonni FAQAT yangi literal uchun rad etadi, shuning
+   * uchun o'zgaruvchi haqiqiy chaqiruv shaklini aks ettiradi.
+   */
+  const unique = [
+    { id: itemIdA, sortOrder: 0 },
+    { id: itemIdB, sortOrder: 1 },
+  ];
+  assert.equal(hasUniqueAdabiyotXReorderIds(unique), true);
+
+  const duplicated = [
+    { id: itemIdA, sortOrder: 0 },
+    { id: itemIdA, sortOrder: 1 },
+  ];
+  assert.equal(hasUniqueAdabiyotXReorderIds(duplicated), false);
 });
 
 test("database snake_case frontend camelCase ga map qilinadi", () => {
   const item = mapCandidateAdabiyotXRow({
     id: itemIdA,
     candidate_id: candidateId,
-    candidate_integration_key: integrationKey,
     external_id: "book-1",
     relationship_type: "own_work",
     content_type: "book",
@@ -190,7 +194,21 @@ test("database snake_case frontend camelCase ga map qilinadi", () => {
     updated_at: "2026-01-01T00:00:00.000Z",
   });
   assert.equal(item.candidateId, candidateId);
-  assert.equal(item.candidateIntegrationKey, integrationKey);
+  /*
+   * `candidateIntegrationKey` YO'Q — ataylab.
+   *
+   * 0015 migratsiyasi `candidate_adabiyotx_items.candidate_integration_key`
+   * ustunini olib tashlagan: kalit FAQAT `public.candidates` da
+   * saqlanadi. Denormallashgan nusxa ikki joyda bir xil qiymat hosil
+   * qilib, ular ajralib ketishi mumkin edi.
+   *
+   * Mapper uni qaytarmasligi shu qarorning qo'riqchisi.
+   */
+  assert.equal(
+    (item as unknown as Record<string, unknown>).candidateIntegrationKey,
+    undefined,
+    "denormallashgan kalit qaytdi",
+  );
   assert.equal(item.externalId, "book-1");
   assert.equal(item.sortOrder, 2);
   assert.equal(item.isVisible, true);
@@ -200,7 +218,6 @@ test("database snake_case frontend camelCase ga map qilinadi", () => {
 test("public mapper ichki candidate, visibility, metadata va vaqt maydonlarini chiqarmaydi", () => {
   const item = mapPublicCandidateAdabiyotXRow({
     id: itemIdA,
-    candidate_integration_key: integrationKey,
     external_id: "book-1",
     relationship_type: "own_work",
     content_type: "book",
@@ -211,9 +228,17 @@ test("public mapper ichki candidate, visibility, metadata va vaqt maydonlarini c
     external_url: "https://adabiyotx.uz/book/1",
     published_at: null,
     sort_order: 0,
+    /*
+     * `is_visible` va `created_at` ATAYLAB berilyapti.
+     *
+     * Ommaviy mapper tipi ularni kutmaydi, lekin test aynan shuni
+     * tekshiradi: qator ichida ichki maydonlar BO'LSA ham, javobga
+     * tushmasligi kerak. Shuning uchun to'liq qator sifatida
+     * uzatiladi.
+     */
     is_visible: true,
     created_at: "2026-01-01T00:00:00.000Z",
-  });
+  } as unknown as PublicCandidateAdabiyotXRow);
   assert.deepEqual(Object.keys(item), [
     "id",
     "externalId",
@@ -249,12 +274,18 @@ test("migration duplicate, RLS, atomic reorder va cascade talablarini saqlaydi",
   assert.match(sql, /where integration_key is null/i);
   assert.match(sql, /integration_key set not null/i);
   assert.match(sql, /unique index if not exists uq_candidates_integration_key/i);
-  assert.match(sql, /candidate_integration_key uuid not null/i);
-  assert.match(sql, /set_candidate_adabiyotx_integration_key/i);
-  assert.match(
-    sql,
-    /candidate_integration_key,\s*relationship_type,\s*is_visible,\s*sort_order/i,
+  /*
+   * DENORMALLASHGAN USTUN VA TRIGGER OLIB TASHLANGAN.
+   *
+   * 0014 ularni yaratgan, 0015 esa qaytarib olgan. Test endi
+   * teskarisini qo'riqlaydi: ular QAYTA kiritilmasligi kerak.
+   */
+  const normalizeSql = readFileSync(
+    "supabase/migrations/0015_normalize_candidate_adabiyotx.sql",
+    "utf8",
   );
+  assert.match(normalizeSql, /drop column if exists candidate_integration_key/i);
+  assert.match(normalizeSql, /drop function if exists public\.set_candidate_adabiyotx_integration_key/i);
   assert.match(sql, /unique \(candidate_id, external_id, relationship_type\)/i);
   assert.match(sql, /is_visible = true/i);
   assert.match(sql, /public\.is_admin\(\)/i);
@@ -302,13 +333,33 @@ test("cross-project public route faqat visible material va xavfsiz response bera
   );
   assert.match(route, /uuidSchema\.safeParse\(integrationKey\)/);
   assert.match(route, /status: 400/);
-  assert.match(route, /\.eq\("candidate_integration_key", integrationKey\)/);
+  /*
+   * FILTR IKKI QADAMDA: nomzod `candidates.integration_key` bo'yicha
+   * topiladi, yozuvlar esa `candidate_id` bo'yicha olinadi.
+   *
+   * Avval yozuvlarda denormallashgan kalit bor edi va bitta filtr
+   * yetardi; 0015 dan keyin bu normallashgan yo'l.
+   */
+  assert.match(route, /\.eq\("integration_key", integrationKey\)/);
+  assert.match(route, /\.eq\("candidate_id", candidate\.id\)/);
   assert.match(route, /\.eq\("is_visible", true\)/);
   assert.match(route, /\.order\("sort_order", \{ ascending: true \}\)/);
   assert.match(route, /\.order\("created_at", \{ ascending: false \}\)/);
   assert.match(route, /LIDERLAR_PUBLIC_CONTENT_API_KEY/);
   assert.match(route, /x-liderlar-api-key/);
   assert.match(route, /Cache-Control/);
-  assert.doesNotMatch(route, /created_by/);
-  assert.doesNotMatch(route, /metadata/);
+  /*
+   * "YO'Q" TEKSHIRUVLARI IZOHSIZ KOD USTIDA bajariladi.
+   *
+   * Izohda maydon nomi uchrashi mumkin — masalan uning nega
+   * so'ralmasligini tushuntirganda. Izohni ham hisobga olish testni
+   * tushuntirishga qarshi qilib qo'yardi: dasturchi sababni yozishi
+   * uchun testni buzishga majbur bo'lardi.
+   */
+  const routeCode = route
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\n]*/g, "");
+
+  assert.doesNotMatch(routeCode, /created_by/);
+  assert.doesNotMatch(routeCode, /metadata/);
 });

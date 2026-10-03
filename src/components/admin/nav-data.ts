@@ -23,6 +23,9 @@ import {
   MonitorPlay,
   Megaphone,
   Handshake,
+  Crown,
+  Newspaper,
+  FileDiff,
   HeartHandshake,
   Wand2,
   Bell,
@@ -66,7 +69,23 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Chop etishga tayyorlar", href: "/nomzodlar/anketalar/chop-etishga-tayyorlar", icon: Rocket, permission: "intakes.view", keywords: "batch to'lov nashr telegram bugungi navbat" },
       { label: "Oylik havolalar", href: "/monthly-links", icon: Link2, permission: "tokens.view", keywords: "token 30 kun" },
       { label: "Yuborilgan yangilanishlar", href: "/monthly-updates", icon: Inbox, permission: "updates.view", keywords: "oylik submission" },
+      /*
+       * Profil tahrirlari — "Yuborilgan yangilanishlar" dan BOSHQA narsa.
+       *
+       * U oylik havola orqali kelgan to'liq yangilanish; bu esa
+       * foydalanuvchining o'zi profil muharririda o'zgartirgan
+       * ALOHIDA maydonlari va ularning har biri alohida tasdiqlanadi.
+       */
+      { label: "Profil tahrirlari", href: "/profil-tahrirlari", icon: FileDiff, permission: "candidates.view", keywords: "tahrir tasdiq korik maydon ozgarish vip" },
       { label: "Biografik maqolalar", href: "/articles", icon: FileText, permission: "articles.view", keywords: "maqola editor" },
+      /*
+       * A'ZO MAQOLALARI — BIOGRAFIYADAN BOSHQA.
+       *
+       * Yuqoridagi bo'lim nomzod HAQIDA yozilgan biografiya; bu esa
+       * a'zoning O'ZI yozgan maqolasi va u Liderlar Online nashrida
+       * chiqadi. Muallifi, oqimi va ommaviy joyi boshqa.
+       */
+      { label: "Liderlar Online maqolalari", href: "/online-maqolalar", icon: Newspaper, permission: "articles.view", keywords: "azo maqola online nashr tekshiruv muallif" },
       { label: "Arizalar", href: "/applications", icon: ClipboardList, permission: "applications.view" },
       // Liderlar 1.0 arxivi — 2.0 nomzodlaridan ATAYLAB alohida yozuv turi
       // (legacy_posts jadvali), shuning uchun alohida bo'lim.
@@ -154,6 +173,26 @@ export const NAV_GROUPS: NavGroup[] = [
         permission: "mehr.view",
         keywords:
           "mehr ezgulik volontyor tadbir sertifikat ball reyting tekshiruv qr check-in referral",
+      },
+    ],
+  },
+  {
+    /*
+     * LIDERLAR VIP — TIJORIY QATLAM.
+     *
+     * Reytingdan ATAYLAB alohida: VIP sotib olinadi, reyting esa
+     * qozoniladi. Ikkisini bir bo'limga qo'shish panelda ularni bir
+     * xil narsa qilib ko'rsatardi — holbuki §70 ularni tushuncha
+     * jihatidan ajratishni talab qiladi.
+     */
+    label: "Liderlar VIP",
+    items: [
+      {
+        label: "VIP obunalar",
+        href: "/vip",
+        icon: Crown,
+        permission: "vip.view",
+        keywords: "vip obuna premium tarif imtiyoz muddat faollashtirish huquq entitlement",
       },
     ],
   },

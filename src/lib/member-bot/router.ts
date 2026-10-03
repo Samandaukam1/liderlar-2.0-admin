@@ -22,6 +22,25 @@ import {
   type InlineButton,
 } from "./messages.ts";
 import { consumeTelegramLink, findProfileByTelegramId } from "@/lib/member/link-service";
+import {
+  handleIncomingPhoto,
+  parsePhotoAction,
+  photoMenu,
+  pickLargestPhoto,
+  startPhotoFlow,
+  PHOTO_ACTIONS,
+} from "./photo-flow";
+import {
+  cancelFlow,
+  confirmEntry,
+  editMenu,
+  handleConversationText,
+  parseEntryAction,
+  startBioFlow,
+  startEntryFlow,
+  vipMenu,
+  VIP_ACTIONS,
+} from "./vip-flow";
 import { CERTIFICATE_ROLE_LABEL } from "@/lib/mehr/certificate-code";
 import { resolveAdminOrigin } from "./admin-origin.ts";
 import { getSiteUrl } from "@/lib/site-url";
@@ -49,6 +68,11 @@ export interface MemberUpdate {
     chat: { id: number };
     from?: TgUser;
     text?: string;
+    /*
+     * RASM — Telegram bir rasmni bir necha o'lchamda yuboradi va
+     * ular kichikdan kattaga tartiblangan.
+     */
+    photo?: Array<{ file_id?: string; file_size?: number }>;
   };
   callback_query?: {
     id: string;
@@ -143,7 +167,6 @@ async function handleMessage(message: NonNullable<MemberUpdate["message"]>): Pro
     return;
   }
 
-  // Boshqa har qanday matn — menyuga qaytaradi.
   const profileId = await findProfileByTelegramId(from.id);
   if (!profileId) {
     const msg = notLinkedMessage(loginUrl());
@@ -151,6 +174,37 @@ async function handleMessage(message: NonNullable<MemberUpdate["message"]>): Pro
     return;
   }
 
+  /*
+   * RASM YUBORILGAN BO'LSA — RASM OQIMIGA.
+   *
+   * Matn tekshiruvidan OLDIN: rasmli xabarda `text` bo'sh bo'ladi
+   * va u matn oqimiga tushsa, "matn bo'sh" degan xato chiqardi.
+   */
+  const photo = pickLargestPhoto(message.photo);
+  if (photo) {
+    const photoReply = await handleIncomingPhoto(from.id, profileId, photo);
+    if (photoReply) {
+      await sendMemberMessage(chatId, photoReply.text, photoReply.buttons);
+      return;
+    }
+  }
+
+  /*
+   * FAOL SUHBAT BO'LSA, MATN O'SHA OQIMGA KETADI.
+   *
+   * Busiz bot har matnga menyu chizardi va bosqichma-bosqich
+   * ma'lumot kiritish umuman ishlamasdi.
+   *
+   * `null` qaytsa — faol suhbat yo'q va quyidagi odatdagi
+   * xatti-harakat saqlanadi.
+   */
+  const flowReply = await handleConversationText(from.id, profileId, text);
+  if (flowReply) {
+    await sendMemberMessage(chatId, flowReply.text, flowReply.buttons);
+    return;
+  }
+
+  // Boshqa har qanday matn — menyuga qaytaradi.
   const menu = mainMenu(await displayName(profileId));
   await sendMemberMessage(chatId, menu.text, menu.buttons);
 }
@@ -176,12 +230,45 @@ async function handleCallback(
     return;
   }
 
-  const reply = await buildReply(query.data ?? "", profileId);
+  const reply = await buildReply(query.data ?? "", profileId, query.from.id);
   await editMemberMessage(chatId, messageId, reply.text, reply.buttons);
 }
 
-async function buildReply(action: string, profileId: string): Promise<BotMessage> {
+async function buildReply(
+  action: string,
+  profileId: string,
+  telegramUserId: number,
+): Promise<BotMessage> {
+  /*
+   * VIP OQIMLARI SWITCH DAN OLDIN.
+   *
+   * Bo'lim tanlash kaliti dinamik (`m:vip:entry:education`), ya'ni
+   * `switch` ning qat'iy tarmoqlariga sig'maydi.
+   */
+  const entryKind = parseEntryAction(action);
+  if (entryKind) return startEntryFlow(telegramUserId, profileId, entryKind);
+
+  const photoTarget = parsePhotoAction(action);
+  if (photoTarget) return startPhotoFlow(telegramUserId, profileId, photoTarget);
+
+  if (action === PHOTO_ACTIONS.menu) return photoMenu();
+
   switch (action) {
+    case VIP_ACTIONS.vip:
+      return vipMenu();
+
+    case VIP_ACTIONS.editProfile:
+      return editMenu();
+
+    case VIP_ACTIONS.bio:
+      return startBioFlow(telegramUserId, profileId);
+
+    case VIP_ACTIONS.confirm:
+      return confirmEntry(telegramUserId, profileId);
+
+    case VIP_ACTIONS.cancel:
+      return cancelFlow(telegramUserId);
+
     case A.home:
       return mainMenu(await displayName(profileId));
 

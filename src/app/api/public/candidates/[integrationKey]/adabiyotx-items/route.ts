@@ -10,7 +10,15 @@ import {
 export const dynamic = "force-dynamic";
 
 const PUBLIC_ITEM_SELECT =
-  "id, external_id, relationship_type, content_type, title, author_name, description, cover_url, external_url, published_at, sort_order, metadata";
+  /*
+ * `metadata` SO'RALMAYDI — ataylab.
+ *
+ * Ommaviy mapper (`mapPublicCandidateAdabiyotXRow`) uni javobga
+ * qo'shmaydi, ya'ni tortib kelish keraksiz. Ustiga u yashirin xavf:
+ * kelajakda kimdir xom qatorni qaytarsa, ichki ma'lumot javobga
+ * tushib ketardi. So'ralmagan narsa sizib chiqa olmaydi.
+ */
+"id, external_id, relationship_type, content_type, title, author_name, description, cover_url, external_url, published_at, sort_order";
 
 type PublicRouteContext = {
   params: Promise<{ integrationKey: string }>;

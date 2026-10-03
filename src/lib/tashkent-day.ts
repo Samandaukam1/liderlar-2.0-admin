@@ -226,3 +226,13 @@ export function formatTashkent(value: string | Date | null | undefined): string 
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(w.day)}.${pad(w.month)}.${w.year} ${pad(w.hour)}:${pad(w.minute)}`;
 }
+
+/** Sonli sana server va brauzerning locale maʼlumotlariga bogʻlanmasin. */
+export function formatTashkentDate(value: string | Date | null | undefined): string {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    if (!parseCalendarDate(value)) return "—";
+    const [year, month, day] = value.split("-");
+    return `${day}.${month}.${year}`;
+  }
+  return formatTashkent(value).split(" ")[0];
+}

@@ -12,12 +12,17 @@ import { StatusActions } from "./status-actions";
 import { EntriesPanel, type EntryRow } from "./entries-panel";
 import { AdabiyotXPanel } from "./adabiyotx-panel";
 import { CertificatePanel } from "./certificate-panel";
-import { cn, formatDate, daysUntil, timeAgo } from "@/lib/utils";
+import { cn, formatDate, daysUntil } from "@/lib/utils";
 import type { Candidate } from "@/lib/types";
 import { getCandidateEditorRecord, getCandidatePrompt } from "@/lib/candidates/repository";
 import { resolveCertificateTargetUrl } from "@/lib/certificates/target-url";
 import { candidateArticlePath } from "@/lib/public-site";
 import { getSiteUrl } from "@/lib/site-url";
+import { loadAuditActors } from "@/lib/audit-actors";
+import { auditChangeRows } from "@/lib/audit-view";
+import { auditEventLabel } from "@/lib/vip/audit-events";
+import { loadEditHistory, type EditHistoryResult } from "@/lib/profile-editor/review-service";
+import { EditHistoryPanel } from "@/components/admin/edit-history-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -77,16 +82,52 @@ export default async function CandidateDetailPage(props: {
           .order("updated_at", { ascending: false })
       : { data: null };
 
-  const { data: auditRows } =
+  /*
+   * TARIX — IKKI MANBA.
+   *
+   *   1. `audit_logs` — har bir muhim amal (eski `candidate.*` yozuvlari va
+   *      yangi `profile.*` hodisalari). Nomzodga tegishli barcha hodisa
+   *      `entity_type = 'candidate'`, `entity_id = <nomzod id>` bilan
+   *      yoziladi.
+   *   2. `candidate_profile_edits` — ko'rik navbatidagi maydonlar: eski va
+   *      yangi qiymat yonma-yon.
+   *
+   * `profiles(...)` QO'SHILMAYDI: `actor_id` auth.users ga bog'langan va
+   * PostgREST butun so'rovni xato bilan qaytarardi (oldin "Tarix bo'sh"
+   * shu sababli ko'rinardi). Ismlar `loadAuditActors` bilan alohida.
+   */
+  const HISTORY_LIMIT = 40;
+  const EDIT_HISTORY_LIMIT = 50;
+  const { data: rawAuditRows, error: auditError } =
     tab === "history"
       ? await admin
           .from("audit_logs")
-          .select("id, action, created_at, reason, profiles(full_name)")
+          .select("id, actor_id, action, created_at, reason, old_value, new_value")
           .eq("entity_type", "candidate")
           .eq("entity_id", id)
           .order("created_at", { ascending: false })
-          .limit(40)
-      : { data: null };
+          .limit(HISTORY_LIMIT)
+      : { data: null, error: null };
+  if (auditError) console.error("[nomzod] audit tarixi o'qilmadi:", auditError.message);
+
+  const auditList = (rawAuditRows ?? []) as Array<{
+    id: string;
+    actor_id: string | null;
+    action: string;
+    created_at: string;
+    reason: string | null;
+    old_value: unknown;
+    new_value: unknown;
+  }>;
+  const auditActors = tab === "history" ? await loadAuditActors(auditList) : null;
+  const auditRows = auditList.map((row) => ({
+    ...row,
+    actorName: auditActors?.actorOf(row.actor_id).name ?? "Tizim",
+    changes: auditChangeRows(row.old_value, row.new_value) ?? [],
+  }));
+  const editHistory: EditHistoryResult =
+    tab === "history" ? await loadEditHistory(id, EDIT_HISTORY_LIMIT) : { ok: true, rows: [] };
+  const canViewAudit = hasPermission(ctx.roles, "audit.view");
 
   const dueDays = daysUntil(candidate.next_update_due_at);
   const publicUrl = `${getSiteUrl()}${candidateArticlePath(candidate.slug)}`;
@@ -195,26 +236,64 @@ export default async function CandidateDetailPage(props: {
           )}
 
           {tab === "history" && (
-            <Card>
-              <h3 className="mb-4 text-sm font-bold text-ink">O‘zgarishlar tarixi</h3>
-              {!auditRows || auditRows.length === 0 ? (
-                <p className="py-4 text-sm text-ink-soft">Tarix bo‘sh</p>
-              ) : (
-                <ol className="relative space-y-4 border-l-2 border-line pl-5">
-                  {(auditRows as unknown as Array<{ id: string; action: string; created_at: string; reason: string | null; profiles: { full_name: string } | null }>).map((a) => (
-                    <li key={a.id} className="relative">
-                      <span className="absolute -left-[27px] top-1 h-3 w-3 rounded-full border-2 border-card bg-cyan" />
-                      <p className="text-sm">
-                        <b className="text-ink">{a.profiles?.full_name ?? "Tizim"}</b>{" "}
-                        <span className="text-ink-soft">{a.action}</span>
-                      </p>
-                      {a.reason && <p className="text-xs text-ink-soft">Sabab: {a.reason}</p>}
-                      <p className="text-[11px] text-ink-soft/70">{timeAgo(a.created_at)}</p>
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </Card>
+            <div>
+              <EditHistoryPanel history={editHistory} limit={EDIT_HISTORY_LIMIT} />
+              <Card>
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-bold text-ink">O‘zgarishlar tarixi</h3>
+                  {canViewAudit && (
+                    <Link
+                      href={`/audit-log?entity=candidate&eid=${candidate.id}`}
+                      className="text-xs font-bold text-brand hover:underline"
+                    >
+                      Barchasi jurnalda
+                    </Link>
+                  )}
+                </div>
+                {auditError ? (
+                  <p className="rounded-[12px] border border-coral/40 bg-coral/5 px-3 py-2 text-sm text-ink">
+                    Tarixni o‘qib bo‘lmadi. Sahifani yangilang.
+                  </p>
+                ) : auditRows.length === 0 ? (
+                  <p className="py-4 text-sm text-ink-soft">Tarix bo‘sh</p>
+                ) : (
+                  <ol className="relative space-y-4 border-l-2 border-line pl-5">
+                    {auditRows.map((a) => (
+                      <li key={a.id} className="relative">
+                        <span className="absolute -left-[27px] top-1 h-3 w-3 rounded-full border-2 border-card bg-cyan" />
+                        <p className="text-sm">
+                          <b className="text-ink">{a.actorName}</b>{" "}
+                          <span className="text-ink-soft">{auditEventLabel(a.action)}</span>
+                        </p>
+                        {a.changes.length > 0 && (
+                          <ul className="mt-1 space-y-0.5 text-xs">
+                            {a.changes.slice(0, 6).map((change) => (
+                              <li key={change.field} className="break-words">
+                                <span className="font-mono text-ink-soft">{change.field}:</span>{" "}
+                                {change.before !== "—" && (
+                                  <>
+                                    <span className="text-[#a33232]">{change.before}</span> →{" "}
+                                  </>
+                                )}
+                                <span className="text-[#14563f]">{change.after}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {a.reason && <p className="text-xs text-ink-soft">Sabab: {a.reason}</p>}
+                        <p className="text-[11px] text-ink-soft/70">{formatDate(a.created_at, true)}</p>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+                {auditActors?.failed && (
+                  <p className="mt-3 text-xs text-ink-soft">Ba’zi ismlarni o‘qib bo‘lmadi — “noma’lum” deb ko‘rsatildi.</p>
+                )}
+                {auditRows.length >= HISTORY_LIMIT && (
+                  <p className="mt-3 text-xs text-ink-soft">Oxirgi {HISTORY_LIMIT} ta yozuv ko‘rsatilgan.</p>
+                )}
+              </Card>
+            </div>
           )}
         </div>
 

@@ -20,6 +20,8 @@ import { ViewsAreaChart, CategoryBarChart } from "@/components/admin/charts";
 import { Avatar, RankingBadge, StatusBadge } from "@/components/admin/badges";
 import { EmptyState } from "@/components/ui/feedback";
 import { formatDate, timeAgo, formatNumber } from "@/lib/utils";
+import { loadAuditActors } from "@/lib/audit-actors";
+import { auditEventLabel } from "@/lib/vip/audit-events";
 
 export const metadata = { title: "Dashboard" };
 export const dynamic = "force-dynamic";
@@ -95,9 +97,14 @@ async function getDashboardData(): Promise<DashboardData> {
       .limit(5),
     admin.from("podcasts").select("id, title, starts_at, status").gte("starts_at", now).order("starts_at", { ascending: true }).limit(4),
     admin.from("journals").select("issue_number, title, status").order("issue_number", { ascending: false }).limit(1).maybeSingle(),
+    /*
+     * `profiles(full_name)` QO'SHILMAYDI: `actor_id` auth.users ga
+     * bog'langan, PostgREST bu birlashmani rad etadi va blok doim bo'sh
+     * ("yozuvlar yo'q") ko'rinardi. Ismlar pastda alohida o'qiladi.
+     */
     admin
       .from("audit_logs")
-      .select("id, action, entity_type, created_at, profiles(full_name)")
+      .select("id, actor_id, action, entity_type, created_at")
       .order("created_at", { ascending: false })
       .limit(8),
   ]);
@@ -162,6 +169,18 @@ async function getDashboardData(): Promise<DashboardData> {
         }))
       : [];
 
+  const recentAudit =
+    auditRows.status === "fulfilled" && !auditRows.value.error && Array.isArray(auditRows.value.data)
+      ? (auditRows.value.data as unknown as Array<{
+          id: string;
+          actor_id: string | null;
+          action: string;
+          entity_type: string;
+          created_at: string;
+        }>)
+      : [];
+  const recentActors = await loadAuditActors(recentAudit);
+
   return {
     totalCandidates: getCount(total as PromiseSettledResult<{ count: number | null; error: unknown }>),
     publishedCandidates: getCount(published as PromiseSettledResult<{ count: number | null; error: unknown }>),
@@ -182,24 +201,13 @@ async function getDashboardData(): Promise<DashboardData> {
       journalRow.status === "fulfilled" && journalRow.value.data
         ? (journalRow.value.data as DashboardData["journal"])
         : null,
-    recentAudit:
-      auditRows.status === "fulfilled" && Array.isArray(auditRows.value.data)
-        ? (
-            auditRows.value.data as unknown as Array<{
-              id: string;
-              action: string;
-              entity_type: string;
-              created_at: string;
-              profiles: { full_name: string } | null;
-            }>
-          ).map((r) => ({
-            id: r.id,
-            action: r.action,
-            entity_type: r.entity_type,
-            created_at: r.created_at,
-            actor: r.profiles?.full_name ?? "Tizim",
-          }))
-        : [],
+    recentAudit: recentAudit.map((r) => ({
+      id: r.id,
+      action: auditEventLabel(r.action),
+      entity_type: r.entity_type,
+      created_at: r.created_at,
+      actor: recentActors.actorOf(r.actor_id).name,
+    })),
     warnings,
   };
 }

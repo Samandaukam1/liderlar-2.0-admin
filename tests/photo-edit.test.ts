@@ -106,12 +106,26 @@ test("gpt-image-2 raw multipart request faqat minimal parametrlarni yuboradi", a
   });
   assert.deepEqual(result, Buffer.from("png-result"));
   assert.ok(requestBody);
-  assert.deepEqual(Array.from(requestBody.keys()), ["image", "model", "prompt", "size", "quality"]);
-  assert.equal(requestBody.get("model"), "gpt-image-2");
-  assert.equal(requestBody.get("prompt"), "portrait");
-  assert.equal(requestBody.get("size"), "1024x1536");
-  assert.equal(requestBody.get("quality"), "high");
-  const image = requestBody.get("image");
+
+  /*
+   * TIP ANIQ KO'RSATILADI.
+   *
+   * `requestBody` ga qiymat FAQAT `fetchImpl` callback ichida
+   * beriladi va TypeScript buni ko'rmaydi — u o'zgaruvchini hamon
+   * `null` deb hisoblaydi, shuning uchun `assert.ok` dan keyin tur
+   * `never` bo'lib qoladi va maydonlarni o'qib bo'lmaydi.
+   *
+   * Yuqoridagi `assert.ok` ish vaqtida haqiqatan tekshiradi, bu esa
+   * kompilyatorga shuni aytadi.
+   */
+  const body = requestBody as unknown as FormData;
+
+  assert.deepEqual(Array.from(body.keys()), ["image", "model", "prompt", "size", "quality"]);
+  assert.equal(body.get("model"), "gpt-image-2");
+  assert.equal(body.get("prompt"), "portrait");
+  assert.equal(body.get("size"), "1024x1536");
+  assert.equal(body.get("quality"), "high");
+  const image = body.get("image");
   assert.ok(image instanceof File);
   assert.equal(image.name, "candidate-source.jpg");
   assert.equal(image.type, "image/jpeg");

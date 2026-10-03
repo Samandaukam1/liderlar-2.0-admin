@@ -27,6 +27,18 @@
     {
       "path": "/api/cron/sales-gap-cleanup",
       "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/vip-expiry",
+      "schedule": "10 3 * * *"
+    },
+    {
+      "path": "/api/cron/referral-codes",
+      "schedule": "25 * * * *"
+    },
+    {
+      "path": "/api/cron/adabiyotx-sync",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

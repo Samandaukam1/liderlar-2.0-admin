@@ -266,3 +266,115 @@ export async function getMemberBotStatus(): Promise<MemberBotStatus | null> {
     return null;
   }
 }
+
+/* ========================================================================= *
+ * FAYL OLISH — §21
+ * ========================================================================= */
+
+/**
+ * Telegram faylining o'lchami va ichki yo'li.
+ *
+ * `filePath` — Telegram serveridagi vaqtinchalik yo'l. U HAVOLA EMAS
+ * va saqlanmaydi: to'liq havolada BOT TOKENI bo'ladi, ya'ni uni
+ * bazaga yozish yoki log'ga chiqarish tokenni oshkor qilardi.
+ */
+export interface MemberFileInfo {
+  filePath: string;
+  sizeBytes: number | null;
+}
+
+/**
+ * `file_id` bo'yicha fayl ma'lumotini oladi.
+ *
+ * Telegram faylni 1 soat saqlaydi va yo'l keyin yaroqsiz bo'ladi —
+ * §21 "Never permanently depend on Telegram file URLs" aynan shuni
+ * aytadi. Shuning uchun fayl DARHOL o'z saqlash joyimizga
+ * ko'chiriladi.
+ */
+export async function getMemberFileInfo(fileId: string): Promise<MemberFileInfo | null> {
+  try {
+    const response = await fetch(
+      `${TELEGRAM_API}/bot${memberBotToken()}/getFile`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file_id: fileId }),
+      },
+    );
+
+    const parsed = (await response.json()) as {
+      ok?: boolean;
+      description?: string;
+      result?: { file_path?: string; file_size?: number };
+    };
+
+    if (!parsed.ok || !parsed.result?.file_path) {
+      console.error("[bot] fayl ma'lumoti olinmadi:", scrub(parsed.description ?? "xato"));
+      return null;
+    }
+
+    return {
+      filePath: parsed.result.file_path,
+      sizeBytes: parsed.result.file_size ?? null,
+    };
+  } catch (err) {
+    console.error(
+      "[bot] fayl ma'lumoti olinmadi:",
+      scrub(err instanceof Error ? err.message : String(err)),
+    );
+    return null;
+  }
+}
+
+/**
+ * Fayl mazmunini yuklab oladi.
+ *
+ * `maxBytes` — undan katta fayl O'QILMAYDI. Chegara `Content-Length`
+ * bo'yicha oldindan tekshiriladi: butun faylni xotiraga olib, keyin
+ * rad etish serverless funksiyaning xotirasini to'ldirardi.
+ */
+export async function downloadMemberFile(
+  filePath: string,
+  maxBytes: number,
+): Promise<{ bytes: Uint8Array; contentType: string } | null> {
+  try {
+    const response = await fetch(
+      `${TELEGRAM_API}/file/bot${memberBotToken()}/${filePath}`,
+    );
+
+    if (!response.ok) {
+      console.error("[bot] fayl yuklanmadi:", response.status);
+      return null;
+    }
+
+    const declared = Number(response.headers.get("content-length") ?? "0");
+    if (declared > maxBytes) {
+      console.warn("[bot] fayl juda katta:", { declared, maxBytes });
+      return null;
+    }
+
+    const buffer = await response.arrayBuffer();
+
+    /*
+     * HAQIQIY HAJM HAM TEKSHIRILADI.
+     *
+     * `Content-Length` yo'q bo'lishi yoki noto'g'ri bo'lishi mumkin,
+     * ya'ni unga yakka ishonib bo'lmaydi.
+     */
+    if (buffer.byteLength > maxBytes) {
+      console.warn("[bot] fayl chegaradan katta:", { size: buffer.byteLength, maxBytes });
+      return null;
+    }
+
+    return {
+      bytes: new Uint8Array(buffer),
+      contentType: response.headers.get("content-type") ?? "application/octet-stream",
+    };
+  } catch (err) {
+    console.error(
+      "[bot] fayl yuklanmadi:",
+      scrub(err instanceof Error ? err.message : String(err)),
+    );
+    return null;
+  }
+}

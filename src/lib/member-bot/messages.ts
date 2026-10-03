@@ -30,6 +30,14 @@ export const MEMBER_MENU_ACTIONS = {
   support: "m:support",
   security: "m:security",
   home: "m:home",
+  /*
+   * VIP bo'limi — `vip-flow.ts` da boshqariladi.
+   *
+   * Kalit SHU YERDA ham ro'yxatlangan, chunki asosiy menyu tugmasi
+   * bu fayldan chiqadi va ikki joyda bir xil satr yozish ularning
+   * ajralib ketishiga olib kelardi.
+   */
+  vip: "m:vip",
   mehrActivities: "m:mehr:list",
   mehrStart: "m:mehr:start",
   mehrJoin: "m:mehr:join",
@@ -46,6 +54,7 @@ export function mainMenu(displayName: string | null): BotMessage {
     text: `${greeting}\n\nLiderlar a'zolik xizmati. Kerakli bo'limni tanlang.`,
     buttons: [
       [{ text: "👤 Profilim", callback_data: A.profile }],
+      [{ text: "👑 Liderlar VIP", callback_data: A.vip }],
       [{ text: "❤️ Mehr 365+", callback_data: A.mehr }],
       [
         { text: "🏆 Reytingim", callback_data: A.rank },
