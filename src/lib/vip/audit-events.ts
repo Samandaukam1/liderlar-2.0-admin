@@ -92,6 +92,18 @@ export const AUDIT_EVENTS = {
     entity: "vip_subscription", severity: "info", actor: "system",
     label: "VIP obuna muddati tugadi",
   },
+  /*
+   * VIP KUNLARI — yagona `vip_grant_days()` orqali (admin, kunlik
+   * challenge, referal). Manba `metadata.source` da.
+   */
+  "vip.days.granted": {
+    entity: "profile", severity: "info", actor: "system",
+    label: "VIP kunlari berildi",
+  },
+  "challenge.daily.finalized": {
+    entity: "system", severity: "info", actor: "system",
+    label: "Kunlik Premium Challenge yakunlandi",
+  },
 
   /* ------------------------------------------------------------ *
    * FUNKSIYA BAYROQLARI — butun tizimning chiqarish holati.

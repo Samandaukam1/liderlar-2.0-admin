@@ -1,6 +1,8 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { randomUUID } from "node:crypto";
 import { recordAudit } from "./audit-log";
+import { grantVipDays } from "./grant-service";
 import type { AuditEventKey } from "./audit-events";
 import {
   activate,
@@ -343,12 +345,33 @@ export async function applyAdminAction(
     case "activate":
       outcome = activate(subscription.state, plan, now);
       break;
-    case "extend":
+    case "extend": {
       if (input.days === undefined) {
         return { ok: false, error: "Uzaytirish kunlarini kiriting." };
       }
-      outcome = extend(subscription.state, subscription.times, input.days, now, plan.graceDays);
-      break;
+      // Qoida (holat, kun soni) shu yerda tekshiriladi, YOZISH esa yagona xizmatda.
+      const check = extend(subscription.state, subscription.times, input.days, now, plan.graceDays);
+      if (!check.ok) return { ok: false, error: check.error };
+
+      /*
+       * YAGONA VIP XIZMATI (`vip_grant_days`): admin uzaytirishi ham
+       * challenge va referal mukofotlari bilan bir xil yo'ldan o'tadi —
+       * ular bir-birining muddatini bosib ketmaydi va "VIP tarixi"da
+       * manbasi bilan ko'rinadi.
+       */
+      const granted = await grantVipDays({
+        profileId: input.profileId,
+        days: input.days,
+        source: "admin",
+        sourceId: subscription.id,
+        idempotencyKey: `admin-extend:${randomUUID()}`,
+        actorId: input.actorId,
+        reason: input.reason,
+      });
+      return granted.ok
+        ? { ok: true, state: "active" }
+        : { ok: false, error: "Uzaytirishni saqlab bo'lmadi." };
+    }
     case "suspend":
       outcome = suspend(subscription.state, subscription.times);
       break;

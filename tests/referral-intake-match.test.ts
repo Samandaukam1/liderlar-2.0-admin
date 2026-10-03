@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  earliest,
   phoneKey,
   pickIntakeForApplication,
   type PaidIntake,
@@ -12,7 +13,8 @@ function intake(overrides: Partial<PaidIntake> = {}): PaidIntake {
   return {
     intakeId: "intake-1",
     candidateId: "cand-1",
-    paymentConfirmedAt: "2026-10-02T10:00:00Z",
+    paid: true,
+    qualifiedAt: "2026-10-02T10:00:00Z",
     ...overrides,
   };
 }
@@ -35,7 +37,7 @@ test("bitta to'langan anketa va nomzod bor — bog'lanadi", () => {
     intakes: [intake()],
     claimedCandidateIds: new Set(),
   });
-  assert.deepEqual(result, { kind: "match", intakeId: "intake-1", candidateId: "cand-1" });
+  assert.deepEqual(result, { kind: "match", intakeId: "intake-1", candidateId: "cand-1", paid: true });
 });
 
 test("to'langan anketa yo'q — kutiladi", () => {
@@ -68,7 +70,7 @@ test("bir raqamda ikki to'langan anketa — avtomatik tanlanmaydi", () => {
 test("to'lov arizadan oldin — bog'lanmaydi (keyin kod yozib ball o'g'irlash yo'q)", () => {
   const result = pickIntakeForApplication({
     applicationCreatedAt: APPLIED,
-    intakes: [intake({ paymentConfirmedAt: "2026-09-30T10:00:00Z" })],
+    intakes: [intake({ qualifiedAt: "2026-09-30T10:00:00Z" })],
     claimedCandidateIds: new Set(),
   });
   assert.equal(result.kind, "paid_before_application");
@@ -81,6 +83,21 @@ test("nomzod boshqa atributsiyada — ikkinchi tavsiyachi ball olmaydi", () => {
     claimedCandidateIds: new Set(["cand-1"]),
   });
   assert.equal(result.kind, "claimed");
+});
+
+test("to'lanmagan, lekin CHOP ETILGAN anketa ham bog'lanadi (VIP nashrga bog'liq)", () => {
+  const result = pickIntakeForApplication({
+    applicationCreatedAt: APPLIED,
+    intakes: [intake({ paid: false })],
+    claimedCandidateIds: new Set(),
+  });
+  assert.deepEqual(result, { kind: "match", intakeId: "intake-1", candidateId: "cand-1", paid: false });
+});
+
+test("saralanish vaqti — to'lov va nashrdan ertarog'i", () => {
+  assert.equal(earliest("2026-10-02T10:00:00Z", "2026-10-01T10:00:00Z"), "2026-10-01T10:00:00Z");
+  assert.equal(earliest(null, "2026-10-01T10:00:00Z"), "2026-10-01T10:00:00Z");
+  assert.equal(earliest(null, null), null);
 });
 
 test("intake-match.ts hech narsa import qilmaydi (testlar @/ ni ko'rmaydi)", async () => {

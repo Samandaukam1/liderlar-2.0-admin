@@ -194,6 +194,13 @@ export const NAV_GROUPS: NavGroup[] = [
         permission: "vip.view",
         keywords: "vip obuna premium tarif imtiyoz muddat faollashtirish huquq entitlement",
       },
+      {
+        label: "Premium Challenge",
+        href: "/premium-challenge",
+        icon: Medal,
+        permission: "vip.view",
+        keywords: "kunlik challenge bellashuv g'olib ko'rish vip kun tarix referal mukofot",
+      },
     ],
   },
   {

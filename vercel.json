@@ -46,6 +46,18 @@
     {
       "path": "/api/cron/referral-awards",
       "schedule": "40 * * * *"
+    },
+    {
+      "path": "/api/cron/daily-challenge?run=1",
+      "schedule": "5 14 * * *"
+    },
+    {
+      "path": "/api/cron/daily-challenge?run=2",
+      "schedule": "35 14 * * *"
+    },
+    {
+      "path": "/api/cron/daily-challenge?run=3",
+      "schedule": "20 2 * * *"
     }
   ]
 }

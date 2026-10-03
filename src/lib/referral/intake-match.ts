@@ -30,57 +30,72 @@ export function phoneKey(raw: string | null | undefined): string | null {
   return digits.slice(-PHONE_KEY_LENGTH);
 }
 
-export interface PaidIntake {
+/**
+ * Arizaga mos keladigan anketa: TO'LANGAN yoki nomzodi CHOP ETILGAN.
+ *
+ * 2026-10-04 dan: VIP kunlari to'lovga emas, NASHRga bog'liq (egasining
+ * qoidasi). Ball esa avvalgidek to'lov + nashr talab qiladi — shuning
+ * uchun `paid` alohida saqlanadi.
+ */
+export interface QualifiedIntake {
   intakeId: string;
   /** Anketadan yaratilgan nomzod; `null` — hali yaratilmagan. */
   candidateId: string | null;
-  paymentConfirmedAt: string | null;
+  paid: boolean;
+  /**
+   * Anketa qachon "saralangan": to'lov tasdig'i yoki nashr — qaysi biri
+   * OLDIN bo'lsa. Ariza bundan KEYIN kelgan bo'lsa, u sabab bo'lmagan.
+   */
+  qualifiedAt: string | null;
 }
 
+/** @deprecated — `QualifiedIntake`. Eski nom testlar uchun. */
+export type PaidIntake = QualifiedIntake;
+
 export type IntakeMatch =
-  | { kind: "match"; intakeId: string; candidateId: string }
-  /** To'langan anketa yo'q yoki nomzod hali yaratilmagan — keyingi yurishda. */
+  | { kind: "match"; intakeId: string; candidateId: string; paid: boolean }
+  /** Mos anketa yo'q yoki nomzod hali yaratilmagan — keyingi yurishda. */
   | { kind: "waiting" }
-  /** Bitta raqamda bir nechta to'langan anketa — avtomatik tanlanmaydi. */
+  /** Bitta raqamda bir nechta mos anketa — avtomatik tanlanmaydi. */
   | { kind: "ambiguous" }
   /** Nomzod allaqachon boshqa atributsiyaga bog'langan. */
   | { kind: "claimed" }
-  /** To'lov arizadan OLDIN tasdiqlangan — bu ariza sabab bo'lmagan. */
+  /** To'lov/nashr arizadan OLDIN — bu ariza sabab bo'lmagan. */
   | { kind: "paid_before_application" };
 
 /**
- * Arizaga mos TO'LANGAN anketani tanlaydi.
+ * Arizaga mos anketani tanlaydi.
  *
- * `intakes` — shu telefon kalitiga mos FAQAT to'langan anketalar.
+ * `intakes` — shu telefon kalitiga mos, TO'LANGAN yoki CHOP ETILGAN anketalar.
  */
 export function pickIntakeForApplication(input: {
   applicationCreatedAt: string;
-  intakes: readonly PaidIntake[];
+  intakes: readonly QualifiedIntake[];
   claimedCandidateIds: ReadonlySet<string>;
 }): IntakeMatch {
   if (input.intakes.length === 0) return { kind: "waiting" };
 
   /*
-   * BIR NECHTA TO'LANGAN ANKETA — TAXMIN QILINMAYDI.
+   * BIR NECHTA MOS ANKETA — TAXMIN QILINMAYDI.
    *
    * Bitta raqam (masalan, ota-ona telefoni) bir necha nomzodda turishi
    * mumkin. Qaysi biri shu ariza egasi ekanini bilmaymiz; noto'g'ri
-   * tanlov ballni boshqa nomzod hisobidan berardi.
+   * tanlov mukofotni boshqa nomzod hisobidan berardi.
    */
   if (input.intakes.length > 1) return { kind: "ambiguous" };
 
   const intake = input.intakes[0];
 
   /*
-   * TO'LOV ARIZADAN OLDIN — BOG'LANMAYDI.
+   * SARALANISH ARIZADAN OLDIN — BOG'LANMAYDI.
    *
-   * Aks holda allaqachon to'lagan nomzodning raqami bilan keyinroq kod
-   * yozilgan ariza topshirib, uning to'lovini o'z tavsiyasi qilib olish
-   * mumkin bo'lardi.
+   * Aks holda allaqachon to'lagan/chop etilgan nomzodning raqami bilan
+   * keyinroq kod yozilgan ariza topshirib, uning natijasini o'z tavsiyasi
+   * qilib olish mumkin bo'lardi.
    */
   if (
-    intake.paymentConfirmedAt !== null &&
-    Date.parse(intake.paymentConfirmedAt) < Date.parse(input.applicationCreatedAt)
+    intake.qualifiedAt !== null &&
+    Date.parse(intake.qualifiedAt) < Date.parse(input.applicationCreatedAt)
   ) {
     return { kind: "paid_before_application" };
   }
@@ -96,5 +111,12 @@ export function pickIntakeForApplication(input: {
    */
   if (input.claimedCandidateIds.has(intake.candidateId)) return { kind: "claimed" };
 
-  return { kind: "match", intakeId: intake.intakeId, candidateId: intake.candidateId };
+  return { kind: "match", intakeId: intake.intakeId, candidateId: intake.candidateId, paid: intake.paid };
+}
+
+/** Ikki ISO vaqtdan ertarog'i (`null` lar tashlanadi). */
+export function earliest(a: string | null, b: string | null): string | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return Date.parse(a) <= Date.parse(b) ? a : b;
 }

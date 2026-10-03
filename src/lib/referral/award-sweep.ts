@@ -1,36 +1,32 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { recordAudit } from "@/lib/vip/audit-log";
+import { grantReferralVip, notifyMember } from "@/lib/vip/grant-service";
 import { awardReferralPoints } from "./award-service";
 import { pointKey, type ReferralStage } from "./code";
-import { phoneKey, pickIntakeForApplication, type PaidIntake } from "./intake-match";
+import { earliest, phoneKey, pickIntakeForApplication, type QualifiedIntake } from "./intake-match";
 
 /**
- * TAVSIYA BALLARINI BERISH — FON VAZIFASI.
+ * TAVSIYA MUKOFOTLARI — FON VAZIFASI.
  *
- * NEGA TO'LOV YOKI NASHR JOYIGA CHAQIRUV EMAS: to'lov bir necha yo'l
- * bilan tasdiqlanadi (bot tugmasi, tahrirchi, bekor qilish), nashr esa
- * pipeline, batch yoki qo'lda bo'ladi. Har biriga chaqiruv qo'shish
- * bittasini unutishga olib kelardi. Bu vazifa esa NATIJAGA qaraydi:
- * anketa to'langan va nomzod chop etilgan bo'lsa — qaysi yo'l bilan
- * bo'lgani ahamiyatsiz.
+ * IKKI XIL MUKOFOT, IKKI XIL SHART:
+ *   · BALL (reyting, avvalgi qoida): to'lov TASDIQLANGAN **va** nomzod
+ *     CHOP ETILGAN;
+ *   · VIP KUNLARI (2026-10-04 qoidasi): nomzod CHOP ETILGAN — har biri
+ *     +10 kun, ko'pi bilan 30 (`vip_grant_referral_reward`, bazada).
  *
- * QAYTA ISHGA TUSHIRISHGA XAVFSIZ: bosqich faqat oldinga siljiydi
- * (yozishda ham shart), ball esa `point_ledger.idempotency_key`
- * unikal indeksi bilan bir marta tushadi.
+ * NEGA TO'LOV YOKI NASHR JOYIGA CHAQIRUV EMAS: ular bir necha yo'l bilan
+ * bo'ladi (bot, tahrirchi, pipeline, batch, qo'lda). Vazifa NATIJAGA
+ * qaraydi — qaysi yo'l bilan bo'lgani ahamiyatsiz.
  *
- * AVTOMATIK BEKOR QILISH YO'Q: nashrdan olish ko'pincha vaqtinchalik
- * (tahrir), bekor qilingan ball esa o'sha kalit band bo'lgani uchun
- * qayta berilmaydi. Bekor qilish — `reverseReferralPoints` orqali qo'lda.
+ * QAYTA YURISHGA XAVFSIZ: bosqich faqat oldinga siljiydi, ball
+ * `point_ledger.idempotency_key`, VIP esa `vip_grants.idempotency_key`
+ * bilan bir marta yoziladi.
+ *
+ * AVTOMATIK BEKOR QILISH YO'Q: nashrdan olish ko'pincha vaqtinchalik.
  */
 
-/**
- * Necha kunlik atributsiyalar ko'riladi.
- *
- * To'lov odatda ariza kunidan bir necha kun ichida bo'ladi (bot 14 kun
- * so'raydi). Oyna har yurishdagi so'rovlar sonini chegaralaydi: aks
- * holda hech qachon to'lamaganlar ro'yxati cheksiz o'sib borardi.
- */
+/** Necha kunlik atributsiyalar ko'riladi (so'rovlar sonini chegaralaydi). */
 export const ATTRIBUTION_WINDOW_DAYS = 90;
 
 /** PostgREST bitta javobda 1000 qatordan ko'p bermaydi. */
@@ -44,15 +40,20 @@ const OPEN_STAGES: readonly ReferralStage[] = ["visited", "application", "regist
 export interface AwardSweepResult {
   /** Ko'rilgan ochiq (to'lovgacha bo'lgan) atributsiyalar. */
   checked: number;
-  /** `payment_confirmed` ga siljitilganlar. */
+  /** Nomzodga bog'langanlar (telefon orqali). */
   linked: number;
-  /** To'lov, nomzod yoki nashr hali yo'q — keyingi yurishda. */
+  /** Bog'langan atributsiya keyin to'lov oldi -> `payment_confirmed`. */
+  paymentConfirmed: number;
+  /** Mos anketa, nomzod yoki nashr hali yo'q — keyingi yurishda. */
   waiting: number;
-  /** Bitta raqamda bir nechta to'langan anketa — admin ko'rigi kerak. */
+  /** Bitta raqamda bir nechta mos anketa — admin ko'rigi kerak. */
   ambiguous: number;
-  /** Nomzod boshqa tavsiyachiga bog'langan yoki to'lov arizadan oldin. */
+  /** Nomzod boshqa tavsiyachiga bog'langan yoki saralanish arizadan oldin. */
   rejected: number;
+  /** Reyting balli berildi. */
   awarded: number;
+  /** VIP kunlari berildi (+10). */
+  vipGranted: number;
   failed: number;
 }
 
@@ -60,43 +61,46 @@ export async function sweepReferralAwards(): Promise<AwardSweepResult> {
   const result: AwardSweepResult = {
     checked: 0,
     linked: 0,
+    paymentConfirmed: 0,
     waiting: 0,
     ambiguous: 0,
     rejected: 0,
     awarded: 0,
+    vipGranted: 0,
     failed: 0,
   };
 
   const since = new Date(Date.now() - ATTRIBUTION_WINDOW_DAYS * 86_400_000).toISOString();
 
-  await linkPaidIntakes(since, result);
+  await linkQualifiedIntakes(since, result);
   await awardPublished(since, result);
+  await grantVipForPublished(since, result);
 
-  /*
-   * Bitta yig'ma yozuv, har atributsiya uchun emas: siljish va ball
-   * o'zining alohida hodisasini yozadi, bu esa faqat "vazifa yurdi"
-   * degan iz.
-   */
-  if (result.linked > 0 || result.awarded > 0 || result.ambiguous > 0) {
-    console.info("[referral] ball sweep:", result);
+  if (result.linked > 0 || result.awarded > 0 || result.vipGranted > 0 || result.ambiguous > 0) {
+    console.info("[referral] mukofot sweep:", result);
   }
 
   return result;
 }
 
 /* ========================================================================= *
- * 1. ARIZA -> TO'LANGAN ANKETA -> NOMZOD
+ * 1. ARIZA -> (TO'LANGAN YOKI CHOP ETILGAN) ANKETA -> NOMZOD
  * ========================================================================= */
 
 interface OpenAttribution {
   id: string;
   referrerProfileId: string;
   stage: ReferralStage;
+  candidateId: string | null;
   applicationCreatedAt: string;
   phoneKey: string | null;
 }
 
-async function linkPaidIntakes(since: string, result: AwardSweepResult): Promise<void> {
+interface IntakeRow extends QualifiedIntake {
+  phoneKey: string | null;
+}
+
+async function linkQualifiedIntakes(since: string, result: AwardSweepResult): Promise<void> {
   const db = createSupabaseAdminClient();
 
   const open = await loadOpenAttributions(since);
@@ -107,14 +111,41 @@ async function linkPaidIntakes(since: string, result: AwardSweepResult): Promise
   result.checked = open.length;
   if (open.length === 0) return;
 
-  const keys = [...new Set(open.map((a) => a.phoneKey).filter((k): k is string => k !== null))];
-  const intakesByKey = await loadPaidIntakesByPhone(keys);
+  /*
+   * ALLAQACHON BOG'LANGAN, LEKIN HALI TO'LANMAGAN atributsiyalar: nomzod
+   * to'lovsiz chop etilgan (VIP uchun yetarli). Keyin to'lov kelsa —
+   * bosqich `payment_confirmed` ga siljiydi va ball sharti ochiladi.
+   */
+  const linked = open.filter((a) => a.candidateId !== null);
+  if (linked.length > 0) {
+    const { data: paidRows, error } = await db
+      .from("candidate_intakes")
+      .select("candidate_id")
+      .eq("payment_status", "paid")
+      .is("deleted_at", null)
+      .in("candidate_id", linked.map((a) => a.candidateId as string));
+    if (error) {
+      console.error("[referral] to'lov holati o'qilmadi:", error.message);
+      result.failed += 1;
+    } else {
+      const paid = new Set((paidRows ?? []).map((r) => r.candidate_id as string));
+      for (const attribution of linked) {
+        if (!paid.has(attribution.candidateId as string)) continue;
+        if (await advanceStage(attribution, "payment_confirmed", {})) result.paymentConfirmed += 1;
+      }
+    }
+  }
+
+  const unlinked = open.filter((a) => a.candidateId === null);
+  if (unlinked.length === 0) return;
+
+  const keys = [...new Set(unlinked.map((a) => a.phoneKey).filter((k): k is string => k !== null))];
+  const intakesByKey = await loadQualifiedIntakesByPhone(keys);
   if (intakesByKey === null) {
     result.failed += 1;
     return;
   }
 
-  // Shu nomzodlarga allaqachon bog'langan atributsiyalar.
   const candidateIds = [
     ...new Set(
       [...intakesByKey.values()]
@@ -126,7 +157,7 @@ async function linkPaidIntakes(since: string, result: AwardSweepResult): Promise
   const claimed = new Set<string>();
   const owners = new Map<string, string | null>();
 
-  for (const chunk of chunks(candidateIds, PAGE_SIZE / 5)) {
+  for (const chunk of chunks(candidateIds, 200)) {
     const [{ data: taken, error: takenError }, { data: candidates, error: candidateError }] =
       await Promise.all([
         db.from("referral_attributions").select("candidate_id").in("candidate_id", chunk),
@@ -141,11 +172,8 @@ async function linkPaidIntakes(since: string, result: AwardSweepResult): Promise
     for (const row of candidates ?? []) owners.set(row.id as string, (row.user_id as string | null) ?? null);
   }
 
-  /*
-   * ENG ESKI ATRIBUTSIYA BIRINCHI: bitta raqamdan ikki ariza ikki xil
-   * kod bilan kelsa, birinchi tavsiya saqlanadi (§15).
-   */
-  for (const attribution of open) {
+  // ENG ESKI ATRIBUTSIYA BIRINCHI (§15): birinchi tavsiya saqlanadi.
+  for (const attribution of unlinked) {
     const match = pickIntakeForApplication({
       applicationCreatedAt: attribution.applicationCreatedAt,
       intakes: attribution.phoneKey ? (intakesByKey.get(attribution.phoneKey) ?? []) : [],
@@ -166,39 +194,17 @@ async function linkPaidIntakes(since: string, result: AwardSweepResult): Promise
     }
 
     const referredProfileId = owners.get(match.candidateId) ?? null;
-
-    // O'ziga o'zi tavsiya — bazadagi `referral_no_self` ham to'sadi.
     if (referredProfileId !== null && referredProfileId === attribution.referrerProfileId) {
-      result.rejected += 1;
+      result.rejected += 1; // o'ziga o'zi tavsiya
       continue;
     }
 
-    const patch: Record<string, unknown> = {
-      stage: "payment_confirmed",
-      candidate_id: match.candidateId,
-    };
+    const patch: Record<string, unknown> = { candidate_id: match.candidateId };
     if (referredProfileId) patch.referred_profile_id = referredProfileId;
 
-    const { data: moved, error } = await db
-      .from("referral_attributions")
-      .update(patch)
-      .eq("id", attribution.id)
-      /*
-       * BOSQICH SHARTI YOZISHDA HAM: o'qish va yozish orasida boshqa
-       * oqim bosqichni siljitgan bo'lsa, eskisi ustidan yozilmaydi.
-       */
-      .eq("stage", attribution.stage)
-      .select("id")
-      .maybeSingle();
-
-    if (error) {
-      // 23505 — bu akkaunt allaqachon boshqa atributsiyada (`uq_referral_attributions_referred`).
-      if (error.code === "23505") {
-        result.rejected += 1;
-      } else {
-        console.error("[referral] bosqich siljitilmadi:", { id: attribution.id, message: error.message });
-        result.failed += 1;
-      }
+    const moved = await advanceStage(attribution, match.paid ? "payment_confirmed" : null, patch);
+    if (moved === "conflict") {
+      result.rejected += 1;
       continue;
     }
     if (!moved) continue;
@@ -210,15 +216,48 @@ async function linkPaidIntakes(since: string, result: AwardSweepResult): Promise
       actorId: null,
       entityId: attribution.id,
       before: { stage: attribution.stage },
-      after: { stage: "payment_confirmed" },
+      after: { stage: match.paid ? "payment_confirmed" : attribution.stage },
       metadata: {
         referrer_profile_id: attribution.referrerProfileId,
         candidate_id: match.candidateId,
         intake_id: match.intakeId,
         matched_by: "phone",
+        paid: match.paid,
       },
     });
   }
+}
+
+/**
+ * Atributsiyani yangilaydi: bosqich (ixtiyoriy) + bog'lanishlar.
+ *
+ * BOSQICH SHARTI YOZISHDA HAM: o'qish va yozish orasida boshqa oqim
+ * bosqichni siljitgan bo'lsa, eskisi ustidan yozilmaydi.
+ */
+async function advanceStage(
+  attribution: OpenAttribution,
+  nextStage: ReferralStage | null,
+  patch: Record<string, unknown>,
+): Promise<boolean | "conflict"> {
+  const db = createSupabaseAdminClient();
+  const update = nextStage ? { ...patch, stage: nextStage } : patch;
+  if (Object.keys(update).length === 0) return false;
+
+  const { data, error } = await db
+    .from("referral_attributions")
+    .update(update)
+    .eq("id", attribution.id)
+    .eq("stage", attribution.stage)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    // 23505 — akkaunt allaqachon boshqa atributsiyada (`uq_referral_attributions_referred`).
+    if (error.code === "23505") return "conflict";
+    console.error("[referral] atributsiya yangilanmadi:", { id: attribution.id, message: error.message });
+    return false;
+  }
+  return Boolean(data);
 }
 
 async function loadOpenAttributions(since: string): Promise<OpenAttribution[] | null> {
@@ -228,7 +267,7 @@ async function loadOpenAttributions(since: string): Promise<OpenAttribution[] | 
   for (let from = 0; ; from += PAGE_SIZE) {
     const { data, error } = await db
       .from("referral_attributions")
-      .select("id, referrer_profile_id, stage, application:applications(phone, created_at)")
+      .select("id, referrer_profile_id, stage, candidate_id, application:applications(phone, created_at)")
       .in("stage", OPEN_STAGES)
       .not("application_id", "is", null)
       .gte("created_at", since)
@@ -250,6 +289,7 @@ async function loadOpenAttributions(since: string): Promise<OpenAttribution[] | 
         id: row.id as string,
         referrerProfileId: row.referrer_profile_id as string,
         stage: row.stage as ReferralStage,
+        candidateId: (row.candidate_id as string | null) ?? null,
         applicationCreatedAt: application.created_at,
         phoneKey: phoneKey(application.phone),
       });
@@ -259,42 +299,66 @@ async function loadOpenAttributions(since: string): Promise<OpenAttribution[] | 
   }
 }
 
-async function loadPaidIntakesByPhone(keys: string[]): Promise<Map<string, PaidIntake[]> | null> {
+/**
+ * Telefon bo'yicha TO'LANGAN yoki nomzodi CHOP ETILGAN anketalar.
+ *
+ * Ikki so'rov: to'langanlar va nomzodi bor anketalar; ikkinchisi
+ * nomzodning nashr holati bilan filtrlanadi.
+ */
+async function loadQualifiedIntakesByPhone(keys: string[]): Promise<Map<string, IntakeRow[]> | null> {
   const db = createSupabaseAdminClient();
-  const byKey = new Map<string, PaidIntake[]>();
+  const byId = new Map<string, IntakeRow>();
 
   for (const chunk of chunks(keys, PHONE_CHUNK)) {
     // Kalit faqat raqamlardan iborat — filtr satriga xavfsiz qo'yiladi.
     const { data, error } = await db
       .from("candidate_intakes")
-      .select("id, candidate_id, phone_e164, payment_confirmed_at")
-      .eq("payment_status", "paid")
+      .select(
+        "id, candidate_id, phone_e164, payment_status, payment_confirmed_at, " +
+          "candidate:candidates!candidate_intakes_candidate_id_fkey(status, deleted_at, published_at)",
+      )
       .is("deleted_at", null)
       .or(chunk.map((key) => `phone_e164.like.*${key}`).join(","));
 
     if (error) {
-      console.error("[referral] to'langan anketalar o'qilmadi:", error.message);
+      console.error("[referral] anketalar o'qilmadi:", error.message);
       return null;
     }
 
-    for (const row of data ?? []) {
-      const key = phoneKey(row.phone_e164 as string | null);
-      if (!key) continue;
-      const list = byKey.get(key) ?? [];
-      list.push({
-        intakeId: row.id as string,
-        candidateId: (row.candidate_id as string | null) ?? null,
-        paymentConfirmedAt: (row.payment_confirmed_at as string | null) ?? null,
+    for (const raw of (data ?? []) as unknown as Record<string, unknown>[]) {
+      const candidate = (Array.isArray(raw.candidate) ? raw.candidate[0] : raw.candidate) as
+        | { status: string; deleted_at: string | null; published_at: string | null }
+        | null
+        | undefined;
+      const paid = raw.payment_status === "paid";
+      const published = candidate?.status === "published" && candidate.deleted_at === null;
+      if (!paid && !published) continue;
+
+      byId.set(raw.id as string, {
+        intakeId: raw.id as string,
+        candidateId: (raw.candidate_id as string | null) ?? null,
+        paid,
+        qualifiedAt: earliest(
+          paid ? ((raw.payment_confirmed_at as string | null) ?? null) : null,
+          published ? (candidate?.published_at ?? null) : null,
+        ),
+        phoneKey: phoneKey(raw.phone_e164 as string | null),
       });
-      byKey.set(key, list);
     }
   }
 
+  const byKey = new Map<string, IntakeRow[]>();
+  for (const intake of byId.values()) {
+    if (!intake.phoneKey) continue;
+    const list = byKey.get(intake.phoneKey) ?? [];
+    list.push(intake);
+    byKey.set(intake.phoneKey, list);
+  }
   return byKey;
 }
 
 /* ========================================================================= *
- * 2. TO'LANGAN + CHOP ETILGAN -> BALL
+ * 2. TO'LANGAN + CHOP ETILGAN -> BALL (avvalgi qoida)
  * ========================================================================= */
 
 async function awardPublished(since: string, result: AwardSweepResult): Promise<void> {
@@ -322,13 +386,10 @@ async function awardPublished(since: string, result: AwardSweepResult): Promise<
   }
 }
 
-async function awardPage(
-  rows: { id: string; candidate_id: string }[],
-  result: AwardSweepResult,
-): Promise<void> {
+async function awardPage(rows: { id: string; candidate_id: string }[], result: AwardSweepResult): Promise<void> {
   const db = createSupabaseAdminClient();
 
-  for (const page of chunks(rows, PAGE_SIZE / 5)) {
+  for (const page of chunks(rows, 200)) {
     const [{ data: ledger, error: ledgerError }, { data: paid, error: paidError }] = await Promise.all([
       db
         .from("point_ledger")
@@ -353,25 +414,75 @@ async function awardPage(
 
     for (const row of page) {
       if (done.has(pointKey(row.id, "payment_confirmed"))) continue;
-
-      /*
-       * TO'LOV BEKOR QILINGAN BO'LSA — BALL YO'Q.
-       *
-       * Bog'langandan keyin tahrirchi to'lovni bekor qilishi mumkin
-       * (`undoPaymentConfirmation`). Shart "to'lov qilgan VA chop
-       * etilgan" — birinchisi endi bajarilmaydi.
-       */
+      // To'lov bekor qilingan bo'lsa (`undoPaymentConfirmation`) — ball yo'q.
       if (!stillPaid.has(row.candidate_id)) {
         result.waiting += 1;
         continue;
       }
-
       // Nashr holatini `awardReferralPoints` o'zi tekshiradi.
       const award = await awardReferralPoints(row.id);
       if (award.awarded) result.awarded += 1;
       else if (award.skipped === "error" || award.skipped === "rule_missing") result.failed += 1;
       else if (award.skipped === "not_qualified") result.waiting += 1;
     }
+  }
+}
+
+/* ========================================================================= *
+ * 3. CHOP ETILGAN -> VIP KUNLARI (+10, ko'pi bilan 30)
+ * ========================================================================= */
+
+async function grantVipForPublished(since: string, result: AwardSweepResult): Promise<void> {
+  const db = createSupabaseAdminClient();
+
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await db
+      .from("referral_attributions")
+      .select("id, referrer_profile_id, candidate_id")
+      .not("candidate_id", "is", null)
+      .gte("updated_at", since)
+      .order("created_at", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) {
+      console.error("[referral] VIP uchun atributsiyalar o'qilmadi:", error.message);
+      result.failed += 1;
+      return;
+    }
+
+    const rows = (data ?? []) as { id: string; referrer_profile_id: string; candidate_id: string }[];
+
+    for (const page of chunks(rows, 200)) {
+      const { data: grants, error: grantsError } = await db
+        .from("vip_grants")
+        .select("idempotency_key")
+        .in("idempotency_key", page.map((r) => `referral-vip:${r.id}`));
+      if (grantsError) {
+        console.error("[referral] VIP berilganlar o'qilmadi:", grantsError.message);
+        result.failed += 1;
+        return;
+      }
+      const done = new Set((grants ?? []).map((g) => g.idempotency_key as string));
+
+      for (const row of page) {
+        if (done.has(`referral-vip:${row.id}`)) continue;
+        // Nashr, o'ziga o'zi, bir nomzod bir marta va 30 kunlik cheklov — BAZADA.
+        const outcome = await grantReferralVip(row.referrer_profile_id, row.id);
+        if (!outcome.ok) {
+          result.failed += 1;
+          continue;
+        }
+        if (!outcome.granted) continue;
+        result.vipGranted += 1;
+        await notifyMember(row.referrer_profile_id, {
+          title: "VIP obunangizga 10 kun qo'shildi",
+          body: "Promo-kodingiz orqali taklif qilingan nomzodning maqolasi chop etildi.",
+          link: "/kabinet",
+        });
+      }
+    }
+
+    if (rows.length < PAGE_SIZE) return;
   }
 }
 
