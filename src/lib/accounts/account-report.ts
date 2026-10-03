@@ -1,6 +1,13 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import type { AccountRow, AccountState, AccountCounts, AccountFilter } from "./account-types.ts";
+import type {
+  AccountRow,
+  AccountState,
+  AccountCounts,
+  AccountFilter,
+  AccountVip,
+} from "./account-types.ts";
+import { vipDisplay, type SubscriptionState } from "@/lib/vip/subscription-rules";
 
 /**
  * Nomzod hisoblari hisoboti.
@@ -162,7 +169,7 @@ export async function loadAccountReport(options: LoadOptions = {}): Promise<Acco
   const candidateIds = rows.map((r) => r.id);
   const userIds = rows.map((r) => r.user_id).filter((v): v is string => Boolean(v));
 
-  const [activationsRes, accountsRes, telegramLinksRes] = await Promise.all([
+  const [activationsRes, accountsRes, telegramLinksRes, vipRes] = await Promise.all([
     db
       .from("candidate_activations")
       .select("candidate_id, expires_at, consumed_at, revoked_at, created_at")
@@ -183,7 +190,28 @@ export async function loadAccountReport(options: LoadOptions = {}): Promise<Acco
           .in("profile_id", userIds)
           .is("unlinked_at", null)
       : Promise.resolve({ data: [] as { profile_id: string; telegram_username: string | null; linked_at: string }[] }),
+
+    /*
+     * VIP — eng yangisidan boshlab. Har profil uchun ochiq obuna (agar
+     * bo'lsa) yoki eng oxirgi tugallangani olinadi: "TUGAGAN" va
+     * "O'CHIRILGAN" ham ko'rinishi kerak, faqat faollari emas.
+     */
+    userIds.length
+      ? db
+          .from("vip_subscriptions")
+          .select("profile_id, state, started_at, current_period_end, grace_until, created_at")
+          .in("profile_id", userIds)
+          .order("created_at", { ascending: false })
+      : Promise.resolve({ data: [] as VipRow[], error: null }),
   ]);
+
+  if ("error" in vipRes && vipRes.error) {
+    // Xato "VIP yo'q" deb ko'rsatilmaydi — admin yolg'on holatni ko'rmasin.
+    console.error("[accounts] VIP holati o'qilmadi:", vipRes.error.message);
+  }
+  const vipByUser = pickVipRows((vipRes.data ?? []) as VipRow[]);
+  const vipFailed = "error" in vipRes && Boolean(vipRes.error);
+  const vipNow = new Date();
 
   const activationByCandidate = new Map<
     string,
@@ -255,6 +283,8 @@ export async function loadAccountReport(options: LoadOptions = {}): Promise<Acco
 
       telegramLinked: Boolean(telegram),
       telegramUsername: telegram?.telegram_username ?? null,
+
+      vip: r.user_id && !vipFailed ? toAccountVip(vipByUser.get(r.user_id) ?? null, vipNow) : null,
     };
   });
 
@@ -280,5 +310,66 @@ export async function loadAccountReport(options: LoadOptions = {}): Promise<Acco
     total: filter === "all" || filter === "linked" || filter === "unlinked"
       ? (filteredCount ?? stateFiltered.length)
       : stateFiltered.length,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * VIP
+ * ------------------------------------------------------------------ */
+
+interface VipRow {
+  profile_id: string;
+  state: SubscriptionState;
+  started_at: string | null;
+  current_period_end: string | null;
+  grace_until: string | null;
+  created_at: string;
+}
+
+const OPEN_VIP_STATES: ReadonlySet<SubscriptionState> = new Set([
+  "pending",
+  "active",
+  "grace_period",
+  "suspended",
+]);
+
+/**
+ * Har profil uchun BITTA obuna: ochig'i bo'lsa — u (bazada bittadan
+ * ko'p bo'lmaydi), bo'lmasa eng oxirgi tugallangani. Qatorlar
+ * `created_at desc` tartibida keladi.
+ */
+function pickVipRows(rows: readonly VipRow[]): Map<string, VipRow> {
+  const picked = new Map<string, VipRow>();
+  for (const row of rows) {
+    const current = picked.get(row.profile_id);
+    if (!current) {
+      picked.set(row.profile_id, row);
+    } else if (!OPEN_VIP_STATES.has(current.state) && OPEN_VIP_STATES.has(row.state)) {
+      picked.set(row.profile_id, row);
+    }
+  }
+  return picked;
+}
+
+function toAccountVip(row: VipRow | null, now: Date): AccountVip {
+  const display = vipDisplay(
+    row
+      ? {
+          state: row.state,
+          times: {
+            startedAt: row.started_at ? new Date(row.started_at) : null,
+            currentPeriodEnd: row.current_period_end ? new Date(row.current_period_end) : null,
+            graceUntil: row.grace_until ? new Date(row.grace_until) : null,
+          },
+        }
+      : null,
+    now,
+  );
+
+  return {
+    status: display.status,
+    startedAt: row?.started_at ?? null,
+    periodEnd: row?.current_period_end ?? null,
+    daysLeft: display.daysLeft,
   };
 }

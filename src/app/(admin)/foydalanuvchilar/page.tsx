@@ -37,6 +37,7 @@ export default async function AccountsPage({
 }) {
   const ctx = await requirePermission("members.view");
   const canManage = hasPermission(ctx.roles, "members.manage");
+  const canManageVip = hasPermission(ctx.roles, "vip.manage");
 
   const params = await searchParams;
   const filter = (FILTERS as string[]).includes(params.filter ?? "")
@@ -144,6 +145,7 @@ export default async function AccountsPage({
         activeFilter={filter}
         search={params.q ?? ""}
         canManage={canManage}
+        canManageVip={canManageVip}
         activationEnabled={activationEnabled}
       />
     </div>

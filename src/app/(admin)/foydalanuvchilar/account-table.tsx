@@ -3,15 +3,16 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Search, KeyRound, Copy, Check, Ban, RotateCcw, Mail } from "lucide-react";
+import { Search, KeyRound, Copy, Check, Ban, RotateCcw, Link2 } from "lucide-react";
 import { Badge } from "@/components/admin/badges";
 import {
   createActivationAction,
   blockAccountAction,
   restoreAccountAction,
-  sendPasswordResetAction,
+  createRecoveryLinkAction,
   type AccountActionResult,
 } from "@/lib/actions/accounts";
+import { VipControl } from "./vip-control";
 import {
   ACCOUNT_STATE_LABEL,
   ACCOUNT_FILTER_LABEL,
@@ -38,6 +39,19 @@ const FILTERS: AccountFilter[] = [
   "attention",
 ];
 
+function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  return Number.isFinite(d.getTime())
+    ? d.toLocaleString("uz-UZ", {
+        day: "2-digit",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: "Asia/Tashkent",
+      })
+    : "—";
+}
+
 function formatDate(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -52,6 +66,7 @@ export function AccountTable({
   activeFilter,
   search,
   canManage,
+  canManageVip,
   activationEnabled,
 }: {
   rows: AccountRow[];
@@ -59,6 +74,8 @@ export function AccountTable({
   activeFilter: AccountFilter;
   search: string;
   canManage: boolean;
+  /** VIP boshqaruvi alohida ruxsat (`vip.manage`) — hisobni boshqarish VIP berishni anglatmaydi. */
+  canManageVip: boolean;
   activationEnabled: boolean;
 }) {
   const router = useRouter();
@@ -197,12 +214,12 @@ export function AccountTable({
                             type="button"
                             disabled={pending}
                             onClick={() =>
-                              run(row.candidateId, () => sendPasswordResetAction(row.profileId!))
+                              run(row.candidateId, () => createRecoveryLinkAction(row.profileId!))
                             }
                             className="inline-flex items-center gap-1.5 rounded-badge border border-border-soft px-3 py-1.5 text-xs font-bold text-ink-soft transition hover:bg-ice disabled:opacity-40"
                           >
-                            <Mail className="h-3.5 w-3.5" aria-hidden />
-                            Parolni tiklash
+                            <Link2 className="h-3.5 w-3.5" aria-hidden />
+                            Parolni tiklash havolasi
                           </button>
                           <BlockButton
                             disabled={pending}
@@ -241,7 +258,12 @@ export function AccountTable({
                 */}
                 {result?.ok && result.link && (
                   <div className="mt-3 rounded-lg border border-brand/40 bg-brand/5 p-3">
-                    <p className="text-xs font-bold text-ink">Bir martalik faollashtirish havolasi</p>
+                    <p className="text-xs font-bold text-ink">
+                      {result.linkKind === "recovery"
+                        ? "Bir martalik parolni tiklash havolasi"
+                        : "Bir martalik faollashtirish havolasi"}
+                      {result.expiresAt ? ` · amal qiladi: ${formatDateTime(result.expiresAt)} gacha` : ""}
+                    </p>
                     <p className="mt-1 break-all font-mono text-[11px] text-ink-soft">
                       {result.link}
                     </p>
@@ -266,10 +288,16 @@ export function AccountTable({
                       )}
                     </button>
                     <p className="mt-2 text-[11px] text-ink-soft">
-                      Bu <strong>parol emas</strong>. Nomzod havolani ochib, parolini o&apos;zi
-                      qo&apos;yadi — uni hech kim ko&apos;rmaydi. Havola bir marta ishlaydi.
+                      Bu <strong>parol emas</strong>. Havolani Telegram orqali yuboring: foydalanuvchi
+                      uni ochib, {result.linkKind === "recovery" ? "yangi" : ""} parolini o&apos;zi
+                      qo&apos;yadi — uni hech kim, siz ham, ko&apos;rmaydi. Havola bir marta ishlaydi
+                      va sahifa yangilansa bu yerdan yo&apos;qoladi.
                     </p>
                   </div>
+                )}
+
+                {row.profileId && (
+                  <VipControl profileId={row.profileId} vip={row.vip} canManage={canManageVip} />
                 )}
 
                 {result && (

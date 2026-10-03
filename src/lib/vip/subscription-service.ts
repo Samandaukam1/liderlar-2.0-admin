@@ -8,8 +8,10 @@ import {
   checkReason,
   dueTransition,
   extend,
+  extendTo,
   restore,
   suspend,
+  vipDisplay,
   type AdminAction,
   type PlanTerms,
   type SubscriptionEvent,
@@ -359,6 +361,141 @@ export async function applyAdminAction(
   }
 
   return persist(subscription, outcome, input.reason, input.actorId, { days: input.days });
+}
+
+/* ========================================================================= *
+ * ADMIN QO'LDA BOSHQARADI — "Foydalanuvchi akkauntlari" bo'limi
+ * ========================================================================= */
+
+/** Yagona tarif. `vip_plans` da boshqasi paydo bo'lsa, formaga tanlov qo'shiladi. */
+export const DEFAULT_VIP_PLAN = "LIDERLAR_VIP";
+
+/**
+ * VIP beradi: admin bergan boshlanish va tugash sanasi bilan, darhol FAOL.
+ *
+ * MAVJUD OBUNA HOLATIGA QARAB:
+ *   · yo'q yoki tugallangan  -> yangi obuna (`vip_admin_grant`, bitta tranzaksiya);
+ *   · kutilmoqda/to'xtatilgan -> o'sha obuna yangi sanalar bilan yoqiladi;
+ *   · faol                    -> rad etiladi: buning uchun "Uzaytirish" bor,
+ *                                aks holda qolgan kunlar jimgina qayta yozilardi;
+ *   · faol, lekin muddati o'tgan (fon vazifasi hali yopmagan) -> avval
+ *     `expired` qilinadi, keyin yangisi beriladi — tarix to'g'ri qoladi.
+ */
+export async function grantVip(input: {
+  profileId: string;
+  startedAt: Date;
+  periodEnd: Date;
+  days: number;
+  reason: string;
+  actorId: string;
+}): Promise<ActionResult> {
+  const reasonProblem = checkReason(input.reason);
+  if (reasonProblem) return { ok: false, error: reasonProblem };
+
+  const loaded = await loadOpenSubscription(input.profileId);
+  if (!loaded.ok) {
+    return { ok: false, error: "Obunani o'qib bo'lmadi. Birozdan keyin qaytadan urinib ko'ring." };
+  }
+
+  const now = new Date();
+  const open = loaded.row;
+  const granted = { startedAt: input.startedAt, currentPeriodEnd: input.periodEnd, graceUntil: null };
+
+  if (open) {
+    const display = vipDisplay(open, now);
+
+    if (display.status === "active") {
+      return { ok: false, error: "VIP allaqachon faol. Muddatini «Uzaytirish» orqali o'zgartiring." };
+    }
+
+    if (open.state === "pending" || open.state === "suspended") {
+      return persist(
+        open,
+        { ok: true, result: { state: "active", event: "activated", times: granted } },
+        input.reason,
+        input.actorId,
+        { days: input.days },
+      );
+    }
+
+    // Faol holatda qolgan, lekin muddati o'tgan obuna — avval yopiladi.
+    const due = dueTransition(open.state, open.times, now);
+    if (due) {
+      const closed = await persist(open, { ok: true, result: due }, "Muddat tugagan — qayta berishdan oldin yopildi.", input.actorId);
+      if (!closed.ok) return closed;
+    }
+  }
+
+  const admin = createSupabaseAdminClient();
+  const { data, error } = await admin
+    .rpc("vip_admin_grant", {
+      p_profile_id: input.profileId,
+      p_plan_code: DEFAULT_VIP_PLAN,
+      p_started_at: input.startedAt.toISOString(),
+      p_period_end: input.periodEnd.toISOString(),
+      p_reason: input.reason,
+      p_actor_id: input.actorId,
+    })
+    .single();
+
+  if (error || !data) {
+    if (error?.code === "23505") {
+      return { ok: false, error: "Bu foydalanuvchida allaqachon ochiq obuna bor. Sahifani yangilang." };
+    }
+    if (error?.code === "22023") {
+      return { ok: false, error: error.message };
+    }
+    console.error("[vip] VIP berilmadi:", error?.message);
+    return { ok: false, error: "VIP berib bo'lmadi." };
+  }
+
+  /*
+   * KIM, QACHON, QANCHA MUDDATGA — bitta yozuvda.
+   */
+  await recordAudit("vip.subscription.activated", {
+    actorId: input.actorId,
+    entityId: (data as { id: string }).id,
+    reason: input.reason,
+    before: { state: open?.state ?? null },
+    after: {
+      state: "active",
+      started_at: input.startedAt.toISOString(),
+      current_period_end: input.periodEnd.toISOString(),
+    },
+    metadata: { profile_id: input.profileId, plan: DEFAULT_VIP_PLAN, days: input.days },
+  });
+
+  return { ok: true, state: "active" };
+}
+
+/**
+ * Aniq sanagacha uzaytiradi (taqvimdan tanlangan kun oxirigacha).
+ *
+ * N kunga uzaytirish — `applyAdminAction("extend")` (mavjud qoida).
+ */
+export async function extendVipTo(input: {
+  profileId: string;
+  newEnd: Date;
+  reason: string;
+  actorId: string;
+}): Promise<ActionResult> {
+  const reasonProblem = checkReason(input.reason);
+  if (reasonProblem) return { ok: false, error: reasonProblem };
+
+  const loaded = await loadOpenSubscription(input.profileId);
+  if (!loaded.ok) {
+    return { ok: false, error: "Obunani o'qib bo'lmadi. Birozdan keyin qaytadan urinib ko'ring." };
+  }
+  if (!loaded.row) return { ok: false, error: "Bu foydalanuvchida faol VIP yo'q." };
+
+  const now = new Date();
+  const outcome = extendTo(loaded.row.state, loaded.row.times, input.newEnd, now);
+  const days =
+    loaded.row.times.currentPeriodEnd === null
+      ? undefined
+      : Math.ceil((input.newEnd.getTime() - Math.max(loaded.row.times.currentPeriodEnd.getTime(), now.getTime())) / 86_400_000);
+
+  return persist(loaded.row, outcome, input.reason, input.actorId, { days });
 }
 
 /* ========================================================================= *

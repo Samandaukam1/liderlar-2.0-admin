@@ -313,14 +313,28 @@ test("bloklash MA'LUMOTNI O'CHIRMAYDI", () => {
   assert.match(fn, /status: "disabled"/);
 });
 
-test("admin yangi parolni KO'RMAYDI", () => {
+test("admin yangi parolni KO'RMAYDI va yaratmaydi — faqat havola", () => {
+  /*
+   * Avval tiklash email orqali edi (`resetPasswordForEmail`), lekin
+   * a'zolarning auth email'i ichki manzil va xat yetib bormasdi.
+   * Egasining qarori (2026-10-03): havola admin panelda ko'rsatiladi.
+   */
   const code = src("src/lib/actions/accounts.ts");
-  const fn = code.match(/export async function sendPasswordResetAction\([\s\S]*?\n\}/)?.[0] ?? "";
+  const fn = code.match(/export async function createRecoveryLinkAction\([\s\S]*?\n\}/)?.[0] ?? "";
 
-  assert.ok(fn.length > 0);
-  assert.match(fn, /resetPasswordForEmail/);
-  // Javobda parol yo'q — faqat "yuborildi" fakti.
-  assert.ok(!/password:/i.test(fn));
+  assert.ok(fn.length > 0, "createRecoveryLinkAction topilmadi");
+  assert.match(fn, /requirePermission\("members\.manage"\)/);
+  // Parol ham, email ham yo'q.
+  assert.ok(!/password/i.test(fn), "amal parolga tegyapti");
+  assert.ok(!/resetPasswordForEmail|generateLink/.test(fn), "amal email/Supabase havolasi yuboryapti");
+
+  const service = src("src/lib/accounts/recovery-service.ts");
+  // Bazaga faqat hash yoziladi.
+  assert.match(service, /token_hash: issued\.tokenHash/);
+  assert.ok(!/token: issued\.token,\s*\n?\s*(created_by|profile_id)/.test(service));
+  // Xodim hisobiga havola berilmaydi (imtiyozni oshirish).
+  assert.match(service, /from\("user_roles"\)/);
+  assert.match(service, /staff_account/);
 });
 
 // ---------------------------------------------------------------

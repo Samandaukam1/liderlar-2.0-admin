@@ -8,6 +8,8 @@ import { logAudit } from "@/lib/audit";
 import { getSiteUrl } from "@/lib/site-url";
 import { createActivation, revokeActivation } from "@/lib/accounts/activation-service";
 import { activationUrl } from "@/lib/accounts/activation-token";
+import { createRecovery } from "@/lib/accounts/recovery-service";
+import { recoveryUrl } from "@/lib/accounts/recovery-token";
 
 /**
  * Nomzod hisoblarini boshqarish.
@@ -18,7 +20,14 @@ import { activationUrl } from "@/lib/accounts/activation-token";
  */
 
 export type AccountActionResult =
-  | { ok: true; message: string; link?: string }
+  | {
+      ok: true;
+      message: string;
+      link?: string;
+      /** Qaysi havola: ekrandagi sarlavha va izoh shunga qarab tanlanadi. */
+      linkKind?: "activation" | "recovery";
+      expiresAt?: string;
+    }
   | { ok: false; error: string };
 
 const uuid = z.string().uuid();
@@ -71,6 +80,8 @@ export async function createActivationAction(candidateId: string): Promise<Accou
     ok: true,
     message: "Bir martalik havola tayyor. Uni nusxalab nomzodga yuboring.",
     link: activationUrl(getSiteUrl(), result.token),
+    linkKind: "activation",
+    expiresAt: result.expiresAt ?? undefined,
   };
 }
 
@@ -223,50 +234,48 @@ export async function restoreAccountAction(profileId: string): Promise<AccountAc
 }
 
 /**
- * Parolni tiklash havolasini yuboradi.
+ * Parolni tiklash havolasini yaratadi va ADMIN PANELDA ko'rsatadi.
  *
- * ADMIN YANGI PAROLNI KO'RMAYDI va ko'ra olmaydi. Supabase
- * o'zining tiklash oqimini ishlatadi; bu yerda faqat
- * "yuborildi" degan fakt qoladi.
+ * NEGA EMAIL EMAS: a'zolarning auth email'i ichki manzil
+ * (`…@users.liderlar.uz`) va Supabase xati hech kimga yetib
+ * bormasdi. Admin havolani nusxalab Telegram orqali yuboradi.
+ *
+ * ADMIN PAROLNI KO'RMAYDI va yaratmaydi: havola faqat a'zoga
+ * o'z parolini qo'yish imkonini beradi. Havola FAQAT SHU JAVOBDA
+ * qaytadi — bazada uning hash'i turadi, o'zi emas.
  */
-export async function sendPasswordResetAction(profileId: string): Promise<AccountActionResult> {
+export async function createRecoveryLinkAction(profileId: string): Promise<AccountActionResult> {
   const ctx = await requirePermission("members.manage");
 
   if (!uuid.safeParse(profileId).success) {
     return { ok: false, error: "Profil ID noto'g'ri." };
   }
 
-  const db = createSupabaseAdminClient();
+  const result = await createRecovery(profileId, { actorId: ctx.userId });
 
-  const { data: user, error: userError } = await db.auth.admin.getUserById(profileId);
-  if (userError || !user?.user?.email) {
-    return { ok: false, error: "Bu hisobda email topilmadi — tiklash havolasi yuborilmaydi." };
+  if (!result.ok || !result.token || !result.expiresAt) {
+    switch (result.reason) {
+      case "not_member":
+        return { ok: false, error: "Bu hisob nomzodga bog'lanmagan." };
+      case "staff_account":
+        return {
+          ok: false,
+          error: "Bu xodim hisobi. Xodimlar paroli faqat «Adminlar» bo'limida boshqariladi.",
+        };
+      case "blocked":
+        return { ok: false, error: "Hisob bloklangan. Avval uni tiklang." };
+      default:
+        return { ok: false, error: "Havola yaratilmadi. Qaytadan urinib ko'ring." };
+    }
   }
-
-  const { error } = await db.auth.resetPasswordForEmail(user.user.email, {
-    redirectTo: `${getSiteUrl()}/kirish`,
-  });
-
-  if (error) {
-    console.error("PASSWORD_RESET_FAILED", { message: error.message });
-    return { ok: false, error: "Tiklash havolasini yuborib bo'lmadi." };
-  }
-
-  await db.from("member_security_events").insert({
-    profile_id: profileId,
-    event_type: "password_reset_requested",
-    actor: "admin",
-    actor_user_id: ctx.userId,
-  });
-
-  await logAudit({
-    actorId: ctx.userId,
-    action: "account.password_reset_sent",
-    entityType: "profile",
-    entityId: profileId,
-    severity: "warning",
-  });
 
   revalidate();
-  return { ok: true, message: "Parolni tiklash havolasi email orqali yuborildi." };
+
+  return {
+    ok: true,
+    message: "Tiklash havolasi tayyor. Uni nusxalab, Telegram orqali foydalanuvchiga yuboring.",
+    link: recoveryUrl(getSiteUrl(), result.token),
+    linkKind: "recovery",
+    expiresAt: result.expiresAt,
+  };
 }

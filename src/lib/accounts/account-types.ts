@@ -8,6 +8,8 @@
  * sodir bo'lgan.
  */
 
+import type { VipDisplayStatus } from "../vip/subscription-rules.ts";
+
 export type AccountState =
   | "no_account"
   | "activation_pending"
@@ -62,7 +64,32 @@ export interface AccountRow {
 
   telegramLinked: boolean;
   telegramUsername: string | null;
+
+  /** VIP holati. `null` — hisob yo'q (VIP faqat hisobga beriladi). */
+  vip: AccountVip | null;
 }
+
+/**
+ * Admin ko'radigan VIP holati.
+ *
+ * `status` sana bilan hisoblanadi (`vipDisplay`): fon vazifasi holatni
+ * hali `expired` qilmagan bo'lsa ham, muddati o'tgan VIP "TUGAGAN"
+ * ko'rinadi — saytdagi huquq tekshiruvi bilan bir xil qoida.
+ */
+export interface AccountVip {
+  status: VipDisplayStatus;
+  startedAt: string | null;
+  periodEnd: string | null;
+  daysLeft: number | null;
+}
+
+export const VIP_STATUS_LABEL: Readonly<Record<VipDisplayStatus, string>> = {
+  active: "VIP: FAOL",
+  expired: "VIP: TUGAGAN",
+  disabled: "VIP: O‘CHIRILGAN",
+  pending: "VIP: KUTILMOQDA",
+  none: "VIP yo‘q",
+};
 
 export const ACCOUNT_STATE_LABEL: Readonly<Record<AccountState, string>> = {
   no_account: "Akkaunt yo'q",

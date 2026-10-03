@@ -44,6 +44,8 @@ import {
 import { CERTIFICATE_ROLE_LABEL } from "@/lib/mehr/certificate-code";
 import { resolveAdminOrigin } from "./admin-origin.ts";
 import { getSiteUrl } from "@/lib/site-url";
+import { profileDecision } from "@/lib/vip/entitlement-service";
+import { clearConversation, loadConversation } from "./conversation-store";
 
 /**
  * A'zo botining marshrutlagichi.
@@ -175,6 +177,21 @@ async function handleMessage(message: NonNullable<MemberUpdate["message"]>): Pro
   }
 
   /*
+   * FAOL SUHBAT — VIP QAYTA TEKSHIRILADI.
+   *
+   * Suhbat VIP faol paytda boshlangan bo'lishi mumkin. Orada muddat
+   * tugasa yoki admin VIPni o'chirsa, keyingi matn yoki rasm
+   * baribir profilga yozilardi. Tekshiruv yozuvdan OLDIN, har xabarda.
+   */
+  if (await loadConversation(from.id)) {
+    const denied = await vipGate(profileId, from.id);
+    if (denied) {
+      await sendMemberMessage(chatId, denied.text, denied.buttons);
+      return;
+    }
+  }
+
+  /*
    * RASM YUBORILGAN BO'LSA — RASM OQIMIGA.
    *
    * Matn tekshiruvidan OLDIN: rasmli xabarda `text` bo'sh bo'ladi
@@ -246,9 +263,21 @@ async function buildReply(
    * `switch` ning qat'iy tarmoqlariga sig'maydi.
    */
   const entryKind = parseEntryAction(action);
-  if (entryKind) return startEntryFlow(telegramUserId, profileId, entryKind);
-
   const photoTarget = parsePhotoAction(action);
+
+  /*
+   * VIP TUGMALARI — SERVERDA TEKSHIRILADI.
+   *
+   * Menyuda tugma ko'rinishi huquq emas: callback'ni istalgan vaqtda
+   * (eski xabardagi tugmadan ham) yuborish mumkin. `cancel` ochiq
+   * qoladi — u faqat suhbatni tozalaydi.
+   */
+  if (entryKind || photoTarget || VIP_GATED_ACTIONS.has(action)) {
+    const denied = await vipGate(profileId, telegramUserId);
+    if (denied) return denied;
+  }
+
+  if (entryKind) return startEntryFlow(telegramUserId, profileId, entryKind);
   if (photoTarget) return startPhotoFlow(telegramUserId, profileId, photoTarget);
 
   if (action === PHOTO_ACTIONS.menu) return photoMenu();
@@ -307,6 +336,32 @@ async function buildReply(
     default:
       return mainMenu(await displayName(profileId));
   }
+}
+
+/** VIP talab qiladigan qat'iy callback'lar (dinamiklari — yuqorida alohida). */
+const VIP_GATED_ACTIONS: ReadonlySet<string> = new Set([
+  VIP_ACTIONS.vip,
+  VIP_ACTIONS.editProfile,
+  VIP_ACTIONS.bio,
+  VIP_ACTIONS.confirm,
+  PHOTO_ACTIONS.menu,
+]);
+
+/**
+ * Bot orqali profil tahrirlash huquqi (`telegram.profile_edit`).
+ *
+ * `null` — ruxsat bor. Aks holda faol suhbat tozalanadi (yarim qolgan
+ * qoralama keyin ham yozilib ketmasin) va sabab matni qaytadi.
+ */
+async function vipGate(profileId: string, telegramUserId: number): Promise<BotMessage | null> {
+  const decision = await profileDecision(profileId, "telegram.profile_edit");
+  if (decision.allowed) return null;
+
+  await clearConversation(telegramUserId);
+  return {
+    text: `👑 ${decision.text ?? "Bu imkoniyat Liderlar VIP obunasi bilan ochiladi."}`,
+    buttons: [[{ text: "🏠 Bosh menyu", callback_data: A.home }]],
+  };
 }
 
 async function displayName(profileId: string): Promise<string | null> {

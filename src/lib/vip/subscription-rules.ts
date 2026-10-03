@@ -219,6 +219,98 @@ export function extend(
 }
 
 /**
+ * ANIQ SANAGACHA UZAYTIRISH (admin taqvimdan sana tanlaydi).
+ *
+ * Faqat UZAYTIRADI: yangi sana joriy tugashdan keyin bo'lishi shart.
+ * Qisqartirish "uzaytirish" tugmasi ortida yashirinmasin — u VIPni
+ * o'chirib, qayta berish bilan ochiq qilinadi va jurnalda shunday
+ * ko'rinadi.
+ */
+export function extendTo(
+  from: SubscriptionState,
+  times: SubscriptionTimes,
+  newEnd: Date,
+  now: Date,
+): TransitionOutcome {
+  if (!canApply("extend", from)) {
+    return { ok: false, error: `'${from}' holatidagi obunani uzaytirib bo'lmaydi.` };
+  }
+  if (!Number.isFinite(newEnd.getTime())) {
+    return { ok: false, error: "Tugash sanasi noto'g'ri." };
+  }
+  if (times.currentPeriodEnd === null) {
+    return { ok: false, error: "Muddatsiz obunani uzaytirish kerak emas." };
+  }
+  if (newEnd.getTime() <= now.getTime()) {
+    return { ok: false, error: "Yangi tugash sanasi kelajakda bo'lishi kerak." };
+  }
+  if (newEnd.getTime() <= times.currentPeriodEnd.getTime()) {
+    return { ok: false, error: "Yangi sana joriy tugash sanasidan keyin bo'lishi kerak." };
+  }
+
+  return {
+    ok: true,
+    result: {
+      state: "active",
+      event: "extended",
+      // Imtiyoz yo'q: kirish aynan tugash sanasida yopiladi.
+      times: { startedAt: times.startedAt, currentPeriodEnd: newEnd, graceUntil: null },
+    },
+  };
+}
+
+/* ========================================================================= *
+ * ADMIN KO'RADIGAN HOLAT
+ * ========================================================================= */
+
+/**
+ * Admin panelidagi uch holat (+ ikki yordamchi).
+ *
+ *   active   — FAOL: huquq beryapti;
+ *   expired  — TUGAGAN: muddat o'tgan (fon vazifasi holatni hali
+ *              yangilamagan bo'lsa ham — sana hal qiladi);
+ *   disabled — O'CHIRILGAN: admin bekor qilgan yoki to'xtatgan;
+ *   pending  — yaratilgan, hali yoqilmagan;
+ *   none     — hech qachon VIP bo'lmagan.
+ */
+export type VipDisplayStatus = "active" | "expired" | "disabled" | "pending" | "none";
+
+export interface VipDisplay {
+  status: VipDisplayStatus;
+  /** Faqat `active` uchun; `null` — muddatsiz. */
+  daysLeft: number | null;
+}
+
+/**
+ * HUQUQ TEKSHIRUVI BILAN BIR XIL QOIDA: holat VA sana
+ * (`entitlements.ts` dagi `isSubscriptionGranting`). Ekran "FAOL"
+ * desa-yu, sayt eshikni yopsa, admin noto'g'ri ma'lumot bilan
+ * ishlardi.
+ */
+export function vipDisplay(
+  subscription: { state: SubscriptionState; times: SubscriptionTimes } | null,
+  now: Date,
+): VipDisplay {
+  if (!subscription) return { status: "none", daysLeft: null };
+
+  const { state, times } = subscription;
+  if (state === "cancelled" || state === "suspended") return { status: "disabled", daysLeft: null };
+  if (state === "pending") return { status: "pending", daysLeft: null };
+  if (state === "expired") return { status: "expired", daysLeft: null };
+
+  if (times.currentPeriodEnd === null) return { status: "active", daysLeft: null };
+
+  const until = times.graceUntil ?? times.currentPeriodEnd;
+  if (now.getTime() > until.getTime()) return { status: "expired", daysLeft: null };
+
+  return {
+    status: "active",
+    // Yuqoriga yaxlitlanadi: oxirgi kunning yarmi ham "1 kun qoldi".
+    daysLeft: Math.max(0, Math.ceil((until.getTime() - now.getTime()) / DAY_MS)),
+  };
+}
+
+/**
  * TO'XTATIB QO'YISH.
  *
  * Sanalar SAQLANADI. To'xtatish — jazo choralari emas, tekshiruv

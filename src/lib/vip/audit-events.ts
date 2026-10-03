@@ -223,6 +223,19 @@ export const AUDIT_EVENTS = {
     entity: "profile", severity: "info", actor: "member",
     label: "Login o‘rnatildi",
   },
+  /*
+   * PAROLNI TIKLASH. Ikkalasi `warning`: hisobga kirish yo'li
+   * o'zgaryapti va "kim, qachon havola bergan" savoli xavfsizlik
+   * tekshiruvida birinchi so'raladi.
+   */
+  "account.recovery.created": {
+    entity: "profile", severity: "warning", actor: "admin",
+    label: "Parolni tiklash havolasi yaratildi",
+  },
+  "account.recovery.completed": {
+    entity: "profile", severity: "warning", actor: "member",
+    label: "Parol tiklash havolasi orqali yangilandi",
+  },
 
   /* ------------------------------------------------------------ *
    * A'ZO MAQOLALARI (Liderlar Online)
