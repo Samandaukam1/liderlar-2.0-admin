@@ -41,9 +41,28 @@ export function parseCsv(text: string): string[][] {
   return rows.filter((r) => r.some((c) => c.trim() !== ""));
 }
 
+/*
+ * FORMULA INJECTION HIMOYASI (OWASP "CSV Injection").
+ *
+ * Eksportdagi qiymatlarning bir qismini tashqi odam yozadi (ariza,
+ * anketa, bot). Excel/Sheets `=`, `+`, `-`, `@` (yoki Tab/CR) bilan
+ * boshlangan hujayrani FORMULA deb bajaradi: `=HYPERLINK(...)` faylni
+ * ochgan xodimning ma'lumotini tashqariga yuborishi, DDE esa buyruq
+ * ishga tushirishi mumkin. Oldidagi `'` hujayrani matnga aylantiradi.
+ *
+ * Oddiy son (`-5`, `+998901234567`) formula bo'la olmaydi — u
+ * tegilmaydi, aks holda ballar va telefon raqamlari `'` bilan chiqardi.
+ */
+const FORMULA_START = /^[=+\-@\t\r]/;
+const PLAIN_NUMBER = /^[+-]?\d+(\.\d+)?$/;
+
+function neutralizeFormula(s: string): string {
+  return FORMULA_START.test(s) && !PLAIN_NUMBER.test(s) ? `'${s}` : s;
+}
+
 export function toCsv(rows: Array<Array<string | number | null | undefined>>): string {
   const escape = (v: string | number | null | undefined) => {
-    const s = v == null ? "" : String(v);
+    const s = neutralizeFormula(v == null ? "" : String(v));
     return /[",\n\r]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
   };
   return rows.map((r) => r.map(escape).join(",")).join("\r\n");
