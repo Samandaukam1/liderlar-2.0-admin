@@ -1,6 +1,7 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { recordAudit } from "@/lib/vip/audit-log";
+import { parseRichText } from "./rich-text";
 
 /**
  * MAQOLANI AdabiyotX'GA UZATISH (§25).
@@ -127,7 +128,20 @@ export async function syncArticleToAdabiyotX(articleId: string): Promise<SyncRes
     title: article.title,
     subtitle: article.subtitle,
     excerpt: article.excerpt,
+    /*
+     * MATN IKKI SHAKLDA.
+     *
+     * `blocks` — tahlil qilingan tuzilma (abzats, sarlavha, iqtibos,
+     * ro'yxat; ichida qalin, kursiv, havola). Uni sayt bilan BIR XIL
+     * tahlilchi yasaydi (`rich-text.ts`, ikki repoda bayt-baytigacha
+     * bir xil), ya'ni maqola AdabiyotX'da ham saytdagidek ko'rinadi va
+     * AdabiyotX bizning belgilash qoidalarimizni bilishi shart emas.
+     *
+     * `body` — xom matn, ESKI funksiya versiyasi uchun: u faqat shuni
+     * o'qiydi va abzatslarga ajratadi.
+     */
     body: article.content,
+    blocks: parseRichText(article.content as string),
     hero_url: article.hero_url,
     hero_alt: article.hero_alt,
     published_at: article.published_at,

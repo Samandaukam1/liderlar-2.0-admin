@@ -272,6 +272,10 @@ export const AUDIT_EVENTS = {
   /* ------------------------------------------------------------ *
    * A'ZO MAQOLALARI (Liderlar Online)
    * ------------------------------------------------------------ */
+  "article.profile_visibility_changed": {
+    entity: "member_article", severity: "info", actor: "member",
+    label: "Maqolaning profilda ko‘rinishi o‘zgartirildi",
+  },
   "article.submitted": {
     entity: "member_article", severity: "info", actor: "member",
     label: "Maqola tekshiruvga yuborildi",
