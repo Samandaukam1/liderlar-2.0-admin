@@ -19,10 +19,19 @@ export async function getCandidatePublicationReadiness(candidateId: string): Pro
   if (!candidate || candidate.deleted_at) return { ready: false, errors: ["Nomzod topilmadi"], warnings: [] };
 
   const [{ count: sectionCount }, { count: articleCount }] = await Promise.all([
+    /*
+     * FAQAT NASHR BO'LGAN BO'LIMLAR HISOBGA OLINADI.
+     *
+     * A'zo yozgan va hali ko'rilmagan matn ommaviy sahifada
+     * KO'RINMAYDI, ya'ni uni hisoblash "biografiya bor" degan
+     * yolg'on javob berardi va nomzod bo'sh biografiya bilan
+     * nashr qilinardi.
+     */
     admin
       .from("candidate_sections")
       .select("id", { head: true, count: "exact" })
-      .eq("candidate_id", candidateId),
+      .eq("candidate_id", candidateId)
+      .eq("review_state", "published"),
     admin
       .from("articles")
       .select("id", { head: true, count: "exact" })

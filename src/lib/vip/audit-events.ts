@@ -136,6 +136,18 @@ export const AUDIT_EVENTS = {
     entity: "candidate", severity: "warning", actor: "member",
     label: "Profil yozuvi o‘chirildi",
   },
+  "profile.section.created": {
+    entity: "candidate", severity: "info", actor: "member",
+    label: "Biografiya bo‘limi qo‘shildi",
+  },
+  "profile.section.updated": {
+    entity: "candidate", severity: "info", actor: "member",
+    label: "Biografiya bo‘limi o‘zgartirildi",
+  },
+  "profile.section.deleted": {
+    entity: "candidate", severity: "warning", actor: "member",
+    label: "Biografiya bo‘limi o‘chirildi",
+  },
   "profile.certificate.created": {
     entity: "candidate", severity: "info", actor: "member",
     label: "Sertifikat qo‘shildi",
@@ -195,6 +207,14 @@ export const AUDIT_EVENTS = {
   "profile.entry.rejected": {
     entity: "candidate", severity: "info", actor: "admin",
     label: "Profil yozuvi qaytarildi",
+  },
+  "profile.section.approved": {
+    entity: "candidate", severity: "info", actor: "admin",
+    label: "Biografiya bo‘limi tasdiqlandi",
+  },
+  "profile.section.rejected": {
+    entity: "candidate", severity: "info", actor: "admin",
+    label: "Biografiya bo‘limi qaytarildi",
   },
   "profile.certificate.trust_set": {
     entity: "candidate", severity: "info", actor: "admin",

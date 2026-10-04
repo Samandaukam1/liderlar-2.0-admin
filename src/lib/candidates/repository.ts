@@ -74,10 +74,23 @@ export async function getCandidateEditorRecord(candidateId: string): Promise<Can
   const row = candidate as unknown as CandidateEditorRow;
 
   const [{ data: sectionRows, error: sectionError }, { data: legacyArticle }] = await Promise.all([
+    /*
+     * PANEL MUHARRIRI — FAQAT NASHR BO'LGAN MATN.
+     *
+     * A'zoning yuborgan va hali ko'rilmagan matni "Profil tahrirlari"
+     * navbatida ko'riladi, bu yerda emas: aralashtirilsa, admin
+     * tasdiqlanmagan da'voni tahririyat matni deb o'ylab saqlab
+     * yuborishi mumkin edi.
+     *
+     * Saqlashda u O'CHMAYDI: `save_candidate_profile_v2` ning
+     * o'chirish sharti `review_state = 'published'` bilan cheklangan
+     * (20261004121000).
+     */
     admin
       .from("candidate_sections")
       .select("id,title,content,sort_order")
       .eq("candidate_id", candidateId)
+      .eq("review_state", "published")
       .order("sort_order")
       .order("created_at"),
     admin

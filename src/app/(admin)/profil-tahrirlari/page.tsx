@@ -4,9 +4,11 @@ import { PageHeader } from "@/components/admin/page-header";
 import { loadPendingEdits } from "@/lib/profile-editor/review-service";
 import { loadPendingEntries } from "@/lib/profile-editor/entry-review-service";
 import { loadPendingCertificates } from "@/lib/profile-editor/certificate-review-service";
+import { loadPendingSections } from "@/lib/profile-editor/section-review-service";
 import { EditReviewList } from "./edit-review-list";
 import { EntryReviewList } from "./entry-review-list";
 import { CertificateReviewList } from "./certificate-review-list";
+import { SectionReviewList } from "./section-review-list";
 
 export const metadata = { title: "Profil tahrirlari" };
 export const dynamic = "force-dynamic";
@@ -14,8 +16,11 @@ export const dynamic = "force-dynamic";
 /**
  * FOYDALANUVCHI YUBORGAN PROFIL O'ZGARISHLARI.
  *
- * Bu navbatga FAQAT ko'rik talab qiladigan maydonlar tushadi:
- * tug'ilgan sana, hudud, yo'nalish. Qisqa ma'lumot va aloqa
+ * To'rtta navbat: `candidates` ustunlari, tuzilgan yozuvlar,
+ * sertifikatlar va biografiya matni.
+ *
+ * Bu navbatlarga FAQAT ko'rik talab qiladigan o'zgarish tushadi.
+ * Qisqa ma'lumot, manzil, faoliyat sohasi, teglar, tillar va aloqa
  * ma'lumoti darhol nashr bo'ladi va bu yerda KO'RINMAYDI — ularda
  * tekshirib bo'ladigan da'vo yo'q.
  *
@@ -26,11 +31,12 @@ export default async function ProfileEditsPage() {
   const ctx = await requirePermission("candidates.view");
   const canReview = hasPermission(ctx.roles, "candidates.edit");
 
-  // Ikki navbat bir-biriga bog'liq emas — parallel yuklanadi.
-  const [rows, entryRows, certificateRows] = await Promise.all([
+  // Navbatlar bir-biriga bog'liq emas — parallel yuklanadi.
+  const [rows, entryRows, certificateRows, sectionRows] = await Promise.all([
     loadPendingEdits(),
     loadPendingEntries(),
     loadPendingCertificates(),
+    loadPendingSections(),
   ]);
 
   return (
@@ -42,9 +48,11 @@ export default async function ProfileEditsPage() {
       />
 
       <p className="mb-4 rounded-card border border-line bg-surface px-4 py-3 text-xs leading-relaxed text-ink-soft">
-        Bu navbatga <b>faqat tekshiruv talab qiladigan</b> maydonlar tushadi:
-        tug‘ilgan sana, hudud va yo‘nalish. Qisqa ma‘lumot hamda aloqa
-        ma‘lumotlari darhol profilga joylanadi va bu yerda ko‘rinmaydi.
+        Bu navbatga <b>faqat tekshiruv talab qiladigan</b> o‘zgarishlar
+        tushadi: ism, tug‘ilgan sana va joyi, ta‘lim, hudud, yo‘nalish, yangi
+        yozuvlar, sertifikatlar va biografiya matni. Manzil, faoliyat sohasi,
+        teglar, tillar hamda aloqa ma‘lumotlari darhol profilga joylanadi va
+        bu yerda ko‘rinmaydi.
         {!canReview && " Tasdiqlash uchun nomzodni tahrirlash ruxsati kerak."}
       </p>
 
@@ -57,6 +65,9 @@ export default async function ProfileEditsPage() {
         </span>
         <span className="rounded-full bg-surface px-2.5 py-1 font-bold text-ink">
           Sertifikatlar: {certificateRows.length}
+        </span>
+        <span className="rounded-full bg-surface px-2.5 py-1 font-bold text-ink">
+          Biografiya matni: {sectionRows.length}
         </span>
       </p>
 
@@ -85,6 +96,17 @@ export default async function ProfileEditsPage() {
       */}
       <h2 className="mb-2 mt-6 text-sm font-bold text-ink">Sertifikatlar</h2>
       <CertificateReviewList rows={certificateRows} canReview={canReview} />
+
+      {/*
+        BIOGRAFIYA MATNI TO'RTINCHI NAVBAT.
+
+        Bu yerda ko'rilayotgan narsa UZUN MATN, ya'ni admin ishi ham
+        boshqacha: solishtirish yoki qisqa yozuvni o'qish emas, balki
+        ensiklopediyaga tushadigan maqolani oxirigacha o'qish.
+        Tasdiqlangandan keyin matn darhol ommaviy biografiyada chiqadi.
+      */}
+      <h2 className="mb-2 mt-6 text-sm font-bold text-ink">Biografiya matni</h2>
+      <SectionReviewList rows={sectionRows} canReview={canReview} />
     </div>
   );
 }

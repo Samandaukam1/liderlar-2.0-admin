@@ -31,6 +31,21 @@ const FIELD_LABEL: Readonly<Record<string, string>> = {
   category_id: "Yo'nalish",
   phone: "Telefon",
   email: "Email",
+  /*
+   * BIOGRAFIYA MAYDONLARI (2026-10-04).
+   *
+   * Ular ham ko'rikka keladi, ya'ni bu navbatda ko'rinadi. Nomi
+   * yozilmasa, admin `education_summary` kabi texnik ustun nomini
+   * ko'rardi (§5).
+   */
+  full_name: "To'liq ism",
+  birth_year: "Tug'ilgan yil",
+  birth_place: "Tug'ilgan joy",
+  education_summary: "Ta'lim (qisqacha)",
+  current_location: "Hozirgi manzil",
+  activity_field: "Faoliyat sohasi",
+  description_items: "Kim sifatida tanilgan (teglar)",
+  languages: "Tillar",
 };
 
 export interface PendingEditRow {

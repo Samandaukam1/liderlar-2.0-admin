@@ -839,6 +839,8 @@ async function loadArticleText(candidateId: string): Promise<string | null> {
     .from("candidate_sections")
     .select("title, content")
     .eq("candidate_id", candidateId)
+    // Ko'rikdan o'tmagan matn iqtibos manbai bo'lmasin: u hali fakt emas.
+    .eq("review_state", "published")
     .order("sort_order", { ascending: true })
     .limit(20);
 

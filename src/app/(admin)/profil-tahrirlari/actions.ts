@@ -12,6 +12,11 @@ import {
   setCertificateTrust,
   type CertificateReviewResult,
 } from "@/lib/profile-editor/certificate-review-service";
+import {
+  approveSection,
+  rejectSection,
+  type SectionReviewResult,
+} from "@/lib/profile-editor/section-review-service";
 
 /**
  * PROFIL TAHRIRLARINI KO'RISH AMALLARI.
@@ -89,6 +94,39 @@ export async function rejectEntryAction(
   if (!isUuid(entryId)) return { ok: false, error: "Yozuv tanlanmagan." };
 
   const result = await rejectEntry(kind, entryId, ctx.userId, note);
+  if (result.ok) revalidatePath("/profil-tahrirlari");
+  return result;
+}
+
+/* ========================================================================= *
+ * BIOGRAFIYA BO'LIMLARI
+ *
+ *    Ko'rilayotgan narsa — ommaviy biografiyadagi MATNNING O'ZI.
+ *    Tasdiqlangandan keyin u darhol sahifada ko'rinadi.
+ * ========================================================================= */
+
+export async function approveSectionAction(
+  sectionId: string,
+  note: string,
+): Promise<SectionReviewResult> {
+  const ctx = await requirePermission("candidates.edit");
+
+  if (!isUuid(sectionId)) return { ok: false, error: "Bo'lim tanlanmagan." };
+
+  const result = await approveSection(sectionId, ctx.userId, note);
+  if (result.ok) revalidatePath("/profil-tahrirlari");
+  return result;
+}
+
+export async function rejectSectionAction(
+  sectionId: string,
+  note: string,
+): Promise<SectionReviewResult> {
+  const ctx = await requirePermission("candidates.edit");
+
+  if (!isUuid(sectionId)) return { ok: false, error: "Bo'lim tanlanmagan." };
+
+  const result = await rejectSection(sectionId, ctx.userId, note);
   if (result.ok) revalidatePath("/profil-tahrirlari");
   return result;
 }
