@@ -17,7 +17,8 @@ export const dynamic = "force-dynamic";
  * FOYDALANUVCHI YUBORGAN PROFIL O'ZGARISHLARI.
  *
  * To'rtta navbat: `candidates` ustunlari, tuzilgan yozuvlar,
- * sertifikatlar va biografiya matni.
+ * sertifikatlar va biografiya matni (oxirgisi odatda bo'sh — matn
+ * darhol nashr bo'ladi).
  *
  * Bu navbatlarga FAQAT ko'rik talab qiladigan o'zgarish tushadi.
  * Qisqa ma'lumot, manzil, faoliyat sohasi, teglar, tillar va aloqa
@@ -50,9 +51,9 @@ export default async function ProfileEditsPage() {
       <p className="mb-4 rounded-card border border-line bg-surface px-4 py-3 text-xs leading-relaxed text-ink-soft">
         Bu navbatga <b>faqat tekshiruv talab qiladigan</b> o‘zgarishlar
         tushadi: ism, tug‘ilgan sana va joyi, ta‘lim, hudud, yo‘nalish, yangi
-        yozuvlar, sertifikatlar va biografiya matni. Manzil, faoliyat sohasi,
-        teglar, tillar hamda aloqa ma‘lumotlari darhol profilga joylanadi va
-        bu yerda ko‘rinmaydi.
+        yozuvlar hamda sertifikatlar. Biografiya matni, manzil, faoliyat
+        sohasi, teglar, tillar va aloqa ma‘lumotlari darhol profilga joylanadi
+        va bu yerda ko‘rinmaydi.
         {!canReview && " Tasdiqlash uchun nomzodni tahrirlash ruxsati kerak."}
       </p>
 
@@ -98,12 +99,17 @@ export default async function ProfileEditsPage() {
       <CertificateReviewList rows={certificateRows} canReview={canReview} />
 
       {/*
-        BIOGRAFIYA MATNI TO'RTINCHI NAVBAT.
+        BIOGRAFIYA MATNI — ODATDA BO'SH NAVBAT.
 
-        Bu yerda ko'rilayotgan narsa UZUN MATN, ya'ni admin ishi ham
-        boshqacha: solishtirish yoki qisqa yozuvni o'qish emas, balki
-        ensiklopediyaga tushadigan maqolani oxirigacha o'qish.
-        Tasdiqlangandan keyin matn darhol ommaviy biografiyada chiqadi.
+        A'zo yozgan matn 2026-10-04 dan beri DARHOL nashr bo'ladi
+        (egasining qarori: "ma'lumot to'g'riligiga nomzodning o'zi
+        javobgar"), ya'ni bu navbatga yangi yozuv TUSHMAYDI.
+
+        Ro'yxat SAQLANADI: `review_state` ustuni o'z joyida va eski
+        yoki boshqa oqimdan (masalan Telegram boti) kelgan
+        `pending_review` qator bo'lsa, u ommaviy sahifada ko'rinmaydi
+        — uni ko'rib chiqadigan yagona joy shu. Ko'rik qaytarilsa ham
+        bu yer tayyor turadi.
       */}
       <h2 className="mb-2 mt-6 text-sm font-bold text-ink">Biografiya matni</h2>
       <SectionReviewList rows={sectionRows} canReview={canReview} />
