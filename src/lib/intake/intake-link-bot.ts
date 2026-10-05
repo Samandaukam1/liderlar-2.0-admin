@@ -84,6 +84,8 @@ export async function createIntakeLinkFromBot(input: {
   fullName: string;
   gender: IntakeGender;
   origin: string;
+  /** Tugmani bosgan chat — anketaning "egasi" ("faqat o'z nomzodlari" rejimi uchun). */
+  creatorChatId: number | null;
 }): Promise<IntakeLinkOutcome> {
   const checked = validateFullName(input.fullName);
   if (!checked.ok) {
@@ -103,6 +105,7 @@ export async function createIntakeLinkFromBot(input: {
     actorId: null,
     baseUrl: await buildIntakeBaseUrl(),
     origin: input.origin,
+    creatorTelegramId: input.creatorChatId,
   });
 
   if (!created.ok || !created.link) {

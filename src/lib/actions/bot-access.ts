@@ -27,6 +27,8 @@ export interface BotAccessInput {
   note: string;
   permissions: string[];
   isActive: boolean;
+  /** "Faqat o'z nomzodlari" rejimi. */
+  ownOnly: boolean;
 }
 
 const PATH = "/botlar";
@@ -54,6 +56,7 @@ export async function saveBotAccessAction(input: BotAccessInput): Promise<BotAcc
     note: note || null,
     permissions,
     is_active: input.isActive,
+    own_only: input.ownOnly,
     updated_by: ctx.userId,
     updated_at: new Date().toISOString(),
   };

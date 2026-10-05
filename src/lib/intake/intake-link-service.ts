@@ -40,6 +40,11 @@ export interface CreateIntakeInput {
   baseUrl?: string;
   /** Audit uchun: anketa qayerdan kelgani. */
   origin?: string;
+  /**
+   * Havolani bot orqali yaratgan chat. "Faqat o'z nomzodlari" rejimidagi
+   * odamga shu anketa xabarlari aynan shu bo'yicha yuboriladi.
+   */
+  creatorTelegramId?: number | null;
 }
 
 export interface CreateIntakeResult {
@@ -59,6 +64,7 @@ export async function createIntakeRecord(input: {
   method: "manual" | "secure_link";
   actorId: string | null;
   origin?: string;
+  creatorTelegramId?: number | null;
 }): Promise<{ ok: boolean; error?: string; intakeId?: string }> {
   const fullName = input.fullName.trim();
   if (fullName.length < 3) return { ok: false, error: "Ism familiya kiritilishi shart (kamida 3 belgi)" };
@@ -77,6 +83,7 @@ export async function createIntakeRecord(input: {
       gender: input.gender,
       created_by: input.actorId,
       assigned_admin: input.actorId,
+      created_by_telegram_id: input.creatorTelegramId ?? null,
     })
     .select("id")
     .single();
@@ -146,6 +153,7 @@ export async function createIntakeWithLink(
     method: "secure_link",
     actorId: input.actorId,
     origin: input.origin,
+    creatorTelegramId: input.creatorTelegramId ?? null,
   });
   if (!created.ok || !created.intakeId) return { ok: false, error: created.error };
 

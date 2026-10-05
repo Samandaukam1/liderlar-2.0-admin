@@ -23,7 +23,7 @@ export default async function BotAccessPage() {
   const [{ data, error }, settings, coordinators] = await Promise.all([
     db
       .from("bot_access")
-      .select("id, telegram_id, display_name, note, permissions, is_active, updated_at")
+      .select("id, telegram_id, display_name, note, permissions, is_active, own_only, updated_at")
       .order("is_active", { ascending: false })
       .order("display_name", { ascending: true }),
     getTelegramSettings().catch(() => null),
@@ -37,6 +37,7 @@ export default async function BotAccessPage() {
     note: (row.note as string | null) ?? "",
     permissions: (row.permissions as string[] | null) ?? [],
     isActive: row.is_active as boolean,
+    ownOnly: Boolean(row.own_only),
     updatedAt: row.updated_at as string,
   }));
 

@@ -613,8 +613,13 @@ test("ETA is measured, never invented", () => {
  * ------------------------------------------------------------------ */
 
 test("automated posts go to the configured chats, not the whole subscriber list", () => {
-  assert.match(PIPELINE, /getPostDeliveryChatIds\(\)/);
-  assert.match(PIPELINE, /chatIds: chatIds\.length > 0 \? chatIds : undefined/);
+  // Recipients come from the panel's "Botlar boshqaruvi" (studio.posts), per
+  // candidate; only when nobody is configured at all does it fall back to every
+  // subscriber — a configured list that resolves to no one sends to NO ONE.
+  assert.match(PIPELINE, /getAudience\("studio\.posts"\)/);
+  assert.match(PIPELINE, /audience\.configured \? audience\.forCreator\(await getCandidateCreator\(candidateId\)\) : null/);
+  assert.match(PIPELINE, /if \(chatIds && chatIds\.length === 0\)[\s\S]{0,160}return nothing;/);
+  assert.match(PIPELINE, /chatIds: chatIds \?\? undefined/);
   assert.match(TELEGRAM, /subscriberQuery\.in\("chat_id", options\.chatIds\)/);
 });
 

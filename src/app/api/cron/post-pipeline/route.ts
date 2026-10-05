@@ -4,7 +4,7 @@ import { runDuePipelines } from "@/lib/post-studio/pipeline";
 import { sendDueScheduledPosts } from "@/lib/post-studio/scheduler";
 import { runPaymentAskSweep } from "@/lib/intake/payment";
 import { runChannelReminderSweep } from "@/lib/post-studio/channel-reminder";
-import { getChatIdsWithPermission } from "@/lib/bot-access/service";
+import { getAudience } from "@/lib/bot-access/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,10 +44,11 @@ export async function GET(request: NextRequest) {
   const scheduled = await sendDueScheduledPosts();
 
   // Payment questions go to the chats holding `studio.payments` in the panel's
-  // "Botlar boshqaruvi" section. The sweep itself enforces the two-hour gap per
-  // candidate, so running it on every quarter-hour tick asks nobody twice.
-  const paymentChats = await getChatIdsWithPermission("studio.payments");
-  const paymentAsks = await runPaymentAskSweep(paymentChats);
+  // "Botlar boshqaruvi" section — per candidate, so someone in "own candidates
+  // only" mode hears only about the links they created. The sweep itself
+  // enforces the two-hour gap per candidate, so running it on every
+  // quarter-hour tick asks nobody twice.
+  const paymentAsks = await runPaymentAskSweep(await getAudience("studio.payments"));
 
   /*
    * "Kanalga qo'yildimi?" — quvurning oxirgi, QO'LDA bajariladigan qadami.
@@ -57,8 +58,7 @@ export async function GET(request: NextRequest) {
    * soatlik oraliqni va sokin soatlarni hisobga oladi, ya'ni har chorak
    * soatlik tik hech kimni ikki marta bezovta qilmaydi.
    */
-  const channelChats = await getChatIdsWithPermission("studio.channel");
-  const channelAsks = await runChannelReminderSweep(channelChats);
+  const channelAsks = await runChannelReminderSweep(await getAudience("studio.channel"));
 
   return NextResponse.json({
     ok: true,

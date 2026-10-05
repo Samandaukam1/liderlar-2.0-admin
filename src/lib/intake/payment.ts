@@ -10,7 +10,7 @@ import {
   isTelegramConfigured,
   sendTelegramMessage,
 } from "@/lib/post-studio/telegram-api";
-import { getChatIdsWithPermission } from "@/lib/bot-access/service";
+import { getAudience, type Audience } from "@/lib/bot-access/service";
 import {
   buildBotStatusReportText,
   buildPaymentAnswerText,
@@ -81,6 +81,12 @@ interface PayableIntake {
   telegram_username: string | null;
   submitted_at: string | null;
   payment_ask_count: number;
+  /** Havolani bot orqali yaratgan chat — "faqat o'z nomzodlari" rejimi uchun. */
+  created_by_telegram_id?: number | string | null;
+}
+
+function creatorOf(intake: PayableIntake): number | null {
+  return intake.created_by_telegram_id == null ? null : Number(intake.created_by_telegram_id);
 }
 
 /**
@@ -99,7 +105,7 @@ export async function findIntakesNeedingPaymentAsk(
 
   const { data, error } = await db
     .from("candidate_intakes")
-    .select("id, full_name, phone_e164, telegram_username, submitted_at, payment_ask_count")
+    .select("id, full_name, phone_e164, telegram_username, submitted_at, payment_ask_count, created_by_telegram_id")
     .is("deleted_at", null)
     .in("status", AWAITING_PAYMENT_STATUSES)
     .neq("payment_status", "paid")
@@ -199,11 +205,12 @@ async function askOne(intake: PayableIntake, chatIds: number[]): Promise<Payment
  * rather than treating the night as if they had been asked.
  */
 export async function runPaymentAskSweep(
-  chatIds: number[],
+  /** `studio.payments` egalari; har nomzod uchun uning havolasini yaratganga qarab tanlanadi. */
+  audience: Audience,
   limit = PAYMENT_ASK_BATCH_SIZE,
   now: Date = new Date(),
 ): Promise<PaymentAskResult[]> {
-  if (!isTelegramConfigured() || chatIds.length === 0) return [];
+  if (!isTelegramConfigured() || !audience.configured) return [];
   if (!withinAskingHours(now)) return [];
 
   const due = await findIntakesNeedingPaymentAsk(limit);
@@ -224,6 +231,13 @@ export async function runPaymentAskSweep(
       continue;
     }
     if (await findPublishedNamesake(intake.full_name, null)) {
+      await markAsked(intake.id, intake.payment_ask_count);
+      continue;
+    }
+    // "Faqat o'z nomzodlari" rejimidagilar boshqaning nomzodini olmaydi. Hech
+    // kimga tegishli bo'lmasa — belgilanadi, aks holda navbatni band qilardi.
+    const chatIds = audience.forCreator(creatorOf(intake));
+    if (chatIds.length === 0) {
       await markAsked(intake.id, intake.payment_ask_count);
       continue;
     }
@@ -281,15 +295,15 @@ export async function askPaymentForIntakes(
     return { ...empty, ok: false, error: "TELEGRAM_BOT_TOKEN sozlanmagan" };
   }
 
-  const recipients = chatIds ?? (await resolveAskRecipients());
-  if (recipients.length === 0) {
+  const audience = chatIds ? null : await getAudience("studio.payments");
+  if (audience && !audience.configured) {
     return { ...empty, ok: false, error: "To‘lov savoli yuboriladigan chat sozlanmagan." };
   }
 
   const db = createSupabaseAdminClient();
   const { data } = await db
     .from("candidate_intakes")
-    .select("id, full_name, phone_e164, telegram_username, submitted_at, payment_ask_count, payment_status")
+    .select("id, full_name, phone_e164, telegram_username, submitted_at, payment_ask_count, payment_status, created_by_telegram_id")
     .in("id", intakeIds)
     .is("deleted_at", null)
     .in("status", AWAITING_PAYMENT_STATUSES)
@@ -303,6 +317,12 @@ export async function askPaymentForIntakes(
       result.alreadyPaid += 1;
       continue;
     }
+    // Har nomzod o'z egasiga: umumiy rejimdagilar + havolani yaratgan odam.
+    const recipients = chatIds ?? audience!.forCreator(creatorOf(intake));
+    if (recipients.length === 0) {
+      result.failed += 1;
+      continue;
+    }
     const asked = await askOne(intake, recipients);
     result.results.push(asked);
     if (asked.sent > 0) result.asked += 1;
@@ -310,14 +330,6 @@ export async function askPaymentForIntakes(
   }
 
   return result;
-}
-
-/**
- * Where payment questions go — chats holding `studio.payments` in the panel's
- * "Botlar boshqaruvi" section, separately from who receives finished posts.
- */
-async function resolveAskRecipients(): Promise<number[]> {
-  return getChatIdsWithPermission("studio.payments");
 }
 
 /**
@@ -363,7 +375,7 @@ export async function warnIfBlacklisted(intakeId: string): Promise<boolean> {
   const db = createSupabaseAdminClient();
   const { data: intake } = await db
     .from("candidate_intakes")
-    .select("id, full_name, phone_e164, telegram_username")
+    .select("id, full_name, phone_e164, telegram_username, created_by_telegram_id")
     .eq("id", intakeId)
     .maybeSingle();
   if (!intake) return false;
@@ -379,8 +391,11 @@ export async function warnIfBlacklisted(intakeId: string): Promise<boolean> {
     listedAt: entry.createdAt,
   });
 
-  // Qora ro'yxat ogohlantirishi — qora ro'yxat ruxsati bor odamlarga.
-  for (const chatId of await getChatIdsWithPermission("studio.blacklist")) {
+  // Qora ro'yxat ogohlantirishi — qora ro'yxat ruxsati bor odamlarga
+  // ("faqat o'z nomzodlari" rejimidagilarga — faqat o'zi yaratgan anketa).
+  const audience = await getAudience("studio.blacklist");
+  const creator = intake.created_by_telegram_id == null ? null : Number(intake.created_by_telegram_id);
+  for (const chatId of audience.forCreator(creator)) {
     try {
       await sendTelegramMessage(chatId, text);
     } catch (err) {
@@ -665,13 +680,18 @@ export interface UndoListPayload {
  * Ten is enough to catch a mis-tap without turning the message into a wall:
  * a mistake is noticed within minutes, not days.
  */
-export async function buildPaymentUndoPayload(): Promise<UndoListPayload> {
+export async function buildPaymentUndoPayload(
+  /** "Faqat o'z nomzodlari" rejimidagi chat — faqat o'zi yaratgan anketalar. */
+  owner: number | null = null,
+): Promise<UndoListPayload> {
   const db = createSupabaseAdminClient();
-  const { data } = await db
+  let query = db
     .from("candidate_intakes")
     .select("id, full_name, payment_confirmed_at, status")
     .eq("payment_status", "paid")
-    .is("deleted_at", null)
+    .is("deleted_at", null);
+  if (owner != null) query = query.eq("created_by_telegram_id", owner);
+  const { data } = await query
     .order("payment_confirmed_at", { ascending: false, nullsFirst: false })
     .limit(UNDO_LIST_SIZE);
 

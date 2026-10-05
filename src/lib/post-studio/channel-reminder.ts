@@ -1,5 +1,6 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getCandidateCreator, type Audience } from "@/lib/bot-access/service";
 import { logAudit } from "@/lib/audit";
 import { withinAskingHours } from "@/lib/intake/payment-messages";
 import {
@@ -202,16 +203,22 @@ async function markAsked(postId: string, count: number): Promise<void> {
  * uyg'otib turardi.
  */
 export async function runChannelReminderSweep(
-  chatIds: number[],
+  /** `studio.channel` egalari; har post uchun nomzod havolasini yaratganga qarab tanlanadi. */
+  audience: Audience,
   limit = CHANNEL_REMINDER_BATCH_SIZE,
   now: Date = new Date(),
 ): Promise<ChannelReminderResult[]> {
-  if (!isTelegramConfigured() || chatIds.length === 0) return [];
+  if (!isTelegramConfigured() || !audience.configured) return [];
   if (!withinAskingHours(now)) return [];
 
   const due = await findPostsNeedingChannelReminder(limit, now);
   const results: ChannelReminderResult[] = [];
-  for (const post of due) results.push(await askOne(post, chatIds));
+  for (const post of due) {
+    // "Faqat o'z nomzodlari" rejimidagilar faqat o'zi yaratgan nomzodni oladi.
+    const chatIds = audience.forCreator(await getCandidateCreator(post.candidate_id));
+    if (chatIds.length === 0) continue;
+    results.push(await askOne(post, chatIds));
+  }
   return results;
 }
 

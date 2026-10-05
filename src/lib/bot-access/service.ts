@@ -1,6 +1,6 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { chatIdsWith, permissionsOf, type BotAccessRow, type BotPermission } from "./catalog";
+import { audienceFor, chatIdsWith, permissionsOf, type BotAccessRow, type BotPermission } from "./catalog";
 
 /**
  * BOTLAR BOSHQARUVI — bazadan o'qish.
@@ -10,7 +10,7 @@ import { chatIdsWith, permissionsOf, type BotAccessRow, type BotPermission } fro
  * qator), so'rov arzon.
  */
 
-const COLUMNS = "telegram_id, permissions, is_active";
+const COLUMNS = "telegram_id, permissions, is_active, own_only";
 
 /**
  * Shu ruxsatga ega faol chatlar.
@@ -30,12 +30,12 @@ export async function getChatIdsWithPermission(permission: BotPermission): Promi
 }
 
 /**
- * Bitta chatning ruxsatlari.
+ * Bitta chatning ruxsatlari va rejimi.
  *
  * Xatoda BO'SH to'plam: bot tugmasi bosilganda baza javob bermasa,
  * ruxsat berib yuborishdan ko'ra rad etish xavfsiz.
  */
-export async function getChatPermissions(chatId: number): Promise<Set<BotPermission>> {
+export async function getChatAccess(chatId: number): Promise<{ permissions: Set<BotPermission>; ownOnly: boolean }> {
   try {
     const { data, error } = await createSupabaseAdminClient()
       .from("bot_access")
@@ -44,9 +44,74 @@ export async function getChatPermissions(chatId: number): Promise<Set<BotPermiss
       .eq("is_active", true)
       .limit(1);
     if (error) throw new Error(error.message);
-    return permissionsOf((data ?? []) as BotAccessRow[], chatId);
+    const rows = (data ?? []) as BotAccessRow[];
+    return { permissions: permissionsOf(rows, chatId), ownOnly: Boolean(rows[0]?.own_only) };
   } catch (err) {
     console.error("[bot-access] ruxsatlar o‘qilmadi — rad etildi", err instanceof Error ? err.message : err);
-    return new Set();
+    return { permissions: new Set(), ownOnly: false };
   }
+}
+
+/* ========================================================================= *
+ * NOMZODGA BOG'LIQ XABARLAR — kimga
+ * ========================================================================= */
+
+export interface Audience {
+  /** Shu ruxsat kamida bitta faol odamga berilganmi. */
+  configured: boolean;
+  /** Anketa havolasini yaratgan chatga qarab qabul qiluvchilar. */
+  forCreator(creator: number | null): number[];
+}
+
+/**
+ * Bitta o'qish — butun sweep uchun. Xatoda XATO tashlaydi (yuqoridagi
+ * sabab bilan: bo'sh ro'yxat post yetkazishda "hammaga" degani).
+ */
+export async function getAudience(permission: BotPermission): Promise<Audience> {
+  const { data, error } = await createSupabaseAdminClient()
+    .from("bot_access")
+    .select(COLUMNS)
+    .eq("is_active", true)
+    .contains("permissions", [permission]);
+  if (error) throw new Error(`bot_access o‘qilmadi: ${error.message}`);
+  const rows = (data ?? []) as BotAccessRow[];
+  return {
+    configured: rows.length > 0,
+    forCreator: (creator) => audienceFor(rows, permission, creator),
+  };
+}
+
+/** Anketa havolasini bot orqali yaratgan chat; panelda yaratilgan bo'lsa `null`. */
+export async function getIntakeCreator(intakeId: string): Promise<number | null> {
+  const { data } = await createSupabaseAdminClient()
+    .from("candidate_intakes")
+    .select("created_by_telegram_id")
+    .eq("id", intakeId)
+    .maybeSingle();
+  const value = data?.created_by_telegram_id;
+  return value == null ? null : Number(value);
+}
+
+/** Nomzodning anketasini yaratgan chat (eng yangi anketa bo'yicha). */
+export async function getCandidateCreator(candidateId: string): Promise<number | null> {
+  const { data } = await createSupabaseAdminClient()
+    .from("candidate_intakes")
+    .select("created_by_telegram_id")
+    .eq("candidate_id", candidateId)
+    .not("created_by_telegram_id", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  const value = data?.[0]?.created_by_telegram_id;
+  return value == null ? null : Number(value);
+}
+
+/** Shu chat bot orqali yaratgan anketalar — "faqat o'zinikilar" ro'yxatlari uchun. */
+export async function getOwnIntakeIds(chatId: number): Promise<string[]> {
+  const { data, error } = await createSupabaseAdminClient()
+    .from("candidate_intakes")
+    .select("id")
+    .eq("created_by_telegram_id", chatId)
+    .is("deleted_at", null);
+  if (error) throw new Error(`anketalar o‘qilmadi: ${error.message}`);
+  return (data ?? []).map((row) => row.id as string);
 }

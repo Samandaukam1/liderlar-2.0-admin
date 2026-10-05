@@ -469,4 +469,3 @@ export {
   TelegramSendError,
 } from "./telegram-api.ts";
 export type { SentPhoto } from "./telegram-api.ts";
-export { getPostDeliveryChatIds } from "./delivery-recipients.ts";

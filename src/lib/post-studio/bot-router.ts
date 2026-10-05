@@ -22,7 +22,7 @@ import {
   confirmChannelPost,
   parseChannelConfirmCallback,
 } from "./channel-reminder.ts";
-import { getChatIdsWithPermission, getChatPermissions } from "@/lib/bot-access/service";
+import { getChatAccess, getChatIdsWithPermission } from "@/lib/bot-access/service";
 import type { BotPermission } from "@/lib/bot-access/catalog";
 import {
   deactivateSubscriber,
@@ -208,8 +208,8 @@ function keyboardFor(access: ReadonlySet<BotPermission>): string[][] | undefined
  * varaqlashi kerak bo'lardi. Boshqa kesimlar xabar ostidagi tugmalar
  * bilan ochiladi.
  */
-async function sendCrmList(chatId: number, kind: CrmListKind): Promise<void> {
-  const page = await buildCrmListPage(kind, 1, "today");
+async function sendCrmList(chatId: number, kind: CrmListKind, owner: number | null): Promise<void> {
+  const page = await buildCrmListPage(kind, 1, "today", owner);
   await sendTelegramMessage(chatId, page.text, {
     inlineKeyboard: page.keyboard.length > 0 ? page.keyboard : undefined,
   });
@@ -245,7 +245,9 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
 
   const command = parseTelegramCommand(message?.text);
   const text = (message?.text ?? "").trim();
-  const access = await getChatPermissions(chatId);
+  const { permissions: access, ownOnly } = await getChatAccess(chatId);
+  // "Faqat o'z nomzodlari" rejimida ro'yxatlar shu chat yaratgan anketalar bilan cheklanadi.
+  const owner = ownOnly ? chatId : null;
   const can = (permission: BotPermission) => access.has(permission);
   // Tahririyat yordami — kamida bitta Post Studio funksiyasi bo'lsa.
   const editorial = [...access].some((permission) => permission.startsWith("studio."));
@@ -303,7 +305,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
 
   if (command === "/bekor" || text === UNDO_BUTTON_LABEL) {
     if (!can("studio.payments")) return deny(chatId, keyboard);
-    const payload = await buildPaymentUndoPayload();
+    const payload = await buildPaymentUndoPayload(owner);
     await sendTelegramMessage(chatId, payload.text, {
       inlineKeyboard: payload.keyboard.length > 0 ? payload.keyboard : undefined,
     });
@@ -420,7 +422,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   const listKind = CRM_LIST_BY_BUTTON[text] ?? CRM_LIST_BY_COMMAND[command];
   if (listKind) {
     if (!can("studio.crm")) return deny(chatId, keyboard);
-    await sendCrmList(chatId, listKind);
+    await sendCrmList(chatId, listKind, owner);
     return;
   }
 
@@ -566,7 +568,8 @@ async function handleCallbackQuery(
     const messageId = query.message?.message_id ?? null;
     // Live data on every tap: the page is re-queried, never paged from a cached
     // snapshot, so a candidate published a minute ago is already in the list.
-    const page = await buildCrmListPage(listPage.kind, listPage.page, listPage.period);
+    const { ownOnly } = await getChatAccess(chatId);
+    const page = await buildCrmListPage(listPage.kind, listPage.page, listPage.period, ownOnly ? chatId : null);
     if (messageId == null) {
       await sendTelegramMessage(chatId, page.text, {
         inlineKeyboard: page.keyboard.length > 0 ? page.keyboard : undefined,
@@ -647,6 +650,7 @@ async function handleCallbackQuery(
       fullName,
       gender,
       origin: "post_bot",
+      creatorChatId: chatId,
     });
 
     const messageId = query.message?.message_id ?? null;

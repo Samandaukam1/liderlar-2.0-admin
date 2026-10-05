@@ -23,16 +23,12 @@ import {
 import { promoteIntakeToDraft, publishPromotedIntake } from "@/lib/intake/promotion-service";
 import { findPublishedNamesake, NAMESAKE_SKIP_MESSAGE } from "@/lib/intake/namesake";
 import { isBlacklisted } from "@/lib/intake/blacklist";
-import { getChatIdsWithPermission } from "@/lib/bot-access/service";
+import { getAudience, getCandidateCreator, getIntakeCreator } from "@/lib/bot-access/service";
 import { createPostDraft, getPost, updatePost } from "./repository.ts";
 import { preparePortrait, refreshPostCaption, renderAndStorePost } from "./service.ts";
 import { sendInstagramFollowUp } from "./instagram-followup.ts";
 import { downloadPostAsset } from "./storage.ts";
-import {
-  deliverPostToSubscribers,
-  getPostDeliveryChatIds,
-  isTelegramConfigured,
-} from "./telegram.ts";
+import { deliverPostToSubscribers, isTelegramConfigured } from "./telegram.ts";
 import { sendTelegramMessage } from "./telegram-api.ts";
 import { buildAutofixNotice } from "./autofix-message.ts";
 import { decideAutoRetry } from "./pipeline-retry.ts";
@@ -637,10 +633,22 @@ async function deliverFinishedPost(
   }
 
   try {
-    const chatIds = await getPostDeliveryChatIds();
+    /*
+     * KIMGA: panelning "Botlar boshqaruvi" bo'limida `studio.posts` olganlar —
+     * umumiy rejimdagilar hammasini, "faqat o'z nomzodlari" rejimidagilar
+     * faqat o'zi havola yaratgan nomzodni. Hech kim belgilanmagan bo'lsa —
+     * avvalgidek barcha obunachilarga. Belgilangan, lekin bu nomzod hech
+     * kimga tegishli bo'lmasa — HECH KIMGA (hammaga emas).
+     */
+    const audience = await getAudience("studio.posts");
+    const chatIds = audience.configured ? audience.forCreator(await getCandidateCreator(candidateId)) : null;
+    if (chatIds && chatIds.length === 0) {
+      console.log(`[pipeline] post=${postId}: bu nomzod uchun qabul qiluvchi yo‘q — yuborilmadi`);
+      return nothing;
+    }
     const result = await deliverPostToSubscribers(postId, photo, caption, {
       actorId: null,
-      chatIds: chatIds.length > 0 ? chatIds : undefined,
+      chatIds: chatIds ?? undefined,
     });
     if (result.sent > 0) {
       await updatePost(postId, {
@@ -811,7 +819,8 @@ async function announceAutofix(intakeId: string, candidateId: string | null): Pr
     articleUrl,
   });
 
-  const chatIds = await getChatIdsWithPermission("studio.autofix");
+  const audience = await getAudience("studio.autofix");
+  const chatIds = audience.forCreator(await getIntakeCreator(intakeId));
   for (const chatId of chatIds) {
     try {
       await sendTelegramMessage(chatId, text);

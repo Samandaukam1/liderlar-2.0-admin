@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  audienceFor,
   BOTS,
   BOT_PERMISSIONS,
   chatIdsWith,
@@ -107,16 +108,59 @@ test("klaviatura faqat ruxsati bor tugmalarni ko'rsatadi", () => {
   }
 });
 
-test("bildirishnomalar har biri o'z ruxsatiga yuboriladi", () => {
+test("bildirishnomalar har biri o'z ruxsatiga, nomzod egasiga qarab yuboriladi", () => {
   const cron = readFileSync("src/app/api/cron/post-pipeline/route.ts", "utf8");
-  assert.match(cron, /getChatIdsWithPermission\("studio\.payments"\)/);
-  assert.match(cron, /getChatIdsWithPermission\("studio\.channel"\)/);
-  assert.match(readFileSync("src/lib/post-studio/pipeline.ts", "utf8"), /getChatIdsWithPermission\("studio\.autofix"\)/);
-  assert.match(readFileSync("src/lib/post-studio/delivery-recipients.ts", "utf8"), /getChatIdsWithPermission\("studio\.posts"\)/);
+  assert.match(cron, /runPaymentAskSweep\(await getAudience\("studio\.payments"\)\)/);
+  assert.match(cron, /runChannelReminderSweep\(await getAudience\("studio\.channel"\)\)/);
+  const pipeline = readFileSync("src/lib/post-studio/pipeline.ts", "utf8");
+  assert.match(pipeline, /getAudience\("studio\.autofix"\)[\s\S]{0,80}forCreator\(await getIntakeCreator\(intakeId\)\)/);
+  assert.match(pipeline, /getAudience\("studio\.posts"\)/);
   const payment = readFileSync("src/lib/intake/payment.ts", "utf8");
-  assert.match(payment, /getChatIdsWithPermission\("studio\.payments"\)/);
-  assert.match(payment, /getChatIdsWithPermission\("studio\.blacklist"\)/);
+  assert.match(payment, /getAudience\("studio\.payments"\)/);
+  assert.match(payment, /getAudience\("studio\.blacklist"\)/);
+  assert.match(payment, /audience\.forCreator\(creatorOf\(intake\)\)/);
+  const reminder = readFileSync("src/lib/post-studio/channel-reminder.ts", "utf8");
+  assert.match(reminder, /audience\.forCreator\(await getCandidateCreator\(post\.candidate_id\)\)/);
   assert.match(readFileSync("src/lib/sales/telegram-sales-api.ts", "utf8"), /getChatIdsWithPermission\("sales\.operator"\)/);
+});
+
+/* ------------------------------------------------------------ "faqat o'z nomzodlari" */
+
+test("faqat o'ziniki rejimi: umumiylar hammasini, shaxsiylar faqat o'zinikini oladi", () => {
+  const rows = [
+    { telegram_id: 1, permissions: ["studio.payments"], is_active: true, own_only: false },
+    { telegram_id: 2, permissions: ["studio.payments"], is_active: true, own_only: true },
+    { telegram_id: 3, permissions: ["studio.payments"], is_active: true, own_only: true },
+    { telegram_id: 4, permissions: ["studio.payments"], is_active: false, own_only: false },
+  ];
+  assert.deepEqual(audienceFor(rows, "studio.payments", 2), [1, 2], "2 yaratgan nomzod: umumiy + 2");
+  assert.deepEqual(audienceFor(rows, "studio.payments", 3), [1, 3]);
+  assert.deepEqual(audienceFor(rows, "studio.payments", null), [1], "panelda yaratilgan: faqat umumiy");
+  assert.deepEqual(audienceFor(rows, "studio.payments", 999), [1], "boshqa odam yaratgan");
+  assert.deepEqual(audienceFor(rows, "studio.crm", 2), [], "ruxsat bo'lmasa hech kim");
+});
+
+test("havolani yaratgan chat anketaga yoziladi — ikkala botda", () => {
+  const bot = readFileSync("src/lib/intake/intake-link-bot.ts", "utf8");
+  assert.match(bot, /creatorTelegramId: input\.creatorChatId/);
+  const service = readFileSync("src/lib/intake/intake-link-service.ts", "utf8");
+  assert.match(service, /created_by_telegram_id: input\.creatorTelegramId \?\? null/);
+  assert.match(ROUTER, /origin: "post_bot",\s*creatorChatId: chatId/);
+  assert.match(readFileSync("src/lib/sales/operator-router.ts", "utf8"), /origin: "sales_bot",\s*creatorChatId: input\.chatId/);
+  const migration = readFileSync("supabase/migrations/20261005130000_bot_access_own_only.sql", "utf8");
+  assert.match(migration, /add column if not exists own_only boolean not null default false/);
+  assert.match(migration, /add column if not exists created_by_telegram_id bigint/);
+});
+
+test("shaxsiy rejimda ro'yxatlar egasi bilan cheklanadi, umumiyda filtr yo'q", () => {
+  const crm = readFileSync("src/lib/intake/crm-lists.ts", "utf8");
+  // `.in("id", [])` umumiy rejimda butun ro'yxatni bo'shatardi.
+  assert.match(crm, /own \? query\.in\("id", own\) : query/);
+  assert.match(ROUTER, /const owner = ownOnly \? chatId : null;/);
+  assert.match(ROUTER, /buildPaymentUndoPayload\(owner\)/);
+  assert.match(ROUTER, /sendCrmList\(chatId, listKind, owner\)/);
+  const payment = readFileSync("src/lib/intake/payment.ts", "utf8");
+  assert.match(payment, /if \(owner != null\) query = query\.eq\("created_by_telegram_id", owner\)/);
 });
 
 /* ------------------------------------------------------------ panel */

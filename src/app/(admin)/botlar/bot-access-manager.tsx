@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useTransition } from "react";
-import { Bell, MousePointerClick, Pencil, Plus, Power, Trash2, X } from "lucide-react";
+import { Bell, MousePointerClick, Pencil, Plus, Power, Trash2, UserRound, Users, X } from "lucide-react";
 import { Button, Input, Label, Textarea } from "@/components/ui/primitives";
 import { Badge } from "@/components/admin/badges";
 import { useToast } from "@/components/ui/toast";
@@ -11,6 +11,8 @@ import {
   BOTS,
   BOT_PERMISSIONS,
   cleanPermissions,
+  functionLabel,
+  PERSONAL_SCOPE,
   parseTelegramId,
   TELEGRAM_ID_PROBLEM_TEXT,
   type BotPermission,
@@ -24,6 +26,7 @@ export interface BotAccessRowView {
   note: string;
   permissions: string[];
   isActive: boolean;
+  ownOnly: boolean;
   updatedAt: string;
 }
 
@@ -34,9 +37,10 @@ interface Draft {
   note: string;
   permissions: BotPermission[];
   isActive: boolean;
+  ownOnly: boolean;
 }
 
-const EMPTY: Draft = { id: null, telegramId: "", displayName: "", note: "", permissions: [], isActive: true };
+const EMPTY: Draft = { id: null, telegramId: "", displayName: "", note: "", permissions: [], isActive: true, ownOnly: false };
 
 /** Ogohlantirish: hech kimda bo'lmasa bot nima qiladi. */
 const MISSING_WARNING: Partial<Record<BotPermission, string>> = {
@@ -55,6 +59,15 @@ export function BotAccessManager({ rows, studioUsername }: { rows: BotAccessRowV
   const warnings = (Object.keys(MISSING_WARNING) as BotPermission[])
     .filter((permission) => !active.some((row) => row.permissions.includes(permission)))
     .map((permission) => MISSING_WARNING[permission]!);
+  // Hammasi "faqat o'ziniki" bo'lsa — panelda yaratilgan anketalar xabari hech kimga bormaydi.
+  for (const permission of ["studio.posts", "studio.payments"] as const) {
+    const holders = active.filter((row) => row.permissions.includes(permission));
+    if (holders.length > 0 && holders.every((row) => row.ownOnly)) {
+      warnings.push(
+        `“${functionLabel(permission)}” olganlarning hammasi “faqat o‘z nomzodlari” rejimida — panelda (botdan tashqari) yaratilgan anketalar bo‘yicha bu xabar hech kimga bormaydi.`,
+      );
+    }
+  }
 
   function run(action: () => Promise<{ ok: boolean; error?: string; message?: string }>, after?: () => void) {
     startTransition(async () => {
@@ -81,6 +94,7 @@ export function BotAccessManager({ rows, studioUsername }: { rows: BotAccessRowV
         note: row.note,
         permissions: next,
         isActive: row.isActive,
+        ownOnly: row.ownOnly,
       });
       setBusyCell(null);
       if (!result.ok) toast("error", "Saqlanmadi", result.error);
@@ -142,6 +156,13 @@ export function BotAccessManager({ rows, studioUsername }: { rows: BotAccessRowV
                   {bot.label}
                 </th>
               ))}
+              <th
+                rowSpan={2}
+                title="“Faqat o‘ziniki” — nomzodga bog‘liq xabarlar va ro‘yxatlar faqat shu odam bot orqali yaratgan havolalar bo‘yicha"
+                className="border-l border-line px-3 py-3 text-center align-bottom text-xs font-bold uppercase tracking-wide text-ink-soft"
+              >
+                Rejim
+              </th>
               <th rowSpan={2} className="border-l border-line px-3 py-3 text-right align-bottom text-xs font-bold uppercase tracking-wide text-ink-soft">
                 Amallar
               </th>
@@ -166,7 +187,7 @@ export function BotAccessManager({ rows, studioUsername }: { rows: BotAccessRowV
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={BOT_PERMISSIONS.length + 2} className="px-4 py-10 text-center text-ink-soft">
+                <td colSpan={BOT_PERMISSIONS.length + 3} className="px-4 py-10 text-center text-ink-soft">
                   Hali hech kim yo‘q — “Yangi ID qo‘shish” tugmasini bosing.
                 </td>
               </tr>
@@ -199,6 +220,33 @@ export function BotAccessManager({ rows, studioUsername }: { rows: BotAccessRowV
                     );
                   }),
                 )}
+                <td className="border-l border-line px-3 py-3 text-center align-middle">
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() =>
+                      run(() =>
+                        saveBotAccessAction({
+                          id: row.id,
+                          telegramId: row.telegramId,
+                          displayName: row.displayName,
+                          note: row.note,
+                          permissions: row.permissions,
+                          isActive: row.isActive,
+                          ownOnly: !row.ownOnly,
+                        }),
+                      )
+                    }
+                    title={row.ownOnly ? "Hammasini olishga o‘tkazish" : "Faqat o‘zi yaratgan nomzodlarga o‘tkazish"}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-bold transition",
+                      row.ownOnly ? "border-brand/40 bg-brand/10 text-brand" : "border-line text-ink-soft hover:border-brand/40",
+                    )}
+                  >
+                    {row.ownOnly ? <UserRound className="h-3.5 w-3.5" aria-hidden /> : <Users className="h-3.5 w-3.5" aria-hidden />}
+                    {row.ownOnly ? "Faqat o‘ziniki" : "Hammasi"}
+                  </button>
+                </td>
                 <td className="border-l border-line px-3 py-3 align-middle">
                   <div className="flex justify-end gap-1">
                     <Button
@@ -213,6 +261,7 @@ export function BotAccessManager({ rows, studioUsername }: { rows: BotAccessRowV
                           note: row.note,
                           permissions: cleanPermissions(row.permissions),
                           isActive: row.isActive,
+                          ownOnly: row.ownOnly,
                         })
                       }
                     >
@@ -372,7 +421,24 @@ function Editor({
         })}
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+      <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-card border border-line p-4 hover:border-brand/40">
+        <input
+          type="checkbox"
+          className="mt-0.5 h-4 w-4"
+          checked={draft.ownOnly}
+          onChange={(event) => onChange({ ...draft, ownOnly: event.target.checked })}
+        />
+        <span>
+          <span className="block text-sm font-bold text-ink">Faqat o‘z nomzodlari</span>
+          <span className="mt-0.5 block text-xs leading-relaxed text-ink-soft">
+            Yoqilsa, bu odam {PERSONAL_SCOPE.map((key) => `“${functionLabel(key)}”`).join(", ")} bo‘yicha xabar va
+            ro‘yxatlarni FAQAT o‘zi bot orqali (“Anketa havolasi” tugmasi) yaratgan nomzodlar uchun oladi. O‘chiq bo‘lsa —
+            avvalgidek hammasini. Hisobot, chop etish va hudud so‘rovnomasi umumiy bo‘lib qoladi.
+          </span>
+        </span>
+      </label>
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <label className="flex items-center gap-2 text-sm text-ink">
           <input type="checkbox" className="h-4 w-4" checked={draft.isActive} onChange={(event) => onChange({ ...draft, isActive: event.target.checked })} />
           Faol (o‘chirsangiz, ruxsatlar saqlanadi, lekin bot ularni bermaydi)

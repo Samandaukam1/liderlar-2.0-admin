@@ -109,6 +109,7 @@ export async function handleOperatorCallback(input: OperatorCallback): Promise<b
     fullName,
     gender,
     origin: "sales_bot",
+    creatorChatId: input.chatId,
   });
 
   const sendOptions = outcome.parseMode ? { parseMode: outcome.parseMode } : {};

@@ -1,5 +1,6 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getOwnIntakeIds } from "@/lib/bot-access/service";
 import {
   buildCrmListKeyboard,
   buildCrmListText,
@@ -107,8 +108,12 @@ async function fetchRows(
   period: CrmPeriod,
   page: number,
   now: Date = new Date(),
+  /** "Faqat o'z nomzodlari" rejimida — shu chat yaratgan anketalar. */
+  owner: number | null = null,
 ): Promise<{ rows: CrmListRow[]; total: number; page: number; pageCount: number }> {
   const db = createSupabaseAdminClient();
+  const own = owner == null ? null : await getOwnIntakeIds(owner);
+  if (own && own.length === 0) return { rows: [], total: 0, page: 1, pageCount: 1 };
 
   /*
    * SAYTNING javobi so'raladi, anketa holatiniki emas.
@@ -122,16 +127,14 @@ async function fetchRows(
    * `candidate_intake_crm` ko'rinishidagi `article_live` har so'rovda
    * jonli hisoblanadi, ya'ni u eskirib qola olmaydi.
    */
-  const base = () =>
-    applyPeriod(
-      db
-        .from("candidate_intake_crm")
-        .select(CRM_LIST_COLUMNS[kind], { count: "exact" })
-        .is("deleted_at", null),
-      kind,
-      period,
-      now,
-    );
+  const base = () => {
+    const query = db
+      .from("candidate_intake_crm")
+      .select(CRM_LIST_COLUMNS[kind], { count: "exact" })
+      .is("deleted_at", null);
+    // Umumiy rejimda filtr YO'Q — `.in("id", [])` ro'yxatni bo'shatardi.
+    return applyPeriod(own ? query.in("id", own) : query, kind, period, now);
+  };
 
   // Two round trips at most: the first learns the real total so a stale page
   // number from an old message can be clamped instead of returning nothing.
@@ -219,8 +222,10 @@ export async function buildCrmListPage(
   kind: CrmListKind,
   page: number,
   period: CrmPeriod = "today",
+  /** "Faqat o'z nomzodlari" rejimidagi chat — ro'yxat uning anketalari bilan cheklanadi. */
+  owner: number | null = null,
 ): Promise<CrmListPage> {
-  const { rows, total, page: safePage, pageCount } = await fetchRows(kind, period, page);
+  const { rows, total, page: safePage, pageCount } = await fetchRows(kind, period, page, new Date(), owner);
   return {
     text: buildCrmListText({ kind, period, rows, page: safePage, total }),
     keyboard: buildCrmListKeyboard(kind, period, safePage, pageCount),

@@ -164,6 +164,8 @@ export interface BotAccessRow {
   telegram_id: number | string;
   permissions: readonly unknown[] | null;
   is_active: boolean;
+  /** "Faqat o'z nomzodlari" rejimi. */
+  own_only?: boolean | null;
 }
 
 /** Shu ruxsatga ega FAOL chatlar. Bazadagi bigint matn bo'lib kelishi mumkin. */
@@ -182,4 +184,47 @@ export function chatIdsWith(rows: readonly BotAccessRow[], permission: BotPermis
 export function permissionsOf(rows: readonly BotAccessRow[], chatId: number): Set<BotPermission> {
   const row = rows.find((r) => r.is_active && Number(r.telegram_id) === chatId);
   return new Set(cleanPermissions(row?.permissions ?? []));
+}
+
+/* ========================================================================= *
+ * "FAQAT O'Z NOMZODLARI" REJIMI
+ * ========================================================================= */
+
+/**
+ * Nomzodga bog'liq funksiyalar — rejim yoqilgan odam ularni faqat o'zi
+ * bot orqali yaratgan anketa havolalari bo'yicha oladi. Qolganlari
+ * (hisobot, chop etish, hudud so'rovnomasi, …) umumiy: ular bitta
+ * nomzodga tegishli emas.
+ */
+export const PERSONAL_SCOPE: readonly BotPermission[] = [
+  "studio.posts",
+  "studio.payments",
+  "studio.channel",
+  "studio.autofix",
+  "studio.blacklist",
+  "studio.crm",
+];
+
+/**
+ * Bitta nomzod haqidagi xabar kimga boradi.
+ *
+ *   - umumiy rejimdagilar — har doim;
+ *   - "faqat o'zinikilar" — faqat anketa havolasini AYNAN ular yaratgan
+ *     bo'lsa (`creator`). Havola panelda yaratilgan bo'lsa (`null`) —
+ *     ularga bormaydi.
+ */
+export function audienceFor(
+  rows: readonly BotAccessRow[],
+  permission: BotPermission,
+  creator: number | null,
+): number[] {
+  const ids = new Set<number>();
+  for (const row of rows) {
+    if (!row.is_active || !(row.permissions ?? []).includes(permission)) continue;
+    const parsed = parseTelegramId(row.telegram_id);
+    if (!parsed.ok) continue;
+    if (row.own_only && parsed.id !== creator) continue;
+    ids.add(parsed.id);
+  }
+  return [...ids];
 }
