@@ -1,6 +1,7 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { audienceFor, chatIdsWith, permissionsOf, type BotAccessRow, type BotPermission } from "./catalog";
+import type { LinkOwner } from "./owner-note";
 
 /**
  * BOTLAR BOSHQARUVI — bazadan o'qish.
@@ -103,6 +104,29 @@ export async function getCandidateCreator(candidateId: string): Promise<number |
     .limit(1);
   const value = data?.[0]?.created_by_telegram_id;
   return value == null ? null : Number(value);
+}
+
+/**
+ * Havolani yaratgan odam — "Botlar boshqaruvi"dagi nomi bilan.
+ *
+ * To'xtatilgan yozuv ham olinadi: bu ruxsat emas, tarix. Yozuv o'chirilgan
+ * yoki baza javob bermasa — nomsiz (izoh Telegram ID bilan chiqadi), xabar
+ * esa baribir ketadi.
+ */
+export async function getLinkOwner(creator: number | null): Promise<LinkOwner | null> {
+  if (creator == null) return null;
+  try {
+    const { data, error } = await createSupabaseAdminClient()
+      .from("bot_access")
+      .select("display_name")
+      .eq("telegram_id", creator)
+      .limit(1);
+    if (error) throw new Error(error.message);
+    return { telegramId: creator, name: (data?.[0]?.display_name as string | undefined) ?? null };
+  } catch (err) {
+    console.error("[bot-access] havola egasi o‘qilmadi", err instanceof Error ? err.message : err);
+    return { telegramId: creator, name: null };
+  }
 }
 
 /** Shu chat bot orqali yaratgan anketalar — "faqat o'zinikilar" ro'yxatlari uchun. */

@@ -10,7 +10,8 @@ import {
   isTelegramConfigured,
   sendTelegramMessage,
 } from "@/lib/post-studio/telegram-api";
-import { getAudience, type Audience } from "@/lib/bot-access/service";
+import { getAudience, getIntakeCreator, getLinkOwner, type Audience } from "@/lib/bot-access/service";
+import { linkOwnerNote, needsOwnerNote, withOwnerNote } from "@/lib/bot-access/owner-note";
 import {
   buildBotStatusReportText,
   buildPaymentAnswerText,
@@ -154,13 +155,20 @@ async function askOne(intake: PayableIntake, chatIds: number[]): Promise<Payment
     [{ text: PAYMENT_BLACKLIST_LABEL, callback_data: blacklistCallbackData(intake.id) }],
   ];
 
+  // Umumiy rejimdagilarga — nomzod kimning havolasidan kelgani, kursivda.
+  const owner = await getLinkOwner(creatorOf(intake));
+  const note = linkOwnerNote(owner);
+
   const rows: Record<string, unknown>[] = [];
   let sent = 0;
   let failed = 0;
 
   for (const chatId of chatIds) {
     try {
-      const message = await sendTelegramMessage(chatId, text, { inlineKeyboard });
+      const message =
+        note && needsOwnerNote(chatId, owner)
+          ? await sendTelegramMessage(chatId, withOwnerNote(text, note), { inlineKeyboard, parseMode: "HTML" })
+          : await sendTelegramMessage(chatId, text, { inlineKeyboard });
       sent += 1;
       rows.push({
         intake_id: intake.id,
@@ -616,6 +624,14 @@ async function closeOpenRequests(
 ): Promise<void> {
   const db = createSupabaseAdminClient();
 
+  // Javob yozilgandan keyin ham "kimning nomzodi" izohi xabarda qoladi.
+  const owner = await getLinkOwner(await getIntakeCreator(intakeId));
+  const note = linkOwnerNote(owner);
+  const rewrite = (chatId: number, messageId: number) =>
+    note && needsOwnerNote(chatId, owner)
+      ? safeEdit(chatId, messageId, withOwnerNote(answerText, note), "HTML")
+      : safeEdit(chatId, messageId, answerText);
+
   const { data: open } = await db
     .from("intake_payment_requests")
     .select("id, chat_id, telegram_message_id")
@@ -638,13 +654,13 @@ async function closeOpenRequests(
     const messageId = row.telegram_message_id as number | null;
     if (!messageId) continue;
     edited.add(`${chatId}:${messageId}`);
-    await safeEdit(chatId, messageId, answerText);
+    await rewrite(chatId, messageId);
   }
 
   // The tapped message may predate the rows above (an older round), so it is
   // rewritten explicitly when the loop did not already cover it.
   if (answeredChatId && answeredMessageId && !edited.has(`${answeredChatId}:${answeredMessageId}`)) {
-    await safeEdit(answeredChatId, answeredMessageId, answerText);
+    await rewrite(answeredChatId, answeredMessageId);
   }
 }
 
@@ -656,9 +672,9 @@ async function safeAnswer(callbackQueryId: string, text: string): Promise<void> 
   }
 }
 
-async function safeEdit(chatId: number, messageId: number, text: string): Promise<void> {
+async function safeEdit(chatId: number, messageId: number, text: string, parseMode?: "HTML"): Promise<void> {
   try {
-    await editTelegramMessageText(chatId, messageId, text);
+    await editTelegramMessageText(chatId, messageId, text, parseMode ? { parseMode } : {});
   } catch (err) {
     console.error("[payment] editMessageText failed", err instanceof Error ? err.message : err);
   }

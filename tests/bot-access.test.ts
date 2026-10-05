@@ -11,6 +11,7 @@ import {
   parseTelegramId,
   permissionsOf,
 } from "../src/lib/bot-access/catalog.ts";
+import { linkOwnerNote, needsOwnerNote, withOwnerNote } from "../src/lib/bot-access/owner-note.ts";
 
 /**
  * BOTLAR BOSHQARUVI — kim qaysi botning qaysi funksiyasidan foydalanadi.
@@ -161,6 +162,41 @@ test("shaxsiy rejimda ro'yxatlar egasi bilan cheklanadi, umumiyda filtr yo'q", (
   assert.match(ROUTER, /sendCrmList\(chatId, listKind, owner\)/);
   const payment = readFileSync("src/lib/intake/payment.ts", "utf8");
   assert.match(payment, /if \(owner != null\) query = query\.eq\("created_by_telegram_id", owner\)/);
+});
+
+/* ------------------------------------------------------------ "kimning nomzodi" izohi */
+
+test("to'lov xabarida havola egasi panel nomi bilan, kursivda, qavs ichida", () => {
+  assert.equal(
+    linkOwnerNote({ telegramId: 7, name: "Buxoro bo‘linmasi" }),
+    "Ushbu nomzodga link Buxoro bo‘linmasi koordinatori tomonidan berilgan",
+  );
+  assert.equal(
+    linkOwnerNote({ telegramId: 7, name: " Samarqand koordinatori " }),
+    "Ushbu nomzodga link Samarqand koordinatori tomonidan berilgan",
+    "“koordinatori” takrorlanmaydi",
+  );
+  assert.equal(
+    linkOwnerNote({ telegramId: 7, name: null }),
+    "Ushbu nomzodga link Telegram ID 7 egasi tomonidan berilgan",
+    "panel yozuvi o'chirilgan bo'lsa — ID bilan",
+  );
+  assert.equal(linkOwnerNote(null), null, "havola panelda yaratilgan — izoh yo'q");
+  assert.equal(withOwnerNote("👤 A <b> & C", "X & Y"), "👤 A &lt;b&gt; &amp; C\n\n<i>(X &amp; Y)</i>");
+});
+
+test("izoh umumiylarga boradi, havola egasining o'ziga emas", () => {
+  const owner = { telegramId: 2, name: "Buxoro bo‘linmasi" };
+  assert.equal(needsOwnerNote(1, owner), true);
+  assert.equal(needsOwnerNote(2, owner), false);
+  assert.equal(needsOwnerNote(1, null), false);
+});
+
+test("to'lov savoli va javobdan keyingi tahrir izohni HTML rejimida qo'shadi", () => {
+  const payment = readFileSync("src/lib/intake/payment.ts", "utf8");
+  assert.match(payment, /withOwnerNote\(text, note\), \{ inlineKeyboard, parseMode: "HTML" \}/);
+  assert.match(payment, /getLinkOwner\(await getIntakeCreator\(intakeId\)\)/);
+  assert.match(payment, /withOwnerNote\(answerText, note\), "HTML"/);
 });
 
 /* ------------------------------------------------------------ panel */
