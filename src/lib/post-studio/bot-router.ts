@@ -22,7 +22,8 @@ import {
   confirmChannelPost,
   parseChannelConfirmCallback,
 } from "./channel-reminder.ts";
-import { getPostDeliveryChatIds } from "./delivery-recipients.ts";
+import { getChatIdsWithPermission, getChatPermissions } from "@/lib/bot-access/service";
+import type { BotPermission } from "@/lib/bot-access/catalog";
 import {
   deactivateSubscriber,
   upsertSubscriber,
@@ -165,32 +166,38 @@ export interface TelegramUpdate {
 }
 
 /**
- * Who may run editorial actions.
+ * Who may run editorial actions — PER FUNCTION.
+ *
+ * Ruxsatlar panelning "Botlar boshqaruvi" bo'limida (`bot_access`) har
+ * funksiya uchun alohida beriladi: odamga to'lov tasdig'ini berib, qora
+ * ro'yxatni bermaslik mumkin.
  *
  * The keyboard is only half the guard — a chat id can be spoofed by nobody, but
  * a button label can be typed by anyone, so every privileged branch re-checks
- * membership rather than trusting that the keyboard was never shown.
+ * the specific permission rather than trusting that the keyboard was never
+ * shown. A database error denies.
  */
-async function isEditorialChat(chatId: number): Promise<boolean> {
-  const configured = await getPostDeliveryChatIds();
+async function isEditorialChat(chatId: number, permission: BotPermission): Promise<boolean> {
+  const configured = await getChatIdsWithPermission(permission).catch((err: unknown) => {
+    console.error("[telegram-webhook] bot_access o‘qilmadi — rad etildi", err instanceof Error ? err.message : err);
+    return [] as number[];
+  });
   return configured.includes(chatId);
 }
 
-/** Editors get the working keyboard; ordinary subscribers just receive posts. */
-function keyboardFor(editorial: boolean): string[][] | undefined {
-  if (!editorial) return undefined;
-  return [
-    [REPORT_BUTTON_LABEL],
-    [BATCH_BUTTON_LABEL],
-    [UNDO_BUTTON_LABEL],
-    // The three CRM lists read candidate data, so they are shown — and, below,
-    // re-checked — only for editorial chats.
-    [PUBLISHED_BUTTON_LABEL],
-    [WAITING_BUTTON_LABEL, FILLING_BUTTON_LABEL],
-    [BLACKLIST_ADD_BUTTON_LABEL],
-    [INTAKE_LINK_BUTTON_LABEL],
-    [REGION_POLL_BUTTON_LABEL],
-  ];
+/** Editors get only the buttons they may use; ordinary subscribers just receive posts. */
+function keyboardFor(access: ReadonlySet<BotPermission>): string[][] | undefined {
+  const rows: string[][] = [];
+  if (access.has("studio.report")) rows.push([REPORT_BUTTON_LABEL]);
+  if (access.has("studio.batch")) rows.push([BATCH_BUTTON_LABEL]);
+  if (access.has("studio.payments")) rows.push([UNDO_BUTTON_LABEL]);
+  // The three CRM lists read candidate data, so they are shown — and, below,
+  // re-checked — only for chats holding the CRM permission.
+  if (access.has("studio.crm")) rows.push([PUBLISHED_BUTTON_LABEL], [WAITING_BUTTON_LABEL, FILLING_BUTTON_LABEL]);
+  if (access.has("studio.blacklist")) rows.push([BLACKLIST_ADD_BUTTON_LABEL]);
+  if (access.has("studio.intake_link")) rows.push([INTAKE_LINK_BUTTON_LABEL]);
+  if (access.has("studio.region_poll")) rows.push([REGION_POLL_BUTTON_LABEL]);
+  return rows.length > 0 ? rows : undefined;
 }
 
 /**
@@ -238,8 +245,11 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
 
   const command = parseTelegramCommand(message?.text);
   const text = (message?.text ?? "").trim();
-  const editorial = await isEditorialChat(chatId);
-  const keyboard = keyboardFor(editorial);
+  const access = await getChatPermissions(chatId);
+  const can = (permission: BotPermission) => access.has(permission);
+  // Tahririyat yordami — kamida bitta Post Studio funksiyasi bo'lsa.
+  const editorial = [...access].some((permission) => permission.startsWith("studio."));
+  const keyboard = keyboardFor(access);
   console.log(`[telegram-webhook] command=${command || "(none)"} editorial=${editorial}`);
 
   if (command === "/start") {
@@ -276,14 +286,14 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   // typed command, because a button press arrives as an ordinary message
   // carrying its label — there is no way to tell the two apart.
   if (command === "/hisobot" || text === REPORT_BUTTON_LABEL) {
-    if (!editorial) return deny(chatId, keyboard);
+    if (!can("studio.report")) return deny(chatId, keyboard);
     await sendTelegramMessage(chatId, await buildBotStatusReport(), { replyKeyboard: keyboard });
     console.log("[telegram-webhook] sendMessage success command=report");
     return;
   }
 
   if (command === "/chop" || text === BATCH_BUTTON_LABEL) {
-    if (!editorial) return deny(chatId, keyboard);
+    if (!can("studio.batch")) return deny(chatId, keyboard);
     // Same queue the panel drives: this starts it if idle, and reports on it
     // if it is already running.
     await sendTelegramMessage(chatId, await runBotBatchButton(), { replyKeyboard: keyboard });
@@ -292,7 +302,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   }
 
   if (command === "/bekor" || text === UNDO_BUTTON_LABEL) {
-    if (!editorial) return deny(chatId, keyboard);
+    if (!can("studio.payments")) return deny(chatId, keyboard);
     const payload = await buildPaymentUndoPayload();
     await sendTelegramMessage(chatId, payload.text, {
       inlineKeyboard: payload.keyboard.length > 0 ? payload.keyboard : undefined,
@@ -311,7 +321,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
    */
   const forwarded = message?.forward_from_chat;
   if (forwarded?.type === "channel" && typeof forwarded.id === "number") {
-    if (!editorial) return deny(chatId, keyboard);
+    if (!can("studio.channel")) return deny(chatId, keyboard);
     await saveChannelId(forwarded.id, forwarded.title ?? null);
     await sendTelegramMessage(
       chatId,
@@ -332,7 +342,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
    * talab qilmaydi.
    */
   if (command === REGION_POLL_COMMAND || text === REGION_POLL_BUTTON_LABEL) {
-    if (!editorial) return deny(chatId, keyboard);
+    if (!can("studio.region_poll")) return deny(chatId, keyboard);
     await sendRegionPoll(chatId);
     return;
   }
@@ -346,7 +356,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
    * suhbat keyingi har qanday xabarni ism deb o'qib yuborardi.
    */
   if (command === INTAKE_LINK_COMMAND || text === INTAKE_LINK_BUTTON_LABEL) {
-    if (!editorial) return deny(chatId, keyboard);
+    if (!can("studio.intake_link")) return deny(chatId, keyboard);
     await sendTelegramMessage(chatId, INTAKE_LINK_NAME_PROMPT, { forceReply: true });
     console.log("[telegram-webhook] sendMessage success command=intake-link-prompt");
     return;
@@ -355,7 +365,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   if (isIntakeLinkNamePrompt(message?.reply_to_message?.text)) {
     // Javob ham qayta tekshiriladi: savol boshqa chatga uzatilishi
     // va u yerdan javob berilishi mumkin.
-    if (!editorial) return deny(chatId, keyboard);
+    if (!can("studio.intake_link")) return deny(chatId, keyboard);
     const step = handleIntakeNameStep(text);
     await sendTelegramMessage(chatId, step.text, {
       ...(step.keyboard ? { inlineKeyboard: step.keyboard } : {}),
@@ -375,7 +385,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
    * har qanday xabarni ism deb o'qib yuborardi.
    */
   if (command === "/qora" || text === BLACKLIST_ADD_BUTTON_LABEL) {
-    if (!editorial) return deny(chatId, keyboard);
+    if (!can("studio.blacklist")) return deny(chatId, keyboard);
     await sendTelegramMessage(chatId, BLACKLIST_NAME_PROMPT, { forceReply: true });
     console.log("[telegram-webhook] sendMessage success command=blacklist-prompt");
     return;
@@ -384,7 +394,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   if (isBlacklistPromptReply(message?.reply_to_message?.text)) {
     // Javob ham qayta tekshiriladi: savol boshqa chatga forward
     // qilinishi va u yerdan javob berilishi mumkin.
-    if (!editorial) return deny(chatId, keyboard);
+    if (!can("studio.blacklist")) return deny(chatId, keyboard);
     await handleBlacklistName(chatId, text);
     return;
   }
@@ -393,7 +403,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   // chat holati baribir hech qayerda yozilmaydi.
   const reasonForName = parseBlacklistReasonPrompt(message?.reply_to_message?.text);
   if (reasonForName || isBlacklistReasonReply(message?.reply_to_message?.text)) {
-    if (!editorial) return deny(chatId, keyboard);
+    if (!can("studio.blacklist")) return deny(chatId, keyboard);
     if (!reasonForName) {
       await sendTelegramMessage(chatId, "Ism o‘qilmadi — qaytadan boshlang.", {
         replyKeyboard: keyboard,
@@ -409,7 +419,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   // label is just text, and anyone can type it.
   const listKind = CRM_LIST_BY_BUTTON[text] ?? CRM_LIST_BY_COMMAND[command];
   if (listKind) {
-    if (!editorial) return deny(chatId, keyboard);
+    if (!can("studio.crm")) return deny(chatId, keyboard);
     await sendCrmList(chatId, listKind);
     return;
   }
@@ -548,7 +558,7 @@ async function handleCallbackQuery(
 
   const listPage = parseCrmListCallback(query.data);
   if (listPage) {
-    if (chatId == null || !(await isEditorialChat(chatId))) {
+    if (chatId == null || !(await isEditorialChat(chatId, "studio.crm"))) {
       await safeAnswerCallback(query.id, "Ruxsat yo‘q");
       return;
     }
@@ -622,7 +632,7 @@ async function handleCallbackQuery(
    */
   const gender = parseIntakeGenderCallback(query.data);
   if (gender) {
-    if (chatId == null || !(await isEditorialChat(chatId))) {
+    if (chatId == null || !(await isEditorialChat(chatId, "studio.intake_link"))) {
       await safeAnswerCallback(query.id, "Ruxsat yo‘q");
       return;
     }
@@ -654,7 +664,7 @@ async function handleCallbackQuery(
 
   const channelPostId = parseChannelConfirmCallback(query.data);
   if (channelPostId) {
-    if (chatId == null || !(await isEditorialChat(chatId))) {
+    if (chatId == null || !(await isEditorialChat(chatId, "studio.channel"))) {
       await safeAnswerCallback(query.id, "Ruxsat yo‘q");
       return;
     }
@@ -684,7 +694,7 @@ async function handleCallbackQuery(
 
   const blacklistId = parseBlacklistCallback(query.data);
   if (blacklistId) {
-    if (chatId == null || !(await isEditorialChat(chatId))) {
+    if (chatId == null || !(await isEditorialChat(chatId, "studio.blacklist"))) {
       await safeAnswerCallback(query.id, "Ruxsat yo‘q");
       return;
     }
@@ -701,7 +711,7 @@ async function handleCallbackQuery(
 
   const removeSlug = parseBlacklistRemoveCallback(query.data);
   if (removeSlug) {
-    if (chatId == null || !(await isEditorialChat(chatId))) {
+    if (chatId == null || !(await isEditorialChat(chatId, "studio.blacklist"))) {
       await safeAnswerCallback(query.id, "Ruxsat yo‘q");
       return;
     }
@@ -727,7 +737,7 @@ async function handleCallbackQuery(
   if (undoId) {
     // Reverting a confirmation is an editorial action like any other, and the
     // inline keyboard it came from could have been forwarded anywhere.
-    if (chatId == null || !(await isEditorialChat(chatId))) {
+    if (chatId == null || !(await isEditorialChat(chatId, "studio.payments"))) {
       await safeAnswerCallback(query.id, "Ruxsat yo‘q");
       return;
     }
@@ -745,7 +755,7 @@ async function handleCallbackQuery(
     return;
   }
 
-  if (chatId == null || !(await isEditorialChat(chatId))) {
+  if (chatId == null || !(await isEditorialChat(chatId, "studio.payments"))) {
     await safeAnswerCallback(query.id, "Ruxsat yo‘q");
     return;
   }

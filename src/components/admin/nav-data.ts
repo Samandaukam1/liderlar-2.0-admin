@@ -261,6 +261,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Adminlar va rollar", href: "/admins", icon: ShieldCheck, permission: "admins.manage" },
       { label: "Audit log", href: "/audit-log", icon: ScrollText, permission: "audit.view" },
       { label: "Sayt sozlamalari", href: "/settings", icon: Settings, permission: "settings.manage" },
+      { label: "Botlar boshqaruvi", href: "/botlar", icon: Bot, permission: "settings.manage", keywords: "telegram id ruxsat bot tahririyat operator muharrir" },
       { label: "Logo va favicon", href: "/brending", icon: Palette, permission: "settings.manage", keywords: "logo favicon ikonka icon brending belgi yorliq" },
       { label: "Huquqiy sahifalar", href: "/legal", icon: Scale, permission: "legal.manage", keywords: "oferta maxfiylik" },
       { label: "Import va eksport", href: "/import-export", icon: ArrowDownUp, permission: "import.run", keywords: "csv json" },

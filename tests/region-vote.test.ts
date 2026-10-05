@@ -182,7 +182,7 @@ test("kanal id forward orqali olinadi", () => {
 
 test("kanalni ro‘yxatga olish TAHRIRIYAT bilan cheklangan", () => {
   const branch = code(router).slice(code(router).indexOf('forwarded?.type === "channel"'));
-  const guard = branch.indexOf("if (!editorial) return deny(");
+  const guard = branch.indexOf('if (!can("studio.channel")) return deny(');
   const save = branch.indexOf("saveChannelId(");
   assert.ok(guard !== -1 && guard < save, "ruxsat saqlashdan OLDIN");
 });

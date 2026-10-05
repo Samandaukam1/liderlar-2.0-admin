@@ -10,7 +10,7 @@ import {
   isTelegramConfigured,
   sendTelegramMessage,
 } from "@/lib/post-studio/telegram-api";
-import { getPostDeliveryChatIds } from "@/lib/post-studio/delivery-recipients";
+import { getChatIdsWithPermission } from "@/lib/bot-access/service";
 import {
   buildBotStatusReportText,
   buildPaymentAnswerText,
@@ -313,13 +313,11 @@ export async function askPaymentForIntakes(
 }
 
 /**
- * Where payment questions go.
- *
- * Deliberately the same list the finished posts use: one place to configure,
- * so an editor added there starts receiving both without a second setting.
+ * Where payment questions go — chats holding `studio.payments` in the panel's
+ * "Botlar boshqaruvi" section, separately from who receives finished posts.
  */
 async function resolveAskRecipients(): Promise<number[]> {
-  return getPostDeliveryChatIds();
+  return getChatIdsWithPermission("studio.payments");
 }
 
 /**
@@ -381,7 +379,8 @@ export async function warnIfBlacklisted(intakeId: string): Promise<boolean> {
     listedAt: entry.createdAt,
   });
 
-  for (const chatId of await resolveAskRecipients()) {
+  // Qora ro'yxat ogohlantirishi — qora ro'yxat ruxsati bor odamlarga.
+  for (const chatId of await getChatIdsWithPermission("studio.blacklist")) {
     try {
       await sendTelegramMessage(chatId, text);
     } catch (err) {

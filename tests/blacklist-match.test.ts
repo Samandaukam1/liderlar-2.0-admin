@@ -214,7 +214,7 @@ test("oqimning HAR QADAMI tahririyat ekanini QAYTA tekshiradi", () => {
   // boshqa chatga forward qilinishi mumkin. Uchta kirish nuqtasi bor:
   // tugma, ism javobi va izoh javobi.
   const block = ROUTER.slice(ROUTER.indexOf('command === "/qora"'), ROUTER.indexOf("// The CRM lists"));
-  assert.equal((block.match(/if \(!editorial\) return deny/g) ?? []).length, 3);
+  assert.equal((block.match(/if \(!can\("studio\.blacklist"\)\) return deny/g) ?? []).length, 3);
   assert.match(block, /forceReply: true/);
   assert.match(block, /isBlacklistPromptReply/);
   assert.match(block, /parseBlacklistReasonPrompt/);
@@ -320,5 +320,5 @@ test("izoh qadami ham tahririyat ekanini tekshiradi", () => {
     ROUTER.indexOf("const reasonForName ="),
     ROUTER.indexOf("// The CRM lists"),
   );
-  assert.match(block, /if \(!editorial\) return deny/);
+  assert.match(block, /if \(!can\("studio\.blacklist"\)\) return deny/);
 });

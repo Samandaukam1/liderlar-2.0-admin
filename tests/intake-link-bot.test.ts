@@ -263,7 +263,7 @@ test("post botda tugma ham, komanda ham bor", () => {
 test("post botda anketa oqimi TAHRIRIYAT bilan cheklangan", () => {
   // Tugma yorlig'i oddiy matn — uni har kim yozishi mumkin.
   const branch = code(router).slice(code(router).indexOf("INTAKE_LINK_COMMAND || text ==="));
-  const guard = branch.indexOf("if (!editorial) return deny(");
+  const guard = branch.indexOf('if (!can("studio.intake_link")) return deny(');
   const send = branch.indexOf("INTAKE_LINK_NAME_PROMPT");
   assert.ok(guard !== -1 && guard < send, "ruxsat tekshiruvi yuborishdan OLDIN");
 });

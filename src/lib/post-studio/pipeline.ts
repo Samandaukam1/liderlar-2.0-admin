@@ -23,6 +23,7 @@ import {
 import { promoteIntakeToDraft, publishPromotedIntake } from "@/lib/intake/promotion-service";
 import { findPublishedNamesake, NAMESAKE_SKIP_MESSAGE } from "@/lib/intake/namesake";
 import { isBlacklisted } from "@/lib/intake/blacklist";
+import { getChatIdsWithPermission } from "@/lib/bot-access/service";
 import { createPostDraft, getPost, updatePost } from "./repository.ts";
 import { preparePortrait, refreshPostCaption, renderAndStorePost } from "./service.ts";
 import { sendInstagramFollowUp } from "./instagram-followup.ts";
@@ -810,7 +811,7 @@ async function announceAutofix(intakeId: string, candidateId: string | null): Pr
     articleUrl,
   });
 
-  const chatIds = await getPostDeliveryChatIds();
+  const chatIds = await getChatIdsWithPermission("studio.autofix");
   for (const chatId of chatIds) {
     try {
       await sendTelegramMessage(chatId, text);

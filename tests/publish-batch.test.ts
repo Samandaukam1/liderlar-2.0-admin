@@ -693,10 +693,16 @@ test("editorial actions are refused outside the configured chats", () => {
   // and an inline keyboard can be forwarded anywhere.
   assert.match(ROUTER, /async function isEditorialChat/);
   assert.match(ROUTER, /configured\.includes\(chatId\)/);
-  for (const branch of ["/hisobot", "/chop", "/bekor"]) {
+  // Each branch checks ITS OWN permission from the panel's "Botlar
+  // boshqaruvi" section, not a blanket "is an editor".
+  for (const [branch, permission] of [
+    ["/hisobot", "studio.report"],
+    ["/chop", "studio.batch"],
+    ["/bekor", "studio.payments"],
+  ] as const) {
     const at = ROUTER.indexOf(`command === "${branch}"`);
     const block = ROUTER.slice(at, at + 400);
-    assert.match(block, /if \(!editorial\) return deny\(/, `${branch} checks membership`);
+    assert.ok(block.includes(`if (!can("${permission}")) return deny(`), `${branch} checks ${permission}`);
   }
   // The CRM list buttons are editorial-only too, both as typed commands and as
   // keyboard labels — candidate data must never reach an ordinary subscriber.
@@ -704,7 +710,7 @@ test("editorial actions are refused outside the configured chats", () => {
     assert.ok(ROUTER.includes(branch) || CRM_LISTS.includes(branch), `${branch} exists`);
   }
   const listBranch = ROUTER.slice(ROUTER.indexOf("const listKind ="));
-  assert.match(listBranch, /if \(!editorial\) return deny\(/, "the CRM lists check membership");
+  assert.ok(listBranch.includes('if (!can("studio.crm")) return deny('), "the CRM lists check their permission");
 
   // Every callback kind re-checks it as well. The count rises with each new
   // inline action — a fifth was added when the blacklist entry gained its
@@ -713,7 +719,7 @@ test("editorial actions are refused outside the configured chats", () => {
   // candidate record, so it must never be reachable from a stray chat.
   const callbacks = ROUTER.match(/async function handleCallbackQuery[\s\S]*?\n}/)?.[0] ?? "";
   assert.equal(
-    (callbacks.match(/await isEditorialChat\(chatId\)/g) ?? []).length,
+    (callbacks.match(/await isEditorialChat\(chatId, "studio\.[a-z_]+"\)/g) ?? []).length,
     7,
     "CRM pagination, intake link, channel confirm, blacklist add, blacklist remove, undo and payment callbacks are each guarded",
   );

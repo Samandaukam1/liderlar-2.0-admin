@@ -426,10 +426,10 @@ export async function answerSalesCallback(
   });
 }
 
-/** Chat tahririyat ro'yxatidami. */
+/** Chat sotuv operatorimi — panelda `sales.operator` ruxsati bor odam. */
 async function isSalesOperatorChat(chatId: number): Promise<boolean> {
-  const { getPostDeliveryChatIds } = await import("@/lib/post-studio/delivery-recipients");
-  const configured = await getPostDeliveryChatIds();
+  const { getChatIdsWithPermission } = await import("@/lib/bot-access/service");
+  const configured = await getChatIdsWithPermission("sales.operator").catch(() => [] as number[]);
   // Ro'yxat BO'SH bo'lsa hech kim operator emas. Post yetkazishda
   // bo'sh ro'yxat "hammaga" degani edi; bu yerda teskarisi xavfsiz.
   return configured.includes(chatId);
