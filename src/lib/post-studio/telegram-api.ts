@@ -11,6 +11,8 @@ import "server-only";
  * Token faqat shu yerda o'qiladi va hech qachon log'ga yozilmaydi.
  */
 
+import { fetchTelegram } from "@/lib/telegram/network-retry";
+
 const TELEGRAM_API = "https://api.telegram.org";
 
 export function botToken(): string {
@@ -61,7 +63,8 @@ export async function callTelegram<T>(
   body: FormData | Record<string, unknown>,
 ): Promise<T> {
   const isForm = body instanceof FormData;
-  const response = await fetch(`${TELEGRAM_API}/bot${botToken()}/${method}`, {
+  // Tarmoq uzilishida qayta urinadi — `network-retry.ts` dagi izohga qarang.
+  const response = await fetchTelegram(`${TELEGRAM_API}/bot${botToken()}/${method}`, {
     method: "POST",
     headers: isForm ? undefined : { "Content-Type": "application/json" },
     body: isForm ? body : JSON.stringify(body),

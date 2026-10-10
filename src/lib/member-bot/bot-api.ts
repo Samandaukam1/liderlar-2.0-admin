@@ -1,6 +1,7 @@
 import "server-only";
 import { timingSafeEqual } from "node:crypto";
 import type { InlineButton } from "./messages.ts";
+import { fetchTelegram } from "../telegram/network-retry.ts";
 
 /**
  * A'zo botining Telegram transporti — TO'RTINCHI BOT.
@@ -64,7 +65,8 @@ function scrub(message: string): string {
 
 async function call(method: string, body: Record<string, unknown>): Promise<MemberSendResult> {
   try {
-    const response = await fetch(`${TELEGRAM_API}/bot${memberBotToken()}/${method}`, {
+    // Tarmoq uzilishida qayta urinadi — `network-retry.ts` dagi izohga qarang.
+    const response = await fetchTelegram(`${TELEGRAM_API}/bot${memberBotToken()}/${method}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

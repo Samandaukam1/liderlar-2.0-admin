@@ -1,5 +1,6 @@
 import "server-only";
 import { timingSafeEqual } from "node:crypto";
+import { fetchTelegram } from "@/lib/telegram/network-retry";
 
 /**
  * Koordinator botining Telegram transporti.
@@ -57,7 +58,8 @@ async function call(
   body: Record<string, unknown>,
 ): Promise<CoordSendResult> {
   try {
-    const response = await fetch(`${TELEGRAM_API}/bot${botToken()}/${method}`, {
+    // Tarmoq uzilishida qayta urinadi — `network-retry.ts` dagi izohga qarang.
+    const response = await fetchTelegram(`${TELEGRAM_API}/bot${botToken()}/${method}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
