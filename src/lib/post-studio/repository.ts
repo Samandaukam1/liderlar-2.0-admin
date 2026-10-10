@@ -11,6 +11,7 @@ import { buildCandidateArticleUrl } from "./site-origin.ts";
 import { pickQuote, rankQuoteCandidates, type QuoteCandidate } from "./quote-source.ts";
 import { generateFallbackQuote, type FallbackQuoteResult } from "./quote-fallback.ts";
 import { splitNameIntoLines } from "./name-lines.ts";
+import { candidateSearchPatterns } from "./candidate-search.ts";
 import { DEFAULT_POST_TEMPLATE_ID, pickTemplateForCandidate } from "./layout-config.ts";
 import {
   DEFAULT_PORTRAIT_TRANSFORM,
@@ -611,6 +612,34 @@ export async function listPosts(options: {
   });
 
   return { items, total: count ?? 0 };
+}
+
+export interface CandidateOption {
+  id: string;
+  fullName: string;
+}
+
+/**
+ * The "create post" picker. Searched on the server rather than shipped as one
+ * list: there are thousands of candidates, and a capped alphabetical list
+ * silently left everyone past the cap unreachable.
+ */
+export async function searchCandidatesForPost(query: string, limit = 20): Promise<CandidateOption[]> {
+  const patterns = candidateSearchPatterns(query);
+  if (patterns.length === 0) return [];
+
+  const db = createSupabaseAdminClient();
+  let request = db
+    .from("candidates")
+    .select("id, full_name")
+    .is("deleted_at", null)
+    .order("full_name")
+    .limit(limit);
+  for (const pattern of patterns) request = request.ilike("full_name", pattern);
+
+  const { data, error } = await request;
+  if (error) throw new Error(`Nomzodlarni qidirishda xatolik: ${error.message}`);
+  return (data ?? []).map((row) => ({ id: row.id as string, fullName: row.full_name as string }));
 }
 
 export interface CreatePostInput {

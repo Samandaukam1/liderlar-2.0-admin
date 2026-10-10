@@ -156,7 +156,7 @@ function Logo({ collapsed, logoUrl }: { collapsed: boolean; logoUrl: string | nu
             Liderlar.uz
           </span>
           <span className="block text-[10px] font-bold uppercase tracking-[0.2em] text-cyan-light/70">
-            Admin 2.0
+            Admin 2.5
           </span>
         </span>
       )}

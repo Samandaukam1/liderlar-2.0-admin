@@ -3,7 +3,13 @@
 import { revalidatePath } from "next/cache";
 import { requirePermission } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
-import { createPostDraft, getPost, updatePost } from "@/lib/post-studio/repository";
+import {
+  createPostDraft,
+  getPost,
+  searchCandidatesForPost,
+  updatePost,
+  type CandidateOption,
+} from "@/lib/post-studio/repository";
 import {
   buildCaptionForPost,
   preparePortrait,
@@ -50,6 +56,12 @@ function parseOverride(value: FormDataEntryValue | null): number | null {
   if (!raw) return null;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+/** Name search for the "create post" picker — id and name only. */
+export async function searchCandidatesForPostAction(query: string): Promise<CandidateOption[]> {
+  await requirePermission("posts.manage");
+  return searchCandidatesForPost(String(query ?? "").slice(0, 120));
 }
 
 /**

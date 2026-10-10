@@ -7,7 +7,6 @@ import { PageHeader } from "@/components/admin/page-header";
 import { Badge, Avatar } from "@/components/admin/badges";
 import { EmptyState } from "@/components/ui/feedback";
 import { Button } from "@/components/ui/primitives";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { listPosts } from "@/lib/post-studio/repository";
 import { getSubscriberStats } from "@/lib/post-studio/telegram";
 import { getPostTemplate } from "@/lib/post-studio/layout-config";
@@ -57,19 +56,9 @@ export default async function PostlarPage({
     ? (params.status as PostStatus)
     : null;
 
-  const admin = createSupabaseAdminClient();
-  const [{ items, total }, subscribers, { data: candidateRows }] = await Promise.all([
+  const [{ items, total }, subscribers] = await Promise.all([
     listPosts({ page, pageSize: PAGE_SIZE, status, search: params.q ?? null }),
     getSubscriberStats(),
-    // Only what the picker needs — never the candidates' content columns.
-    canManage
-      ? admin
-          .from("candidates")
-          .select("id, full_name")
-          .is("deleted_at", null)
-          .order("full_name")
-          .limit(500)
-      : Promise.resolve({ data: [] as { id: string; full_name: string }[] }),
   ]);
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -81,14 +70,7 @@ export default async function PostlarPage({
         description="Nomzodlar uchun 1080×1080 ijtimoiy tarmoq postlari va Telegram yetkazib berish."
         breadcrumbs={[{ label: "Postlar" }]}
         actions={
-          canManage ? (
-            <CreatePostForm
-              candidates={(candidateRows ?? []).map((c) => ({
-                id: c.id as string,
-                fullName: c.full_name as string,
-              }))}
-            />
-          ) : null
+          canManage ? <CreatePostForm /> : null
         }
       />
 

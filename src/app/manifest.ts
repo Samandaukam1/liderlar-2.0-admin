@@ -28,7 +28,7 @@ export default async function manifest(): Promise<MetadataRoute.Manifest> {
   return {
     name: "Liderlar.uz Admin",
     short_name: "Liderlar Admin",
-    description: "Liderlar.uz 2.0 boshqaruv paneli",
+    description: "Liderlar.uz 2.5 boshqaruv paneli",
     start_url: "/",
     display: "standalone",
     background_color: "#0b1b2b",

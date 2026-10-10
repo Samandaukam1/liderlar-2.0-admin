@@ -53,7 +53,7 @@ export async function generateMetadata(): Promise<Metadata> {
       default: "Liderlar.uz Admin",
       template: "%s — Liderlar.uz Admin",
     },
-    description: "Liderlar.uz 2.0 boshqaruv paneli",
+    description: "Liderlar.uz 2.5 boshqaruv paneli",
     robots: { index: false, follow: false },
     icons,
   };
