@@ -53,3 +53,29 @@ test("og'irliklar validatsiyasi", () => {
   assert.ok(validateWeights({ achievements: 50, monthly_activity: 25, active_leadership: 35 }));
   assert.ok(validateWeights({ achievements: -5, monthly_activity: 70, active_leadership: 35 }));
 });
+
+/* ------------------------------------------------------------------ *
+ * recalculate_rankings() — PostgREST'ning 8 s chegarasiga sig'ishi
+ * ------------------------------------------------------------------ */
+
+test("reyting funksiyasining OXIRGI ta'rifi kvadratik qidiruvga qaytmaydi", async () => {
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const dir = "supabase/migrations";
+  const latest = readdirSync(dir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort()
+    .filter((f) => /create or replace function public\.recalculate_rankings\(/i.test(readFileSync(`${dir}/${f}`, "utf8")))
+    .at(-1);
+  assert.ok(latest, "recalculate_rankings ta'rifi topilmadi");
+  const sql = readFileSync(`${dir}/${latest}`, "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/--.*$/gm, "");
+
+  // 2026-10-22: korrelyatsiyali ichki so'rov 12,9 s oldi, chegara 8 s —
+  // cron 24 soatda 24 marta yiqildi.
+  assert.doesNotMatch(sql, /\(select p\.position from _prev_positions/i);
+  assert.match(sql, /left join _prev_positions p\s+on p\.candidate_id = r\.candidate_id and p\.category = r\.category/i);
+  assert.match(sql, /analyze _prev_positions;/i);
+  // safeupdate tuzatishi yo'qolmasin (20261004090000).
+  assert.match(sql, /delete from _prev_positions where true;/i);
+});
