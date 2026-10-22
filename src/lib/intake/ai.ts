@@ -502,9 +502,9 @@ export async function polishQuoteWithAi(request: QuotePolishRequest): Promise<st
 
   const completion = await openai().chat.completions.create({
     model: textModel(),
-    // Enough variety that a repeat can be escaped on retry, not so much that
-    // the candidate's own meaning drifts on the first pass.
-    temperature: request.problems.length > 0 ? 0.9 : 0.6,
+    // No `temperature`: the production model accepts only its default and
+    // rejected every call with 400, so no quote was polished at all. A retry
+    // still differs from the first pass — the prompt names what went wrong.
     messages: [
       { role: "system", content: QUOTE_SYSTEM_PROMPT },
       { role: "user", content: [task, "", "SHAKL TALABLARI:", shape, retry].join("\n") },

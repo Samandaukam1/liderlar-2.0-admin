@@ -106,6 +106,16 @@ test("model arzon vazifa modelidan olinadi va sarf qayd etiladi", () => {
   assert.match(FALLBACK, /kind: "post\.fallback_quote"/);
 });
 
+test("iqtibos chaqiruvi `temperature` bermaydi — prod modeli uni rad etadi", () => {
+  // 2026-10-22 log'i: "Unsupported value: 'temperature' does not support 0.6
+  // with this model" — har bir sayqallash 400 bilan yiqilardi.
+  const ai = readFileSync(join(ROOT, "src/lib/intake/ai.ts"), "utf8");
+  const polish = ai.slice(ai.indexOf("export async function polishQuoteWithAi"));
+  const call = polish.slice(0, polish.indexOf("return ("));
+  assert.doesNotMatch(call.replace(/\/\/.*$/gm, ""), /temperature/);
+  assert.doesNotMatch(FALLBACK.replace(/\/\/.*$/gm, ""), /temperature\s*:/);
+});
+
 /* ============== 4. BO'SH IQTIBOS ENDI POSTNI TO'XTATMAYDI ============== */
 
 const REPOSITORY = readFileSync(join(ROOT, "src/lib/post-studio/repository.ts"), "utf8");
