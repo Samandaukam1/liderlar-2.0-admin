@@ -40,6 +40,11 @@ function scrubToken(message: string): string {
  * (masalan `ETIMEDOUT`, `ECONNRESET`, `UND_ERR_CONNECT_TIMEOUT`).
  * Avval log'ga faqat "fetch failed" chiqardi va sababni bilib
  * bo'lmasdi — endi u xato matniga qo'shiladi.
+ *
+ * Har manzil (IPv4, IPv6) alohida sinalganda sabab AggregateError
+ * bo'ladi va uning matni bo'sh. Shunda barcha urinishlar kodi
+ * chiqariladi: `ETIMEDOUT, EHOSTUNREACH` — bu haqiqiy timeout emas,
+ * Happy Eyeballs chegarasi (qarang: src/instrumentation-node.ts).
  */
 export function describeNetworkError(err: unknown): { code: string | null; detail: string } {
   if (!(err instanceof Error)) return { code: null, detail: scrubToken(String(err)) };
@@ -48,12 +53,16 @@ export function describeNetworkError(err: unknown): { code: string | null; detai
     | { code?: unknown; message?: unknown; errors?: Array<{ code?: unknown }> }
     | undefined;
 
-  const rawCode = cause?.code ?? cause?.errors?.find((e) => typeof e?.code === "string")?.code;
+  const attemptCodes = (cause?.errors ?? [])
+    .map((e) => e?.code)
+    .filter((c): c is string => typeof c === "string");
+  const rawCode = cause?.code ?? attemptCodes[0];
   const code = typeof rawCode === "string" ? rawCode : null;
   const causeMessage = typeof cause?.message === "string" && cause.message ? cause.message : null;
 
   const parts = [err.message];
   if (causeMessage && causeMessage !== err.message) parts.push(causeMessage);
+  else if (attemptCodes.length > 1) parts.push(attemptCodes.join(", "));
   else if (code) parts.push(code);
 
   return { code, detail: scrubToken(parts.join(": ")) };

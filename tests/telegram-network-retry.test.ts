@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import net from "node:net";
 import {
   describeNetworkError,
   fetchTelegram,
@@ -110,6 +111,33 @@ test("AggregateError sababidan ham kod olinadi (IPv4/IPv6 ikkovi yiqilganda)", (
   const { code, detail } = describeNetworkError(err);
   assert.equal(code, "ETIMEDOUT");
   assert.equal(detail, "fetch failed: ETIMEDOUT");
+});
+
+test("Happy Eyeballs: har manzil kodi log'da ko'rinadi (prod'dagi shakl)", () => {
+  // Node 24 Vercel'da aynan shuni beradi: IPv4 250 ms da uzilgan, IPv6'ga yo'l yo'q.
+  const aggregate = Object.assign(
+    new AggregateError(
+      [
+        Object.assign(new Error("connect ETIMEDOUT 149.154.166.110:443"), { code: "ETIMEDOUT" }),
+        Object.assign(new Error("connect EHOSTUNREACH 2001:67c:4e8:f004::9:443"), { code: "EHOSTUNREACH" }),
+      ],
+      "",
+    ),
+    { code: "ETIMEDOUT" },
+  );
+  const err = new TypeError("fetch failed", { cause: aggregate });
+  const { code, detail } = describeNetworkError(err);
+  assert.equal(code, "ETIMEDOUT");
+  assert.equal(detail, "fetch failed: ETIMEDOUT, EHOSTUNREACH");
+});
+
+test("server ulanish urinishiga 250 ms emas, 2 s beradi", async () => {
+  const { CONNECT_ATTEMPT_TIMEOUT_MS } = await import("../src/instrumentation-node.ts");
+  assert.equal(CONNECT_ATTEMPT_TIMEOUT_MS, 2_000);
+  assert.equal(net.getDefaultAutoSelectFamilyAttemptTimeout(), CONNECT_ATTEMPT_TIMEOUT_MS);
+
+  const register = readFileSync("src/instrumentation.ts", "utf8");
+  assert.match(register, /NEXT_RUNTIME === "nodejs"[\s\S]*import\("\.\/instrumentation-node"\)/);
 });
 
 test("uchala bot transporti ham fetchTelegram orqali yuboradi", () => {
