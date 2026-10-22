@@ -9,6 +9,7 @@ import {
   CHANNEL_CONFIRM_LABEL,
 } from "./channel-reminder-message.ts";
 import { isTelegramConfigured, sendTelegramPhoto } from "./telegram-api.ts";
+import { sendPhotoToChats } from "./photo-fanout.ts";
 
 /**
  * "Kanalga qo'yildimi?" — tayyor postning OXIRGI, qo'lda bajariladigan qadami.
@@ -128,8 +129,9 @@ export interface ChannelReminderResult {
  * Bitta postni so'raydi.
  *
  * Rasm URL sifatida yuboriladi, baytlar sifatida emas: post asseti ochiq
- * bucket'da turadi va Telegram uni o'zi olib keladi — bir postni besh
- * chatga yuborish uchun uni besh marta yuklab olish shart emas.
+ * bucket'da turadi va Telegram uni o'zi olib keladi. Keyingi chatlar
+ * Telegram'ning `file_id` sini oladi; Telegram URL'ni rad etsa, baytlar
+ * o'zimiz yuklab yuboriladi (photo-fanout.ts).
  */
 async function askOne(post: PendingPost, chatIds: number[]): Promise<ChannelReminderResult> {
   const attempt = post.channel_reminder_count + 1;
@@ -153,22 +155,19 @@ async function askOne(post: PendingPost, chatIds: number[]): Promise<ChannelRemi
     { text: CHANNEL_CONFIRM_LABEL, callback_data: channelConfirmCallbackData(post.id) },
   ]];
 
-  let sent = 0;
-  for (const chatId of chatIds) {
-    try {
-      await sendTelegramPhoto(chatId, image, caption, {
+  // Telegram URL'ni ololmasa rasm baytlari o'zimiz yuboriladi — photo-fanout.ts.
+  const { sent, errors } = await sendPhotoToChats(chatIds, image, {
+    send: (chatId, photo) =>
+      sendTelegramPhoto(chatId, photo, caption, {
         // Izohda ism bor — erkin matn. MarkdownV2 bo'lsa ismdagi bitta
         // nuqta yoki chiziqcha butun yuborishni 400 bilan yiqitardi.
         parseMode: null,
         inlineKeyboard: keyboard,
-      });
-      sent += 1;
-    } catch (err) {
-      console.error(
-        `[channel-reminder] send failed post=${post.id} chat=${chatId}`,
-        err instanceof Error ? err.message : err,
-      );
-    }
+      }),
+    download: downloadImage,
+  });
+  for (const { chatId, message } of errors) {
+    console.error(`[channel-reminder] send failed post=${post.id} chat=${chatId}`, message);
   }
 
   // Hech qayerga yetmadi: bu uzilish, so'rash emas. Hisoblagich
@@ -181,6 +180,12 @@ async function askOne(post: PendingPost, chatIds: number[]): Promise<ChannelRemi
 
   await markAsked(post.id, attempt);
   return { postId: post.id, sent, attempt, skipped: null };
+}
+
+async function downloadImage(url: string): Promise<Buffer> {
+  const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  if (!response.ok) throw new Error(`Post rasmi yuklanmadi: HTTP ${response.status}`);
+  return Buffer.from(await response.arrayBuffer());
 }
 
 /** Vaqt muhrini yangilaydi — yuborilmagan holatda ham, navbat qotib qolmasin. */
