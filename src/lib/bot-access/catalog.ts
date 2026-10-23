@@ -44,6 +44,7 @@ export const BOT_PERMISSIONS = [
   "studio.blacklist",
   "studio.intake_link",
   "studio.region_poll",
+  "studio.vip",
   "sales.operator",
 ] as const;
 export type BotPermission = (typeof BOT_PERMISSIONS)[number];
@@ -89,6 +90,12 @@ export const BOTS: readonly BotDefinition[] = [
       { key: "studio.blacklist", label: "Qora ro‘yxat", hint: "/qora — qo‘shish va olib tashlash.", kind: "action" },
       { key: "studio.intake_link", label: "Anketa havolasi", hint: "Yangi nomzod uchun anketa havolasi yaratish.", kind: "action" },
       { key: "studio.region_poll", label: "Hudud so‘rovnomasi", hint: "Kanal uchun hudud so‘rovnomasini yuborish.", kind: "action" },
+      {
+        key: "studio.vip",
+        label: "VIP berish",
+        hint: "Nomzodni topib, faollashtirish havolasi va +1/+2/+3 oy VIP berish.",
+        kind: "action",
+      },
     ],
   },
   {

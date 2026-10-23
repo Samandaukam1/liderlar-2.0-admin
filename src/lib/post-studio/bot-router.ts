@@ -23,6 +23,15 @@ import {
   parseChannelConfirmCallback,
 } from "./channel-reminder.ts";
 import { getChatAccess, getChatIdsWithPermission } from "@/lib/bot-access/service";
+import {
+  isLegacyBioLink,
+  parseCandidateReference,
+  parseVipCallback,
+  VIP_BUTTON_LABEL,
+  VIP_COMMAND,
+  VIP_LEGACY_LINK_REPLY,
+} from "@/lib/vip/bot-messages";
+import { handleVipCallback, handleVipInlineQuery, sendVipCard, sendVipPrompt } from "@/lib/vip/bot-flow";
 import type { BotPermission } from "@/lib/bot-access/catalog";
 import {
   deactivateSubscriber,
@@ -129,12 +138,22 @@ export const EDITORIAL_HELP_REPLY = [
   "/qora — qora ro‘yxatga ism kiritish",
   "/anketa — nomzodga anketa havolasi yaratish",
   "/sorovnoma — kanal uchun hudud so‘rovnomasi",
+  "/vip — nomzodga faollashtirish havolasi va VIP berish",
 ].join("\n");
 
 export const NOT_AUTHORIZED_REPLY =
   "Bu amal faqat tahririyat uchun. Siz postlarni qabul qilishda davom etasiz.";
 
 export interface TelegramUpdate {
+  /**
+   * Harf-harf qidiruv (inline rejim): muharrir "@bot ism" yozgan sari
+   * keladi. Chat yo'q — ruxsat yozayotgan ODAMNING id si bo'yicha.
+   */
+  inline_query?: {
+    id: string;
+    from?: TelegramFrom;
+    query?: string;
+  };
   message?: {
     chat?: { id?: number };
     from?: TelegramFrom;
@@ -197,6 +216,7 @@ function keyboardFor(access: ReadonlySet<BotPermission>): string[][] | undefined
   if (access.has("studio.blacklist")) rows.push([BLACKLIST_ADD_BUTTON_LABEL]);
   if (access.has("studio.intake_link")) rows.push([INTAKE_LINK_BUTTON_LABEL]);
   if (access.has("studio.region_poll")) rows.push([REGION_POLL_BUTTON_LABEL]);
+  if (access.has("studio.vip")) rows.push([VIP_BUTTON_LABEL]);
   return rows.length > 0 ? rows : undefined;
 }
 
@@ -231,6 +251,16 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
   // how the payment question is answered, so it is checked first.
   if (update.callback_query) {
     await handleCallbackQuery(update.callback_query);
+    return;
+  }
+
+  if (update.inline_query) {
+    const userId = update.inline_query.from?.id;
+    const inlineAccess = userId ? await getChatAccess(userId) : { permissions: new Set<BotPermission>(), ownOnly: false };
+    await handleVipInlineQuery(update.inline_query, {
+      allowed: inlineAccess.permissions.has("studio.vip"),
+      ownerChatId: inlineAccess.ownOnly && userId ? userId : null,
+    });
     return;
   }
 
@@ -310,6 +340,13 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
       inlineKeyboard: payload.keyboard.length > 0 ? payload.keyboard : undefined,
     });
     console.log("[telegram-webhook] sendMessage success command=undo");
+    return;
+  }
+
+  if (command === VIP_COMMAND || text === VIP_BUTTON_LABEL) {
+    if (!can("studio.vip")) return deny(chatId, keyboard);
+    await sendVipPrompt(chatId);
+    console.log("[telegram-webhook] sendMessage success command=vip-prompt");
     return;
   }
 
@@ -424,6 +461,25 @@ export async function handleTelegramUpdate(update: TelegramUpdate): Promise<void
     if (!can("studio.crm")) return deny(chatId, keyboard);
     await sendCrmList(chatId, listKind, owner);
     return;
+  }
+
+  /*
+   * VIP KARTASI — biografiya havolasi yoki inline qidiruvda tanlangan nomzod.
+   *
+   * Inline natija chatga "👑 Ism + biografiya havolasi" bo'lib tushadi, ya'ni
+   * ikkala yo'l bitta tarmoqqa keladi. Ruxsati yo'q odamning havolasi oddiy
+   * yordam javobini oladi — nomzod ma'lumoti ochilmaydi.
+   */
+  if (can("studio.vip")) {
+    const reference = parseCandidateReference(text);
+    if (reference) {
+      await sendVipCard(chatId, reference, ownOnly);
+      return;
+    }
+    if (isLegacyBioLink(text)) {
+      await sendTelegramMessage(chatId, VIP_LEGACY_LINK_REPLY, { replyKeyboard: keyboard });
+      return;
+    }
   }
 
   // Never leave a message unanswered.
@@ -557,6 +613,24 @@ async function handleCallbackQuery(
   query: NonNullable<TelegramUpdate["callback_query"]>,
 ): Promise<void> {
   const chatId = query.message?.chat?.id ?? null;
+
+  const vipAction = parseVipCallback(query.data);
+  if (vipAction) {
+    const vipAccess = chatId == null ? null : await getChatAccess(chatId);
+    if (chatId == null || !vipAccess?.permissions.has("studio.vip")) {
+      await safeAnswerCallback(query.id, "Ruxsat yo‘q");
+      return;
+    }
+    await handleVipCallback({
+      callbackQueryId: query.id,
+      action: vipAction,
+      chatId,
+      messageId: query.message?.message_id ?? null,
+      fromName: query.from?.first_name ?? null,
+      ownOnly: vipAccess.ownOnly,
+    });
+    return;
+  }
 
   const listPage = parseCrmListCallback(query.data);
   if (listPage) {

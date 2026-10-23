@@ -51,6 +51,10 @@ export interface CreateActivationResult {
   ok: boolean;
   /** Faqat shu javobda qaytadi va hech qayerda saqlanmaydi. */
   token: string | null;
+  /** Taklifnoma qatori — unga, masalan, post botning kutib turgan VIP'i bog'lanadi. */
+  activationId?: string;
+  /** Shu nomzodning amaldagi havolasi bekor qilindimi. */
+  replacedPrevious?: boolean;
   expiresAt: string | null;
   reason:
     | "created"
@@ -100,7 +104,7 @@ export async function createActivation(
     return { ok: false, token: null, expiresAt: null, reason: "already_linked" };
   }
 
-  await db
+  const { data: replaced } = await db
     .from("candidate_activations")
     .update({
       revoked_at: now.toISOString(),
@@ -109,19 +113,24 @@ export async function createActivation(
     })
     .eq("candidate_id", candidateId)
     .is("consumed_at", null)
-    .is("revoked_at", null);
+    .is("revoked_at", null)
+    .select("expires_at");
 
   const issued = issueActivationToken(now, await activationTtlHours());
 
-  const { error } = await db.from("candidate_activations").insert({
-    candidate_id: candidateId,
-    token_hash: issued.tokenHash,
-    created_by: options.actorId ?? null,
-    expires_at: issued.expiresAt,
-  });
+  const { data: inserted, error } = await db
+    .from("candidate_activations")
+    .insert({
+      candidate_id: candidateId,
+      token_hash: issued.tokenHash,
+      created_by: options.actorId ?? null,
+      expires_at: issued.expiresAt,
+    })
+    .select("id")
+    .single();
 
-  if (error) {
-    console.error("ACTIVATION_CREATE_FAILED", { code: error.code, message: error.message });
+  if (error || !inserted) {
+    console.error("ACTIVATION_CREATE_FAILED", { code: error?.code, message: error?.message });
     return { ok: false, token: null, expiresAt: null, reason: "error" };
   }
 
@@ -143,7 +152,16 @@ export async function createActivation(
     newValue: { expires_at: issued.expiresAt },
   });
 
-  return { ok: true, token: issued.token, expiresAt: issued.expiresAt, reason: "created" };
+  return {
+    ok: true,
+    token: issued.token,
+    expiresAt: issued.expiresAt,
+    reason: "created",
+    activationId: inserted.id as string,
+    // Muddati o'tganlari ham yopiladi (indeks shuni talab qiladi), lekin
+    // "almashtirildi" deb faqat hali amal qilayotgani hisoblanadi.
+    replacedPrevious: (replaced ?? []).some((row) => new Date(row.expires_at as string) > now),
+  };
 }
 
 export interface RevokeResult {

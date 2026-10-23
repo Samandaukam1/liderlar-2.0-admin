@@ -107,7 +107,12 @@ export async function callTelegram<T>(
 export interface InlineButton {
   text: string;
   /** Max 64 bytes — Telegram rejects anything longer. */
-  callback_data: string;
+  callback_data?: string;
+  /**
+   * Opens inline search in the same chat: the input field gets "@bot <this>"
+   * and results appear above it as the user types, not as messages.
+   */
+  switch_inline_query_current_chat?: string;
 }
 
 export interface SendMessageOptions {
@@ -203,6 +208,43 @@ export async function answerCallbackQuery(
   await callTelegram("answerCallbackQuery", {
     callback_query_id: callbackQueryId,
     ...(text ? { text, show_alert: false } : {}),
+  });
+}
+
+/** One row of inline search results (`InlineQueryResultArticle`). */
+export interface InlineArticle {
+  /** Unique within one answer, at most 64 bytes. */
+  id: string;
+  title: string;
+  description?: string;
+  /** What is sent into the chat when the row is tapped. */
+  messageText: string;
+  thumbnailUrl?: string;
+}
+
+/**
+ * Answers an inline query — the live list shown above the input field.
+ *
+ * `is_personal` because results depend on who is asking (bot permissions);
+ * `cache_time` 0 so a VIP just granted shows on the very next keystroke.
+ */
+export async function answerInlineQuery(
+  inlineQueryId: string,
+  results: InlineArticle[],
+  options: { cacheTime?: number } = {},
+): Promise<void> {
+  await callTelegram("answerInlineQuery", {
+    inline_query_id: inlineQueryId,
+    results: results.map((r) => ({
+      type: "article",
+      id: r.id,
+      title: r.title,
+      ...(r.description ? { description: r.description } : {}),
+      ...(r.thumbnailUrl ? { thumbnail_url: r.thumbnailUrl } : {}),
+      input_message_content: { message_text: r.messageText, link_preview_options: { is_disabled: true } },
+    })),
+    cache_time: options.cacheTime ?? 0,
+    is_personal: true,
   });
 }
 

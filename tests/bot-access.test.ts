@@ -76,7 +76,13 @@ test("jadvalga faqat server kiradi: RLS yoqilgan, siyosat yo'q", () => {
 test("eski tahririyat ro'yxati HAMMA ruxsat bilan ko'chiriladi", () => {
   // Ertadan keyin hech kimning imkoniyati kamaymasligi kerak.
   assert.match(MIGRATION, /telegram_bot\.post_delivery_chat_ids/);
-  for (const permission of BOT_PERMISSIONS) assert.ok(MIGRATION.includes(`'${permission}'`), permission);
+  // Keyin qo'shilgan ruxsatlar eski ro'yxatga AVTOMATIK berilmaydi: VIP berish
+  // pul bilan bog'liq, uni panelda har odamga alohida yoqish kerak.
+  const addedLater = new Set(["studio.vip"]);
+  for (const permission of BOT_PERMISSIONS.filter((p) => !addedLater.has(p))) {
+    assert.ok(MIGRATION.includes(`'${permission}'`), permission);
+  }
+  for (const permission of addedLater) assert.ok(!MIGRATION.includes(`'${permission}'`), permission);
   assert.match(MIGRATION, /on conflict \(telegram_id\) do nothing/);
 });
 
@@ -104,6 +110,7 @@ test("klaviatura faqat ruxsati bor tugmalarni ko'rsatadi", () => {
     ["studio.blacklist", "BLACKLIST_ADD_BUTTON_LABEL"],
     ["studio.intake_link", "INTAKE_LINK_BUTTON_LABEL"],
     ["studio.region_poll", "REGION_POLL_BUTTON_LABEL"],
+    ["studio.vip", "VIP_BUTTON_LABEL"],
   ]) {
     assert.ok(keyboard.includes(`access.has("${permission}")) rows.push([${label}`), `${label} ← ${permission}`);
   }

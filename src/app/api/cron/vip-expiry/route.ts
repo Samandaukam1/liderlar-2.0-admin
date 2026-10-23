@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { sweepExpiredSubscriptions } from "@/lib/vip/subscription-service";
+import { applyPendingVipGrants } from "@/lib/vip/bot-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,6 +38,13 @@ export async function GET(request: NextRequest) {
   const result = await sweepExpiredSubscriptions();
 
   /*
+   * Post bot havolasidagi VIP odatda akkaunt ochilgan zahoti trigger bilan
+   * yoqiladi. Trigger yiqilgan bo'lsa (u akkaunt ochilishini to'xtatmaydi),
+   * shu yerda qayta uriniladi — idempotent kalit ikki marta bermaydi.
+   */
+  const pendingApplied = await applyPendingVipGrants();
+
+  /*
    * QISMAN NOSOZLIK 200 BILAN QAYTADI.
    *
    * Bir nechta obuna yopilmagan bo'lsa ham, qolganlari yopilgan va
@@ -51,5 +59,5 @@ export async function GET(request: NextRequest) {
     console.error("[cron] ba'zi VIP obunalar yopilmadi:", result);
   }
 
-  return NextResponse.json({ ok: true, ...result });
+  return NextResponse.json({ ok: true, ...result, pendingApplied });
 }
