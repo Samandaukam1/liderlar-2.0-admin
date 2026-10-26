@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { IMMUTABLE_OBJECT_CACHE_CONTROL } from "@/lib/upload-rules";
 import { recordAudit } from "@/lib/vip/audit-log";
 import { downloadMemberFile, getMemberFileInfo } from "./bot-api";
 import { clearConversation, loadConversation, setConversation } from "./conversation-store";
@@ -201,6 +202,8 @@ export async function handleIncomingPhoto(
       contentType: detected.mime,
       // Ustiga yozish imkonsiz: har yuklash yangi manzil oladi.
       upsert: false,
+      // Shu sababli brauzer keshi uzun bo'lishi xavfsiz.
+      cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
     });
 
   if (uploadError) {

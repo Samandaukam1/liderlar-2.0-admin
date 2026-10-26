@@ -102,6 +102,21 @@ export function validateUpload(
   return { rule };
 }
 
+/**
+ * `cacheControl` for objects whose path is never reused: one year.
+ *
+ * Without it Supabase stores every object with `max-age=3600`, so a visitor
+ * re-downloads the same file every hour. That is what the site-wide corner
+ * video and AI-avatar clip (~4 MB each, on every page) were doing, and it is
+ * the bulk of the project's Cached Egress.
+ *
+ * Only safe because every caller writes a fresh random key (`buildObjectPath`,
+ * or a `randomUUID()` path with `upsert: false`): replacing a file produces a
+ * new URL, so a stale copy can never be served. Never pass this for a stable,
+ * overwritten path (Post Studio assets, branding).
+ */
+export const IMMUTABLE_OBJECT_CACHE_CONTROL = "31536000";
+
 /** Storage object key: month-prefixed folder plus a random, extension-preserving name. */
 export function buildObjectPath(fileName: string) {
   const ext = fileName.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "bin";

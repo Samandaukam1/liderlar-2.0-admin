@@ -1,5 +1,6 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { IMMUTABLE_OBJECT_CACHE_CONTROL } from "@/lib/upload-rules";
 import { INTAKE_BUCKET, AVATAR_BUCKET } from "./constants";
 
 /**
@@ -50,7 +51,11 @@ export async function copyFinalPhotoToAvatar(intakeId: string): Promise<string |
   const buf = Buffer.from(await blob.arrayBuffer());
   const { error: upErr } = await admin.storage
     .from(AVATAR_BUCKET)
-    .upload(dest, buf, { contentType: blob.type || "image/png", upsert: false });
+    .upload(dest, buf, {
+      contentType: blob.type || "image/png",
+      upsert: false,
+      cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
+    });
   if (upErr) return null;
 
   return admin.storage.from(AVATAR_BUCKET).getPublicUrl(dest).data.publicUrl;

@@ -1,6 +1,7 @@
 "use client";
 
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { IMMUTABLE_OBJECT_CACHE_CONTROL } from "@/lib/upload-rules";
 
 /**
  * Reads an error out of a failed response. The body is not always JSON — a
@@ -49,7 +50,11 @@ export async function uploadToBucket(
   const supabase = createSupabaseBrowserClient();
   const { error } = await supabase.storage
     .from(bucket)
-    .uploadToSignedUrl(path, token, file, { contentType: file.type });
+    .uploadToSignedUrl(path, token, file, {
+      contentType: file.type,
+      // The path comes from buildObjectPath (fresh UUID), so it is never reused.
+      cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
+    });
   if (error) throw new Error(error.message);
 
   const commitRes = await fetch("/api/upload/commit", {

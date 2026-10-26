@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 import { checkPermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
-import { BUCKET_RULES, buildObjectPath, validateUpload } from "@/lib/upload-rules";
+import {
+  BUCKET_RULES,
+  buildObjectPath,
+  IMMUTABLE_OBJECT_CACHE_CONTROL,
+  validateUpload,
+} from "@/lib/upload-rules";
 
 
 export async function POST(request: Request) {
@@ -30,7 +35,11 @@ export async function POST(request: Request) {
 
   const { error: uploadError } = await admin.storage
     .from(bucket)
-    .upload(path, file, { contentType: file.type, upsert: false });
+    .upload(path, file, {
+      contentType: file.type,
+      upsert: false,
+      cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
+    });
   if (uploadError) {
     if (/bucket not found/i.test(uploadError.message)) {
       return NextResponse.json(
