@@ -22,6 +22,7 @@ import {
   mapCandidateAdabiyotXRow,
   type CandidateAdabiyotXRow,
 } from "@/lib/adabiyotx/types";
+import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
 
 export const dynamic = "force-dynamic";
 
@@ -177,5 +178,6 @@ export async function POST(request: Request, context: CandidateRouteContext) {
       title: item.title,
     },
   });
+  refreshPublicProfiles([candidateId]);
   return NextResponse.json({ ok: true, item }, { status: 201 });
 }

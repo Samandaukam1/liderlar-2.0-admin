@@ -7,6 +7,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 import { slugify } from "@/lib/utils";
 import type { ArticleStatus } from "@/lib/types";
+import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
 
 const articleSchema = z.object({
   title: z.string().min(3, "Sarlavha juda qisqa").max(300),
@@ -60,6 +61,14 @@ export async function saveArticleAction(
     scheduled_at: nullable(v.scheduled_at),
   };
 
+  // A manual save may move the article to another candidate — the previous
+  // owner's public profile must drop it too.
+  const previousCandidateId =
+    articleId && !options?.autosave
+      ? ((await admin.from("articles").select("candidate_id").eq("id", articleId).maybeSingle()).data
+          ?.candidate_id as string | null | undefined)
+      : null;
+
   let id = articleId;
   if (id) {
     const { error } = await admin.from("articles").update(payload).eq("id", id);
@@ -106,6 +115,7 @@ export async function saveArticleAction(
 
   revalidatePath("/articles");
   if (articleId) revalidatePath(`/articles/${articleId}`);
+  refreshPublicProfiles([payload.candidate_id, previousCandidateId]);
   return { ok: true, id: id ?? undefined, revision };
 }
 
@@ -127,7 +137,7 @@ export async function setArticleStatusAction(
   const admin = createSupabaseAdminClient();
   const { data: before } = await admin
     .from("articles")
-    .select("status")
+    .select("status, candidate_id")
     .eq("id", articleId)
     .maybeSingle();
   const patch: Record<string, unknown> = { status };
@@ -145,6 +155,7 @@ export async function setArticleStatusAction(
   });
   revalidatePath("/articles");
   revalidatePath(`/articles/${articleId}`);
+  refreshPublicProfiles([before?.candidate_id as string | null | undefined]);
   return { ok: true };
 }
 
@@ -161,7 +172,7 @@ export async function restoreRevisionAction(
     .eq("article_id", articleId)
     .maybeSingle();
   if (!rev) return { ok: false, error: "Versiya topilmadi" };
-  const { error } = await admin
+  const { data: restored, error } = await admin
     .from("articles")
     .update({
       title: rev.title,
@@ -169,8 +180,11 @@ export async function restoreRevisionAction(
       content: rev.content,
       excerpt: rev.excerpt,
     })
-    .eq("id", articleId);
+    .eq("id", articleId)
+    .select("candidate_id")
+    .maybeSingle();
   if (error) return { ok: false, error: error.message };
+  refreshPublicProfiles([restored?.candidate_id as string | null | undefined]);
   await logAudit({
     actorId: ctx.userId,
     action: "article.restore_revision",

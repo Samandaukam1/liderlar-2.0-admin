@@ -14,6 +14,7 @@ import {
   type PhotoTarget,
 } from "./photo-rules";
 import type { BotMessage } from "./messages";
+import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
 
 /**
  * TELEGRAM ORQALI RASM YUKLASH — I/O QISMI (§21).
@@ -259,6 +260,7 @@ export async function handleIncomingPhoto(
   }
 
   await clearConversation(telegramUserId);
+  refreshPublicProfiles([candidate.id as string]);
 
   await recordAudit("telegram.profile.photo_uploaded", {
     actorId: profileId,

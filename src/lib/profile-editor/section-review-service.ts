@@ -1,6 +1,7 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { recordAudit } from "@/lib/vip/audit-log";
+import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
 
 /**
  * BIOGRAFIYA BO'LIMLARI — ADMIN KO'RIGI.
@@ -97,6 +98,7 @@ export async function approveSection(
     return { ok: false, error: "Bu bo'lim allaqachon ko'rib chiqilgan. Sahifani yangilang." };
   }
 
+  refreshPublicProfiles([data.candidate_id as string]);
   await recordAudit("profile.section.approved", {
     actorId: reviewerId,
     entityId: data.candidate_id as string,

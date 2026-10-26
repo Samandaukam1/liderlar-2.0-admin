@@ -8,6 +8,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 import { slugify } from "@/lib/utils";
 import { getCandidatePublicationReadiness } from "@/lib/candidates/publication-service";
+import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
 
 const candidateSchema = z.object({
   full_name: z.string().min(3, "Ism juda qisqa").max(160),
@@ -280,6 +281,7 @@ export async function addCandidateEntryAction(
     newValue: { title: v.title },
   });
   revalidatePath(`/candidates/${candidateId}`);
+  refreshPublicProfiles([candidateId]);
   return { ok: true };
 }
 
@@ -306,5 +308,6 @@ export async function deleteCandidateEntryAction(
     oldValue: { entry_id: entryId },
   });
   revalidatePath(`/candidates/${candidateId}`);
+  refreshPublicProfiles([candidateId]);
   return { ok: true };
 }

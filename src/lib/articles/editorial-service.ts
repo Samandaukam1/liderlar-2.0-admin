@@ -11,6 +11,7 @@ import {
   type ArticleState,
   type EditorAction,
 } from "./state";
+import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
 
 /**
  * A'ZO MAQOLALARI — TAHRIRIYAT NAVBATI.
@@ -229,6 +230,7 @@ export async function applyEditorialAction(input: {
     await openChannels(input.articleId);
   }
 
+  refreshPublicProfiles([current.candidate_id as string]);
   await recordAudit(EDITOR_AUDIT[input.action], {
     actorId: input.reviewerId,
     entityId: input.articleId,

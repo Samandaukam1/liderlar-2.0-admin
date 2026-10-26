@@ -22,6 +22,7 @@ import {
   mapCandidateAdabiyotXRow,
   type CandidateAdabiyotXRow,
 } from "@/lib/adabiyotx/types";
+import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
 
 export const dynamic = "force-dynamic";
 
@@ -176,6 +177,7 @@ export async function PATCH(request: Request, context: ItemRouteContext) {
       sort_order: item.sortOrder,
     },
   });
+  refreshPublicProfiles([candidateId]);
   return NextResponse.json({ ok: true, item });
 }
 
@@ -223,5 +225,6 @@ export async function DELETE(_request: Request, context: ItemRouteContext) {
     entityId: candidateId,
     oldValue: { item_id: itemId, title: data.title },
   });
+  refreshPublicProfiles([candidateId]);
   return NextResponse.json({ ok: true });
 }

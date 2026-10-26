@@ -2,6 +2,7 @@ import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { recordAudit } from "@/lib/vip/audit-log";
 import { loadAuditActors } from "@/lib/audit-actors";
+import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
 
 /**
  * PROFIL TAHRIRLARI — ADMIN KO'RIGI.
@@ -147,6 +148,7 @@ export async function approveEdit(
       before_value: string | null;
       after_value: string | null;
     };
+    refreshPublicProfiles([edit.candidate_id]);
     await recordAudit("profile.edit.approved", {
       actorId: reviewerId,
       entityId: edit.candidate_id,

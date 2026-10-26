@@ -1,6 +1,7 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { instagramProfileUrl, normalizeInstagram } from "./schemas";
+import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
 
 /**
  * The intake's optional Instagram handle, carried onto the candidate.
@@ -40,6 +41,7 @@ export async function syncCandidateInstagramLink(
     return null;
   }
 
+  refreshPublicProfiles([candidateId]);
   if (!username) return null;
 
   const { error } = await db.from("social_links").insert({

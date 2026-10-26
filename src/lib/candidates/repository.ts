@@ -4,6 +4,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { splitPipeValues, stripCandidateMarkers } from "./parser.ts";
 import { DEFAULT_CANDIDATE_AI_PROMPT, CANDIDATE_AI_PROMPT_KEY } from "./prompt.ts";
 import { emptyCandidateData, type CandidateEditorPayload, type CandidateStructuredData } from "./schema.ts";
+import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
 
 const EDITOR_SELECT = [
   "id",
@@ -169,6 +170,7 @@ export async function saveCandidateProfile(
   if (error) throw error;
   const result = data as { candidate_id?: string; slug?: string } | null;
   if (!result?.candidate_id || !result.slug) throw new Error("Nomzod saqlanganini tasdiqlab bo‘lmadi");
+  refreshPublicProfiles([result.candidate_id]);
   return { candidateId: result.candidate_id, slug: result.slug };
 }
 

@@ -3,6 +3,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { recordAudit } from "@/lib/vip/audit-log";
 import { isTrustChoice } from "./certificate-trust";
 import { describeEvidence } from "./evidence-rules";
+import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
 
 /**
  * FOYDALANUVCHI SERTIFIKATLARI — ADMIN KO'RIGI.
@@ -176,6 +177,7 @@ export async function setCertificateTrust(
     };
   }
 
+  refreshPublicProfiles([data.candidate_id as string]);
   await recordAudit("profile.certificate.trust_set", {
     actorId: reviewerId,
     entityId: data.candidate_id as string,

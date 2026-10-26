@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requirePermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
+import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
 
 export interface SystemActionResult {
   ok: boolean;
@@ -137,7 +138,7 @@ export async function deleteMediaAction(id: string): Promise<SystemActionResult>
   const admin = createSupabaseAdminClient();
   const { data: asset } = await admin
     .from("candidate_media")
-    .select("bucket, path, file_name")
+    .select("bucket, path, file_name, candidate_id")
     .eq("id", id)
     .maybeSingle();
   if (!asset) return { ok: false, error: "Fayl topilmadi" };
@@ -151,6 +152,7 @@ export async function deleteMediaAction(id: string): Promise<SystemActionResult>
     .from("candidate_media")
     .update({ deleted_at: new Date().toISOString() })
     .eq("id", id);
+  refreshPublicProfiles([asset.candidate_id as string | null]);
 
   await logAudit({
     actorId: ctx.userId,

@@ -8,6 +8,7 @@ import {
   IMMUTABLE_OBJECT_CACHE_CONTROL,
   validateUpload,
 } from "@/lib/upload-rules";
+import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
 
 
 export async function POST(request: Request) {
@@ -62,6 +63,7 @@ export async function POST(request: Request) {
     kind: bucket,
     uploaded_by: ctx.userId,
   });
+  refreshPublicProfiles([typeof candidateId === "string" ? candidateId : null]);
 
   await logAudit({
     actorId: ctx.userId,

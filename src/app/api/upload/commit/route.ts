@@ -3,6 +3,7 @@ import { checkPermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 import { BUCKET_RULES } from "@/lib/upload-rules";
+import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
 
 /**
  * Called once the browser has finished uploading to the signed URL. Confirms
@@ -80,6 +81,7 @@ export async function POST(request: Request) {
     kind: bucket,
     uploaded_by: ctx.userId,
   });
+  refreshPublicProfiles([body.candidateId ? String(body.candidateId) : null]);
 
   await logAudit({
     actorId: ctx.userId,
