@@ -7,6 +7,7 @@ import {
   INTAKE_BUCKET,
   SETTINGS_KEYS,
 } from "./constants";
+import type { IntakeForSave } from "./answers";
 
 /* ----------------------------- settings ----------------------------- */
 
@@ -94,6 +95,11 @@ export interface ResolvedLink {
   linkId: string;
   intakeId: string;
   expiresAt: string;
+  /**
+   * The intake row read while resolving, so an autosave does not read it a
+   * second time (see `saveIntakeAnswer`'s `intake` argument).
+   */
+  intake: IntakeForSave;
 }
 
 /**
@@ -124,7 +130,7 @@ export async function resolveActiveLink(rawToken: string): Promise<ResolvedLink 
   // Only serve links whose intake is still open to editing.
   const { data: intake } = await admin
     .from("candidate_intakes")
-    .select("id, status, deleted_at")
+    .select("id, status, deleted_at, template_id, current_question_no, last_completed_question_no")
     .eq("id", link.intake_id)
     .maybeSingle();
   if (!intake || intake.deleted_at) return null;
@@ -134,6 +140,7 @@ export async function resolveActiveLink(rawToken: string): Promise<ResolvedLink 
     linkId: link.id as string,
     intakeId: link.intake_id as string,
     expiresAt: link.expires_at as string,
+    intake: intake as IntakeForSave,
   };
 }
 

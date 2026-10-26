@@ -46,6 +46,7 @@ export async function POST(request: NextRequest) {
     lockVersion: parsed.data.lock_version,
     source: "public",
     editedBy: null,
+    intake: resolved.intake,
   });
 
   if (!outcome.ok) {
