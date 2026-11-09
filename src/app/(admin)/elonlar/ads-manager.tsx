@@ -174,7 +174,7 @@ function PlacementSection({
           <p className="text-xs text-ink-soft">
             {placement === "bot_post"
               ? "Har bir yuborilgan post rasmining ostidagi matn oxiriga qo‘shiladi — nomzod ismi kabi qalin, bosiladigan qator. Bir nechtasi yoqilsa, postlarga navbat bilan tushadi."
-              : "Har bir biografik sahifada tepadan tushib keladigan bar. X birinchi bosilganda havola ochiladi, ikkinchi bosishda bar yopiladi."}{" "}
+              : "Har bir biografik sahifada tepadan tushib keladigan bar. X birinchi bosilganda havola ochiladi, ikkinchi bosishda bar yopiladi. Tashrifchi sahifaga qayta kirsa, bar yana chiqadi."}{" "}
             <strong className="text-ink">
               {active}/{MAX_ACTIVE_ADS_PER_PLACEMENT} yoqilgan.
             </strong>
@@ -818,15 +818,9 @@ function SettingsCard({ settings }: { settings: AdsSettings }) {
             <input type="hidden" name="profile_bar_cycle_seconds" value={settings.profileBarCycleSeconds} />
           ) : null}
         </FormField>
-        <FormField label="Yopilgandan keyin qayta chiqmaydi (soat)" hint="1–720">
-          <Input
-            type="number"
-            name="profile_bar_dismiss_hours"
-            min={1}
-            max={720}
-            defaultValue={settings.profileBarDismissHours}
-          />
-        </FormField>
+        {/* Yopish faqat shu sahifa ko'rishida amal qiladi — qayta kirilsa bar yana
+            chiqadi (egasining talabi). Ustun bazada qoladi, qiymati o'zgarmaydi. */}
+        <input type="hidden" name="profile_bar_dismiss_hours" value={settings.profileBarDismissHours} />
         <label className="flex items-start gap-2 self-end text-sm text-ink">
           <input
             type="checkbox"
