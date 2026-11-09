@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/admin/page-header";
 import { getPost, loadCandidateSourceData } from "@/lib/post-studio/repository";
 import { buildLayoutForPreview } from "@/lib/post-studio/service";
 import { getPostDeliveryStats, getSubscriberStats } from "@/lib/post-studio/telegram";
+import { loadStudioAdPanel } from "@/lib/post-studio/post-ad";
 import {
   paletteForTemplate,
   POST_TEMPLATE_LIST,
@@ -27,11 +28,14 @@ export default async function PostStudioPage({
   if (!post) notFound();
 
   // Candidate data, layout, delivery and subscriber counts are independent.
-  const [source, layout, delivery, subscribers] = await Promise.all([
+  const [source, layout, delivery, subscribers, adPanel] = await Promise.all([
     loadCandidateSourceData(post.candidateId),
     buildLayoutForPreview(post),
     getPostDeliveryStats(post.id),
     getSubscriberStats(),
+    // Reklama holati alohida, yumshoq yiqiladigan so'rovlarda — migratsiya
+    // kechiksa ham Studio ochilaveradi.
+    loadStudioAdPanel(post.id),
   ]);
 
   return (
@@ -69,6 +73,7 @@ export default async function PostStudioPage({
         }}
         delivery={delivery}
         subscribers={subscribers}
+        ad={adPanel}
         canManage={hasPermission(ctx.roles, "posts.manage")}
         canPublish={hasPermission(ctx.roles, "posts.publish")}
       />

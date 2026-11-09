@@ -66,6 +66,9 @@ export const PERMISSIONS = [
   "ai_prompts.edit",
   "ai_assistant.manage",
   "corner_video.manage",
+  // Reklamalar (bot post captioni + biografik sahifa bari). SQL nusxasi
+  // 20261109120000_ads.sql da: faqat admin (super_admin '*' orqali oladi).
+  "ads.manage",
   "posts.view",
   "posts.manage",
   "posts.publish",

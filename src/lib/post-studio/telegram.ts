@@ -10,6 +10,8 @@ import {
   type SentPhoto,
 } from "./telegram-api.ts";
 import { POST_DELIVERY_CHAT_IDS_KEY } from "./delivery-recipients.ts";
+import { appendAdToCaption } from "./caption-ad.ts";
+import { getBotPostPosition, loadPostAdTarget, resolvePostAd } from "./post-ad.ts";
 
 /**
  * Private Telegram delivery bot — CHIQUVCHI tomon.
@@ -308,6 +310,28 @@ export async function deliverPostToSubscribers(
     );
   }
 
+  /*
+   * REKLAMA SHU YERDA QO'SHILADI — saqlangan caption REKLAMASIZ qoladi.
+   *
+   * Bu funksiya barcha yuborish yo'llarining yagona tor joyi (pipeline,
+   * jadval, qo'lda, majburiy). Reklama postga birinchi yuborishda
+   * yopishtiriladi, keyingi yuborishlar o'shani saqlaydi. Sig'masa yoki
+   * reklama tizimida xato bo'lsa post reklamasiz ketadi — hech qachon
+   * to'xtamaydi.
+   */
+  let adMeta: Record<string, unknown> = { adId: null, adApplied: false };
+  try {
+    const target = await loadPostAdTarget(postId);
+    if (target) {
+      const [ad, position] = await Promise.all([resolvePostAd(target), getBotPostPosition()]);
+      const composed = appendAdToCaption(caption, ad, position);
+      caption = composed.caption;
+      adMeta = { adId: ad?.id ?? null, adApplied: composed.applied, adReason: composed.reason ?? null };
+    }
+  } catch (err) {
+    console.error("[telegram] reklama qo'shilmadi, post reklamasiz ketadi:", err instanceof Error ? err.message : err);
+  }
+
   // A restricted run seeds its recipients first, so a configured editor who
   // never pressed /start still gets the post — and still gets a delivery row,
   // which is what makes the "sent once" guarantee hold for them too.
@@ -426,6 +450,7 @@ export async function deliverPostToSubscribers(
       ...result,
       onlyFailed: Boolean(options.onlyFailed),
       forced: Boolean(options.force),
+      ...adMeta,
     },
   });
 

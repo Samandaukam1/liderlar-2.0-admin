@@ -24,6 +24,14 @@ import {
 import { downloadPostAsset } from "@/lib/post-studio/storage";
 import { requeueIntakePipeline } from "@/lib/post-studio/pipeline";
 import { isPostTemplateId, type PortraitTransform } from "@/lib/post-studio/types";
+import { appendAdToCaption } from "@/lib/post-studio/caption-ad";
+import {
+  getBotPostPosition,
+  loadPostAdTarget,
+  peekPostAd,
+  setPostAdMode,
+  type PostAdMode,
+} from "@/lib/post-studio/post-ad";
 
 /**
  * Server actions for Post Studio. Every one starts with an explicit permission
@@ -327,19 +335,68 @@ export async function sendTelegramTestAction(formData: FormData): Promise<PostAc
   const photo = await downloadPostAsset(post.candidateId, "render");
   if (!photo) return { ok: false, error: "Render topilmadi — avval postni render qiling." };
 
+  /*
+   * Sinov yuborish obunachilar oladigan captionning AYNAN o'zini ko'rsatsin:
+   * reklama ham qo'shiladi, lekin navbat SURILMAYDI (peek) — sinov haqiqiy
+   * yuborishning navbatini yemasin.
+   */
+  const target = await loadPostAdTarget(postId);
+  const [ad, position] = target
+    ? await Promise.all([peekPostAd(target), getBotPostPosition()])
+    : [null, "end" as const];
+  const composed = appendAdToCaption(post.telegramCaption, ad, position);
+
   try {
-    await sendTelegramPhoto(chatId, photo, post.telegramCaption);
+    await sendTelegramPhoto(chatId, photo, composed.caption);
     await logAudit({
       actorId: ctx.userId,
       action: "post.telegram_test_sent",
       entityType: "candidate_social_posts",
       entityId: postId,
-      metadata: { chatId },
+      metadata: { chatId, adId: ad?.id ?? null, adApplied: composed.applied },
     });
     return { ok: true, postId, message: "Test post yuborildi." };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Yuborilmadi" };
   }
+}
+
+/**
+ * Postdagi reklama rejimi: avtomatik navbat, aniq reklama yoki reklamasiz.
+ * Reklama captionga yuborishda qo'shiladi, shuning uchun bu yerda caption
+ * qayta yig'ilmaydi — faqat postning bayrog'i o'zgaradi.
+ */
+export async function setPostAdAction(formData: FormData): Promise<PostActionResult> {
+  const ctx = await requirePermission("posts.manage");
+  const postId = String(formData.get("post_id") ?? "");
+  const raw = String(formData.get("ad_mode") ?? "auto");
+  const post = await getPost(postId);
+  if (!post) return { ok: false, error: "Post topilmadi" };
+
+  let mode: PostAdMode = "auto";
+  let adId: string | null = null;
+  if (raw === "off") mode = "off";
+  else if (raw.startsWith("fixed:")) {
+    mode = "fixed";
+    adId = raw.slice("fixed:".length) || null;
+  }
+
+  const result = await setPostAdMode(postId, mode, adId);
+  if (!result.ok) return { ok: false, error: result.error };
+
+  await logAudit({
+    actorId: ctx.userId,
+    action: "post.ad_mode_changed",
+    entityType: "candidate_social_posts",
+    entityId: postId,
+    metadata: { mode, adId },
+  });
+  revalidatePost(postId);
+  return {
+    ok: true,
+    postId,
+    message: mode === "off" ? "Bu post reklamasiz yuboriladi." : mode === "fixed" ? "Reklama tanlandi." : "Avtomatik navbat.",
+  };
 }
 
 /**

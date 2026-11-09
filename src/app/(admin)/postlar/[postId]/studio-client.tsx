@@ -16,6 +16,9 @@ import { PostPreviewCanvas } from "@/components/post-studio/preview-canvas";
 import { ConfirmDialog } from "@/components/ui/overlays";
 import type { PostRecord } from "@/lib/post-studio/repository";
 import type { QuoteCandidate } from "@/lib/post-studio/quote-source";
+import type { StudioAdPanel } from "@/lib/post-studio/post-ad";
+import { captionLengthWithAd } from "@/lib/post-studio/caption-ad";
+import { TELEGRAM_CAPTION_LIMIT } from "@/lib/post-studio/telegram-markdown";
 import {
   POST_STATUS_LABELS,
   POST_STATUS_TONES,
@@ -35,6 +38,7 @@ import {
   schedulePostAction,
   sendPostToSubscribersAction,
   sendTelegramTestAction,
+  setPostAdAction,
 } from "@/lib/actions/post-studio";
 
 /**
@@ -81,8 +85,18 @@ interface StudioProps {
   };
   delivery: { sent: number; failed: number; lastSentAt: string | null };
   subscribers: { total: number; active: number; stopped: number; lastSentAt: string | null };
+  /** Yuborishda captionga qo'shiladigan reklama holati (post-ad.ts). */
+  ad: StudioAdPanel;
   canManage: boolean;
   canPublish: boolean;
+}
+
+/** Studio'dagi tanlov qiymati: `auto` | `off` | `fixed:<id>`. */
+function adModeValue(ad: StudioAdPanel): string {
+  if (!ad.target) return "auto";
+  if (!ad.target.telegramAdEnabled) return "off";
+  if (ad.target.telegramAdId) return `fixed:${ad.target.telegramAdId}`;
+  return "auto";
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -173,7 +187,7 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
 }
 
 export function PostStudio(props: StudioProps) {
-  const { post, layout, templates, candidate, delivery, subscribers, canManage, canPublish } = props;
+  const { post, layout, templates, candidate, delivery, subscribers, ad, canManage, canPublish } = props;
 
   const [templateId, setTemplateId] = useState<PostTemplateId>(post.templateId);
   const [quote, setQuote] = useState(post.quote);
@@ -631,7 +645,16 @@ export function PostStudio(props: StudioProps) {
               className="font-mono text-[11px]"
               disabled={!canManage}
             />
-            <p className="text-[11px] text-ink-soft">{[...caption].length}/1024 belgi</p>
+            <p className="text-[11px] text-ink-soft">
+              {[...caption].length}/{TELEGRAM_CAPTION_LIMIT} belgi
+              {ad.preview ? ` · reklama bilan ${captionLengthWithAd(caption, ad.preview, ad.position)}/${TELEGRAM_CAPTION_LIMIT}` : ""}
+            </p>
+            {ad.preview && captionLengthWithAd(caption, ad.preview, ad.position) > TELEGRAM_CAPTION_LIMIT ? (
+              <p className="flex items-center gap-1 text-[11px] font-semibold text-[#b45309]">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                Reklama sig‘maydi — bu post reklamasiz ketadi. Captionni qisqartiring.
+              </p>
+            ) : null}
             {canManage ? (
               <div className="flex gap-2">
                 <Button type="submit" variant="ghost" size="sm" disabled={pending}>
@@ -649,6 +672,68 @@ export function PostStudio(props: StudioProps) {
               </div>
             ) : null}
           </form>
+
+          {/*
+            REKLAMA — saqlangan captionda YO'Q, yuborishda qo'shiladi (post-ad.ts).
+            Shuning uchun alohida ko'rsatiladi: admin nima ketishini ko'rsin.
+          */}
+          <div className="mt-4 space-y-2 border-t border-line pt-3">
+            <form
+              action={(formData) => run(() => setPostAdAction(formData))}
+              className="space-y-2"
+            >
+              <input type="hidden" name="post_id" value={post.id} />
+              <Label htmlFor="ad_mode">Reklama (yuborishda qo‘shiladi)</Label>
+              <select
+                id="ad_mode"
+                name="ad_mode"
+                defaultValue={adModeValue(ad)}
+                disabled={!canManage || !ad.target}
+                onChange={(e) => e.currentTarget.form?.requestSubmit()}
+                className="h-9 w-full rounded-md border border-line bg-card px-2 text-xs text-ink"
+              >
+                <option value="auto">Avtomatik navbat</option>
+                {ad.options.map((option) => (
+                  <option key={option.id} value={`fixed:${option.id}`}>
+                    {option.title} — {option.text}
+                  </option>
+                ))}
+                {ad.target?.telegramAdId && !ad.options.some((o) => o.id === ad.target?.telegramAdId) ? (
+                  <option value={`fixed:${ad.target.telegramAdId}`}>Yopishtirilgan reklama (hozir faol emas)</option>
+                ) : null}
+                <option value="off">Reklamasiz</option>
+              </select>
+            </form>
+            {ad.preview ? (
+              <p className="rounded-md border border-line bg-paper px-3 py-2 text-[11px] text-ink-soft">
+                Yuborishda qo‘shiladi:{" "}
+                <a
+                  href={ad.preview.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-bold text-ink underline decoration-dotted underline-offset-2"
+                >
+                  {ad.preview.text}
+                </a>
+                {ad.position === "before_footer" ? " (footer qatoridan oldin)" : " (postning oxirida)"}
+              </p>
+            ) : (
+              <p className="text-[11px] text-ink-soft">
+                {!ad.target
+                  ? "Reklama holati o‘qilmadi — baza migratsiyasi hali qo‘llanmagan bo‘lishi mumkin."
+                  : !ad.target.telegramAdEnabled
+                    ? "Bu post reklamasiz yuboriladi."
+                    : ad.options.length === 0
+                      ? "Faol bot reklamasi yo‘q — “Reklamalarni boshqarish” bo‘limida qo‘shing."
+                      : "Reklama qo‘shilmaydi."}
+              </p>
+            )}
+            {delivery.sent > 0 && ad.target?.telegramAdId ? (
+              <p className="text-[11px] text-ink-soft">
+                Post yuborilgan; o‘zgartirish faqat keyingi yuborishlarga ta’sir qiladi.
+              </p>
+            ) : null}
+          </div>
 
           {canPublish ? (
             <div className="mt-4 space-y-3 border-t border-line pt-3">

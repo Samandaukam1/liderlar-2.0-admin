@@ -38,6 +38,7 @@ import {
   ArrowDownUp,
   History,
   Ticket,
+  BadgePercent,
   type LucideIcon,
 } from "lucide-react";
 
@@ -101,6 +102,27 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: Megaphone,
         permission: "posts.view",
         keywords: "post studio telegram bot iqtibos shablon 1080 ijtimoiy tarmoq",
+      },
+    ],
+  },
+  {
+    /*
+     * Reklama — "Postlar" dan ALOHIDA guruh.
+     *
+     * Reklama postning o'zi emas: u har bir yuborilgan post captioniga
+     * (rasm ostidagi matnga) qo'shiladigan havola va biografik sahifa
+     * ustidagi bar. Uni Postlar ichiga qo'shish "bu ham post" degan
+     * noto'g'ri taassurot berardi. Yo'l `/elonlar` — reklama
+     * bloklovchilar "ads/reklama" so'zli yo'llarni to'sadi.
+     */
+    label: "Reklama",
+    items: [
+      {
+        label: "Reklamalarni boshqarish",
+        href: "/elonlar",
+        icon: BadgePercent,
+        permission: "ads.manage",
+        keywords: "reklama bot post caption biografiya bar havola ilova yuklab oling",
       },
     ],
   },
