@@ -144,7 +144,7 @@ export default async function MediaPage(props: {
                     <p className="truncate text-[11px] text-brand">{a.candidates.full_name}</p>
                   )}
                   {canDelete && (
-                    <div className="mt-1 flex justify-end opacity-0 transition group-hover:opacity-100">
+                    <div className="mt-2 flex justify-end">
                       <MediaDeleteButton id={a.id} fileName={a.file_name} />
                     </div>
                   )}

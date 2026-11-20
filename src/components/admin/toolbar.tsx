@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -27,22 +27,34 @@ export function DataTableToolbar({
   const [, startTransition] = useTransition();
   const paramQ = params.get("q") ?? "";
   const [q, setQ] = useState(paramQ);
-  const [seenParamQ, setSeenParamQ] = useState(paramQ);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Sync local input with external URL changes (back/forward, cleared filters)
-  // via the render-time "adjust state on prop change" pattern — no effect.
-  if (paramQ !== seenParamQ) {
-    setSeenParamQ(paramQ);
-    setQ(paramQ);
-  }
+  // Search navigations may finish after the user has already typed more.
+  // Only browser history navigation should replace the local draft.
+  useEffect(() => {
+    const restoreSearch = () => {
+      if (debounce.current) clearTimeout(debounce.current);
+      debounce.current = null;
+      setQ(new URLSearchParams(window.location.search).get("q") ?? "");
+    };
+    window.addEventListener("popstate", restoreSearch);
+    return () => {
+      window.removeEventListener("popstate", restoreSearch);
+      if (debounce.current) clearTimeout(debounce.current);
+    };
+  }, []);
 
   const apply = (key: string, value: string) => {
+    if (debounce.current) clearTimeout(debounce.current);
+    debounce.current = null;
     const sp = new URLSearchParams(params.toString());
+    // Include the latest draft when a filter is changed before debounce fires.
+    if (q) sp.set("q", q);
+    else sp.delete("q");
     if (value) sp.set(key, value);
     else sp.delete(key);
     sp.delete("page");
-    startTransition(() => router.replace(`${pathname}?${sp.toString()}`));
+    startTransition(() => router.replace(`${pathname}?${sp.toString()}`, { scroll: false }));
   };
 
   return (
