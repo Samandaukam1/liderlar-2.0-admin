@@ -25,7 +25,9 @@ export default async function ArticleDetailPage(props: {
   const article = data as unknown as Article;
 
   const [{ data: candidates }, { data: revisionRows }] = await Promise.all([
-    admin.from("candidates").select("id, full_name").is("deleted_at", null).order("full_name").limit(500),
+    article.candidate_id
+      ? admin.from("candidates").select("id, full_name").is("deleted_at", null).eq("id", article.candidate_id)
+      : Promise.resolve({ data: [] }),
     admin
       .from("article_revisions")
       .select("id, revision, created_at, is_autosave, profiles(full_name)")

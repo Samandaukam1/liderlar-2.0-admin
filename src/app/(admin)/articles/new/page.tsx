@@ -13,12 +13,13 @@ export default async function NewArticlePage(props: {
   const ctx = await requirePermission("articles.create");
   const { candidate } = await props.searchParams;
   const admin = createSupabaseAdminClient();
-  const { data: candidates } = await admin
-    .from("candidates")
-    .select("id, full_name")
-    .is("deleted_at", null)
-    .order("full_name")
-    .limit(500);
+  const { data: candidates } = candidate
+    ? await admin
+        .from("candidates")
+        .select("id, full_name")
+        .is("deleted_at", null)
+        .eq("id", candidate)
+    : { data: [] };
 
   return (
     <>
