@@ -59,8 +59,16 @@ export function MediaDeleteButton({ id, fileName }: { id: string; fileName: stri
 
   return (
     <>
-      <Button variant="ghost" size="sm" className="text-coral hover:bg-coral/10" onClick={() => setConfirm(true)}>
-        <Trash2 className="h-4 w-4" />
+      <Button
+        variant="ghost"
+        size="sm"
+        className="min-h-11 text-coral hover:bg-coral/10"
+        aria-label={`${fileName} faylini o‘chirish`}
+        disabled={pending}
+        onClick={() => setConfirm(true)}
+      >
+        <Trash2 className="h-4 w-4" aria-hidden="true" />
+        O‘chirish
       </Button>
       <ConfirmDialog
         open={confirm}

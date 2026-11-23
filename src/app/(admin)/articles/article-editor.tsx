@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   CheckCircle2,
   CloudUpload,
+  Copy,
   Eye,
   History,
   Monitor,
@@ -14,7 +15,8 @@ import {
   Smartphone,
   UploadCloud,
 } from "lucide-react";
-import { Button, FormField, Input, Select, Textarea } from "@/components/ui/primitives";
+import { Button, FormField, Input, Textarea } from "@/components/ui/primitives";
+import { ArticleCandidatePicker, type ArticleCandidate } from "./candidate-picker";
 import { Drawer, ConfirmDialog } from "@/components/ui/overlays";
 import { useToast } from "@/components/ui/toast";
 import { AIImprovePanel } from "@/components/admin/ai-panel";
@@ -60,6 +62,7 @@ export function ArticleEditor({
   canPublish,
   canUseAI,
   initialCandidateId,
+  publicSiteUrl,
 }: {
   article: Article | null;
   candidates: Array<{ id: string; full_name: string }>;
@@ -69,6 +72,7 @@ export function ArticleEditor({
   canPublish: boolean;
   canUseAI: boolean;
   initialCandidateId?: string;
+  publicSiteUrl: string;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -79,6 +83,9 @@ export function ArticleEditor({
   const [uploading, setUploading] = useState(false);
   const [saveState, setSaveState] = useState<"saved" | "dirty" | "saving">("saved");
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [selectedCandidate, setSelectedCandidate] = useState<ArticleCandidate | null>(
+    () => candidates.find((c) => c.id === (article?.candidate_id ?? initialCandidateId)) ?? null,
+  );
 
   const [fields, setFields] = useState<Fields>({
     title: article?.title ?? "",
@@ -175,7 +182,9 @@ export function ArticleEditor({
     () => fields.content.split(/\n{2,}/).filter((p) => p.trim()),
     [fields.content],
   );
-  const candidateName = candidates.find((c) => c.id === fields.candidate_id)?.full_name;
+  const candidateName = selectedCandidate?.full_name;
+  const articleSlug = fields.slug.trim() || slugify(fields.title);
+  const publicArticleUrl = `${publicSiteUrl}/maqola/${encodeURIComponent(articleSlug)}`;
 
   const previewBody = (
     <article className={cn("mx-auto bg-card", mode === "mobile" ? "max-w-[380px] rounded-[28px] border-4 border-navy-deep/80 p-5" : "max-w-2xl p-2")}>
@@ -335,8 +344,29 @@ export function ArticleEditor({
               <FormField label="Subtitr" htmlFor="a-subtitle">
                 <Input id="a-subtitle" value={fields.subtitle} onChange={(e) => set("subtitle")(e.target.value)} disabled={!canEdit} />
               </FormField>
-              <FormField label="Slug" htmlFor="a-slug" hint={`liderlar.uz/maqola/${fields.slug || slugify(fields.title)}`}>
+              <FormField label="Slug" htmlFor="a-slug">
                 <Input id="a-slug" value={fields.slug} onChange={(e) => set("slug")(e.target.value)} disabled={!canEdit} />
+                <div className="mt-1 flex items-center gap-2">
+                  <a href={publicArticleUrl} target="_blank" rel="noreferrer" className="min-w-0 flex-1 break-all text-xs text-brand hover:underline">
+                    {publicArticleUrl}
+                  </a>
+                  <button
+                    type="button"
+                    className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-bold text-brand hover:bg-brand/8 disabled:opacity-50"
+                    disabled={!articleSlug}
+                    aria-label="Maqola havolasini nusxalash"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(publicArticleUrl);
+                        toast("success", "Havola nusxalandi");
+                      } catch {
+                        toast("error", "Nusxalab bo‘lmadi", "Havolani belgilab, qo‘lda nusxalang.");
+                      }
+                    }}
+                  >
+                    <Copy className="h-3.5 w-3.5" aria-hidden="true" /> Nusxa olish
+                  </button>
+                </div>
               </FormField>
             </div>
             <FormField label="Qisqacha (excerpt)" htmlFor="a-excerpt" hint="Quote card va ro‘yxatlarda ko‘rinadi">
@@ -402,14 +432,14 @@ export function ArticleEditor({
             <div className="rounded-card border border-line bg-card p-5 shadow-card">
               <h3 className="mb-3 text-sm font-bold text-ink">Bog‘lanish</h3>
               <FormField label="Nomzod" htmlFor="a-candidate">
-                <Select id="a-candidate" value={fields.candidate_id} onChange={(e) => set("candidate_id")(e.target.value)} disabled={!canEdit}>
-                  <option value="">Bog‘lanmagan</option>
-                  {candidates.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.full_name}
-                    </option>
-                  ))}
-                </Select>
+                <ArticleCandidatePicker
+                  selected={selectedCandidate}
+                  disabled={!canEdit}
+                  onChange={(candidate) => {
+                    setSelectedCandidate(candidate);
+                    set("candidate_id")(candidate?.id ?? "");
+                  }}
+                />
               </FormField>
               <FormField label="Rejalashtirilgan nashr vaqti" htmlFor="a-scheduled" className="mt-3">
                 <Input id="a-scheduled" type="datetime-local" value={fields.scheduled_at} onChange={(e) => set("scheduled_at")(e.target.value)} disabled={!canEdit} />

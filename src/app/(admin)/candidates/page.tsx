@@ -3,6 +3,7 @@ import { Plus, Users } from "lucide-react";
 import { requirePermission } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { parseListParams, listRange, PAGE_SIZE } from "@/lib/list";
+import { findCandidateSearchPage } from "@/lib/candidate-script-search";
 import type { Candidate, Category, Region } from "@/lib/types";
 import { PageHeader } from "@/components/admin/page-header";
 import { DataTable, Pagination, type Column } from "@/components/admin/data-table";
@@ -35,11 +36,21 @@ export default async function CandidatesPage(props: {
   }
   if (filters.region) query = query.eq("region_id", filters.region);
   if (filters.category) query = query.eq("category_id", filters.category);
-  if (q) query = query.or(`full_name.ilike.%${q}%,slug.ilike.%${q}%`);
 
   const [from, to] = listRange(page);
+  const loadRows = async () => {
+    if (!q) return query.range(from, to);
+    try {
+      const matches = await findCandidateSearchPage(admin, q, filters, page);
+      if (matches.ids.length === 0) return { data: [], count: matches.total, error: null };
+      const result = await query.in("id", matches.ids).order("id", { ascending: false });
+      return { ...result, count: matches.total };
+    } catch (error) {
+      return { data: [], count: 0, error: { message: error instanceof Error ? error.message : "Qidiruvda xatolik" } };
+    }
+  };
   const [{ data, count, error }, { data: regions }, { data: categories }] = await Promise.all([
-    query.range(from, to),
+    loadRows(),
     admin.from("regions").select("id, name").order("sort_order"),
     admin.from("categories").select("id, name").order("sort_order"),
   ]);

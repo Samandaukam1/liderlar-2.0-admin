@@ -33,7 +33,8 @@ import {
   saveCandidatePromptAction,
   structureCandidateWithAiAction,
 } from "@/lib/actions/candidate-editor";
-import { parseCandidateText, splitPipeValues, stripCandidateMarkers, type CandidateParseResult } from "@/lib/candidates/parser";
+import { parseCandidateText, stripCandidateMarkers, type CandidateParseResult } from "@/lib/candidates/parser";
+import { PipeValuesField } from "./pipe-values-field";
 import { serializeCandidateData } from "@/lib/candidates/serializer";
 import type { CandidateSection, CandidateStructuredData } from "@/lib/candidates/schema";
 import { slugify } from "@/lib/utils";
@@ -345,14 +346,13 @@ export function CandidateEditor({
             <FormField label="Rasm URL" htmlFor="candidate-photo"><Input id="candidate-photo" value={data.profilePhoto} onChange={(event) => update("profilePhoto", event.target.value)} placeholder="https://…" /></FormField>
             <FormField label="Ism-familiyasi" htmlFor="candidate-name"><Input id="candidate-name" value={data.fullName} onChange={(event) => update("fullName", event.target.value)} /></FormField>
             <FormField label="Slug" htmlFor="candidate-slug" hint={`liderlar.uz/liderlar/${data.slug || slugify(data.fullName)}`}><Input id="candidate-slug" value={data.slug} onChange={(event) => update("slug", event.target.value)} placeholder="Ismdan avtomatik" /></FormField>
-            <FormField label="Qisqa tavsif" htmlFor="candidate-description" hint="Elementlarni | belgisi bilan ajrating"><Textarea id="candidate-description" rows={2} value={data.descriptionItems.join(" | ")} onChange={(event) => update("descriptionItems", splitPipeValues(event.target.value))} placeholder="Hamshira | Volontyor | Yoshlar faoli" /></FormField>
-            <div className="flex flex-wrap gap-1.5" aria-label="Tavsif elementlari">{data.descriptionItems.map((item) => <span key={item} className="rounded-full bg-brand/8 px-2.5 py-1 text-xs font-semibold text-brand">{item}</span>)}</div>
+            <PipeValuesField id="candidate-description" label="Qisqa tavsif" hint="Elementlarni | belgisi bilan ajrating" values={data.descriptionItems} onChange={(values) => update("descriptionItems", values)} placeholder="Hamshira | Volontyor | Yoshlar faoli" multiline />
             <FormField label="Tug‘ilgan yili" htmlFor="candidate-birth-year"><Input id="candidate-birth-year" value={data.birthYear} onChange={(event) => update("birthYear", event.target.value)} placeholder="2006-yil 1-noyabr" /></FormField>
             <FormField label="Tug‘ilgan joyi" htmlFor="candidate-birth-place"><Input id="candidate-birth-place" value={data.birthPlace} onChange={(event) => update("birthPlace", event.target.value)} /></FormField>
             <FormField label="Hozirda yashash hududi" htmlFor="candidate-location"><Input id="candidate-location" value={data.currentLocation} onChange={(event) => update("currentLocation", event.target.value)} /></FormField>
             <FormField label="Ta’limi" htmlFor="candidate-education"><Textarea id="candidate-education" rows={3} value={data.education} onChange={(event) => update("education", event.target.value)} /></FormField>
             <FormField label="Faoliyat sohasi" htmlFor="candidate-activity"><Textarea id="candidate-activity" rows={2} value={data.activityField} onChange={(event) => update("activityField", event.target.value)} /></FormField>
-            <FormField label="Tillar" htmlFor="candidate-languages" hint="Tillarni | belgisi bilan ajrating"><Input id="candidate-languages" value={data.languages.join(" | ")} onChange={(event) => update("languages", splitPipeValues(event.target.value))} placeholder="O‘zbek tili | Ingliz tili" /></FormField>
+            <PipeValuesField id="candidate-languages" label="Tillar" hint="Tillarni | belgisi bilan ajrating" values={data.languages} onChange={(values) => update("languages", values)} placeholder="O‘zbek tili | Ingliz tili" />
 
             <div className="border-t border-line pt-4">
               <div className="mb-3 flex items-center justify-between gap-3">

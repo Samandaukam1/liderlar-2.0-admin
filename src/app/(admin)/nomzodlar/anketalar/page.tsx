@@ -9,6 +9,8 @@ import { StatusBadge, Badge, Avatar } from "@/components/admin/badges";
 import { EmptyState } from "@/components/ui/feedback";
 import { cn, timeAgo, daysUntil } from "@/lib/utils";
 import { INTAKE_TABS } from "@/lib/intake/constants";
+import { DataTableToolbar } from "@/components/admin/toolbar";
+import { findScriptSearchMatches } from "@/lib/candidate-script-search";
 
 export const metadata = { title: "Nomzod anketalari" };
 export const dynamic = "force-dynamic";
@@ -46,10 +48,29 @@ export default async function IntakesPipelinePage(props: {
   if (tab.status) {
     query = Array.isArray(tab.status) ? query.in("status", tab.status) : query.eq("status", tab.status);
   }
-  if (q) query = query.ilike("full_name", `%${q}%`);
 
   const [from, to] = listRange(page);
-  const { data, count, error } = await query.range(from, to);
+  const loadRows = async () => {
+    if (!q) return query.range(from, to);
+    try {
+      const matches = await findScriptSearchMatches(q, (offset, end) => {
+        let request = admin.from("candidate_intakes")
+          .select("id,full_name", offset === 0 ? { count: "exact" } : {})
+          .is("deleted_at", null)
+          .order("updated_at", { ascending: false }).order("id", { ascending: false });
+        if (tab.method) request = request.eq("intake_method", tab.method);
+        if (tab.status) request = Array.isArray(tab.status) ? request.in("status", tab.status) : request.eq("status", tab.status);
+        return request.range(offset, end);
+      });
+      const ids = matches.slice(from, to + 1).map((row) => row.id);
+      if (!ids.length) return { data: [], count: matches.length, error: null };
+      const result = await query.in("id", ids).order("id", { ascending: false });
+      return { ...result, count: matches.length };
+    } catch (error) {
+      return { data: [], count: 0, error: { message: error instanceof Error ? error.message : "Qidiruvda xatolik" } };
+    }
+  };
+  const { data, count, error } = await loadRows();
   let rows = (data ?? []) as IntakeRow[];
 
   // Progress + link expiry for the visible rows (one query each).
@@ -198,15 +219,7 @@ export default async function IntakesPipelinePage(props: {
       </div>
 
       {/* Search */}
-      <form className="mb-4" action="/nomzodlar/anketalar" method="get">
-        <input type="hidden" name="tab" value={tab.key} />
-        <input
-          name="q"
-          defaultValue={q}
-          placeholder="Ism bo‘yicha qidirish…"
-          className="h-10 w-full max-w-sm rounded-[14px] border border-line bg-card px-3.5 text-sm text-ink placeholder:text-ink-soft/60 focus:border-brand/60 focus:outline-2 focus:outline-brand/25"
-        />
-      </form>
+      <DataTableToolbar key={tab.key} searchPlaceholder="Ism bo‘yicha qidirish…" />
 
       <DataTable
         columns={columns}

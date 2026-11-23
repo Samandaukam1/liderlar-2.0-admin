@@ -3,6 +3,7 @@ import { hasPermission } from "@/lib/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { PageHeader } from "@/components/admin/page-header";
 import { ArticleEditor } from "../article-editor";
+import { resolvePublicWebUrl } from "@/lib/post-studio/site-origin";
 
 export const metadata = { title: "Yangi maqola" };
 export const dynamic = "force-dynamic";
@@ -13,12 +14,12 @@ export default async function NewArticlePage(props: {
   const ctx = await requirePermission("articles.create");
   const { candidate } = await props.searchParams;
   const admin = createSupabaseAdminClient();
-  const { data: candidates } = await admin
-    .from("candidates")
-    .select("id, full_name")
-    .is("deleted_at", null)
-    .order("full_name")
-    .limit(500);
+  const [{ data: candidates }, publicSiteUrl] = await Promise.all([
+    candidate
+      ? admin.from("candidates").select("id, full_name").is("deleted_at", null).eq("id", candidate)
+      : { data: [] },
+    resolvePublicWebUrl(),
+  ]);
 
   return (
     <>
@@ -28,6 +29,7 @@ export default async function NewArticlePage(props: {
       />
       <ArticleEditor
         article={null}
+        publicSiteUrl={publicSiteUrl}
         initialCandidateId={candidate}
         candidates={candidates ?? []}
         revisions={[]}
