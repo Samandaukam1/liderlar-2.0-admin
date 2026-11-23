@@ -11,7 +11,7 @@ import { buildCandidateArticleUrl } from "./site-origin.ts";
 import { pickQuote, rankQuoteCandidates, type QuoteCandidate } from "./quote-source.ts";
 import { generateFallbackQuote, type FallbackQuoteResult } from "./quote-fallback.ts";
 import { splitNameIntoLines } from "./name-lines.ts";
-import { candidateSearchPatterns } from "./candidate-search.ts";
+import { findMatchingCandidates, findScriptSearchMatches } from "../candidate-script-search.ts";
 import { DEFAULT_POST_TEMPLATE_ID, pickTemplateForCandidate } from "./layout-config.ts";
 import {
   DEFAULT_PORTRAIT_TRANSFORM,
@@ -587,12 +587,31 @@ export async function listPosts(options: {
       `${LIST_COLUMNS}, candidates!inner(full_name, slug, avatar_url), articles(title)`,
       { count: "exact" },
     )
-    .order("created_at", { ascending: false })
-    .range(from, from + options.pageSize - 1);
+    .order("created_at", { ascending: false });
 
   if (options.status) query = query.eq("status", options.status);
+  let searchTotal: number | null = null;
   if (options.search?.trim()) {
-    query = query.ilike("candidates.full_name", `%${options.search.trim()}%`);
+    const matches = await findScriptSearchMatches(options.search, async (offset, to) => {
+      let request = db.from("candidate_social_posts")
+        .select("id,candidates!inner(full_name,slug)", offset === 0 ? { count: "exact" } : {})
+        .order("created_at", { ascending: false }).order("id", { ascending: false });
+      if (options.status) request = request.eq("status", options.status);
+      const result = await request.range(offset, to);
+      return {
+        ...result,
+        data: (result.data ?? []).map((row) => {
+          const candidate = (row as unknown as Row).candidates as Row;
+          return { id: row.id as string, full_name: (candidate.full_name as string) ?? "", slug: (candidate.slug as string) ?? "" };
+        }),
+      };
+    });
+    searchTotal = matches.length;
+    const ids = matches.slice(from, from + options.pageSize).map((row) => row.id);
+    if (ids.length === 0) return { items: [], total: searchTotal };
+    query = query.in("id", ids).order("id", { ascending: false });
+  } else {
+    query = query.range(from, from + options.pageSize - 1);
   }
 
   const { data, count, error } = await query;
@@ -611,7 +630,7 @@ export async function listPosts(options: {
     } as PostListItem;
   });
 
-  return { items, total: count ?? 0 };
+  return { items, total: searchTotal ?? count ?? 0 };
 }
 
 export interface CandidateOption {
@@ -625,21 +644,9 @@ export interface CandidateOption {
  * silently left everyone past the cap unreachable.
  */
 export async function searchCandidatesForPost(query: string, limit = 20): Promise<CandidateOption[]> {
-  const patterns = candidateSearchPatterns(query);
-  if (patterns.length === 0) return [];
-
-  const db = createSupabaseAdminClient();
-  let request = db
-    .from("candidates")
-    .select("id, full_name")
-    .is("deleted_at", null)
-    .order("full_name")
-    .limit(limit);
-  for (const pattern of patterns) request = request.ilike("full_name", pattern);
-
-  const { data, error } = await request;
-  if (error) throw new Error(`Nomzodlarni qidirishda xatolik: ${error.message}`);
-  return (data ?? []).map((row) => ({ id: row.id as string, fullName: row.full_name as string }));
+  if (!query.trim() || !/[\p{L}\p{N}]/u.test(query)) return [];
+  const matches = await findMatchingCandidates(createSupabaseAdminClient(), query, {}, "full_name");
+  return matches.slice(0, limit).map((row) => ({ id: row.id, fullName: row.full_name }));
 }
 
 export interface CreatePostInput {

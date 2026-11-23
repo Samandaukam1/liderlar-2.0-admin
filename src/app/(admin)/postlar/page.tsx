@@ -96,7 +96,7 @@ export default async function PostlarPage({
         ))}
       </section>
 
-      <PostListFilters status={params.status ?? ""} query={params.q ?? ""} />
+      <PostListFilters />
 
       {items.length === 0 ? (
         <EmptyState

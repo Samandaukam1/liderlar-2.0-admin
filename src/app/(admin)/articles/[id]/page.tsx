@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/admin/page-header";
 import { ArticleEditor, type RevisionSummary } from "../article-editor";
 import type { Article } from "@/lib/types";
 import { truncate } from "@/lib/utils";
+import { resolvePublicWebUrl } from "@/lib/post-studio/site-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,7 @@ export default async function ArticleDetailPage(props: {
   if (!data) notFound();
   const article = data as unknown as Article;
 
-  const [{ data: candidates }, { data: revisionRows }] = await Promise.all([
+  const [{ data: candidates }, { data: revisionRows }, publicSiteUrl] = await Promise.all([
     article.candidate_id
       ? admin.from("candidates").select("id, full_name").is("deleted_at", null).eq("id", article.candidate_id)
       : Promise.resolve({ data: [] }),
@@ -34,6 +35,7 @@ export default async function ArticleDetailPage(props: {
       .eq("article_id", id)
       .order("revision", { ascending: false })
       .limit(30),
+    resolvePublicWebUrl(),
   ]);
 
   const revisions: RevisionSummary[] = (
@@ -63,6 +65,7 @@ export default async function ArticleDetailPage(props: {
       />
       <ArticleEditor
         article={article}
+        publicSiteUrl={publicSiteUrl}
         candidates={candidates ?? []}
         revisions={revisions}
         canEdit={hasPermission(ctx.roles, "articles.edit")}

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { candidateMatchesSearch, findCandidateSearchPage } from "../src/lib/candidate-script-search.ts";
+import { candidateMatchesSearch, findCandidateSearchPage, findScriptSearchMatches } from "../src/lib/candidate-script-search.ts";
 
 const row = (id: string, full_name: string, slug = "profile-" + id) => ({ id, full_name, slug });
 
@@ -62,4 +62,15 @@ test("archived filter retains existing deletion semantics; database errors do no
   await findCandidateSearchPage(admin, "Nurmuhammad", { status: "archived" }, 1);
   for (const call of calls) assert.deepEqual(call.filters, [["eq", "status", "archived"]]);
   await assert.rejects(findCandidateSearchPage(mockDatabase(500).admin, "Nurmuhammad", {}, 1), /database unavailable/);
+});
+
+test("intakes without slugs and multiple posts by one candidate retain their own IDs", async () => {
+  const records = [
+    { id: "post-1", full_name: "Ғулом Каримов" },
+    { id: "post-2", full_name: "Ғулом Каримов" },
+    { id: "intake-1", full_name: "G‘ulom Aliyev" },
+    { id: "other", full_name: "Zulfiya" },
+  ];
+  const result = await findScriptSearchMatches("G'ulom", async () => ({ data: records, count: records.length, error: null }));
+  assert.deepEqual(result.map((record) => record.id), ["post-1", "post-2", "intake-1"]);
 });
