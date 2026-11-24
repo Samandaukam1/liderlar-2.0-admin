@@ -307,34 +307,22 @@ test("abbreviations, decimals and a missing final stop do not create sentences",
   assert.deepEqual(splitSentences("   "), []);
 });
 
-test("one sentence is used when it fills the column, two when it does not", () => {
-  const probe = (fill: number) => () => ({ fontSize: 40, height: fill, overflow: false });
-  const options = { boxHeight: 100, minFillRatio: 0.62, comfortFontSize: 30 };
-
-  const full = selectDisplayQuote("Birinchi gap. Ikkinchi gap.", { ...options, probe: probe(80) });
-  assert.equal(full.sentenceCount, 1);
-  assert.equal(full.reason, "single");
-
-  const sparse = selectDisplayQuote("Birinchi gap. Ikkinchi gap.", { ...options, probe: probe(30) });
-  assert.equal(sparse.sentenceCount, 2);
-  assert.equal(sparse.text, "Birinchi gap. Ikkinchi gap.");
+test("every sentence is retained regardless of punctuation", () => {
+  const text = "Birinchi gap. Ikkinchi gap! Uchinchi gap? To‘rtinchi gap.";
+  const choice = selectDisplayQuote(text);
+  assert.equal(choice.text, text);
+  assert.equal(choice.sentenceCount, 4);
+  assert.equal(choice.availableSentences, 4);
+  assert.equal(choice.reason, "full");
 });
 
-test("a second sentence is refused when it would crush the type", () => {
-  const choice = selectDisplayQuote("Qisqa gap. Juda uzun ikkinchi gap.", {
-    boxHeight: 100,
-    minFillRatio: 0.62,
-    comfortFontSize: 30,
-    probe: (text) =>
-      text.includes("ikkinchi")
-        ? { fontSize: 22, height: 95, overflow: false }
-        : { fontSize: 60, height: 30, overflow: false },
-  });
-  assert.equal(choice.sentenceCount, 1);
-  assert.equal(choice.reason, "extension-too-small");
+test("normalizing whitespace never removes words or punctuation", () => {
+  assert.equal(selectDisplayQuote("  Birinchi gap.\n  Ikkinchi gap. ").text, "Birinchi gap. Ikkinchi gap.");
+  assert.equal(selectDisplayQuote("Nuqtasiz iqtibos").text, "Nuqtasiz iqtibos");
+  assert.equal(selectDisplayQuote("").sentenceCount, 0);
 });
 
-test("the real Kamola answer yields one whole sentence, never a fragment", () => {
+test("the real Kamola answer keeps both sentences", () => {
   const raw =
     "O‘zingizga ishoning, bilim olishdan to‘xtamang va imkoniyatni kutmang — uni o‘zingiz yarating. " +
     "Bugungi mehnatingiz ertangi muvaffaqiyatingizning poydevoridir.";
@@ -350,11 +338,8 @@ test("the real Kamola answer yields one whole sentence, never a fragment", () =>
   });
 
   assert.equal(layout.quoteSelection.availableSentences, 2);
-  assert.equal(layout.quoteSelection.sentenceCount, 1);
-  assert.equal(
-    layout.quoteSelection.text,
-    "O‘zingizga ishoning, bilim olishdan to‘xtamang va imkoniyatni kutmang — uni o‘zingiz yarating.",
-  );
+  assert.equal(layout.quoteSelection.sentenceCount, 2);
+  assert.equal(layout.quoteSelection.text, raw);
   assert.ok(!layout.quoteSelection.text.includes("…"));
   assert.equal(layout.quote.overflow, false);
   assert.equal(layout.warnings.length, 0);

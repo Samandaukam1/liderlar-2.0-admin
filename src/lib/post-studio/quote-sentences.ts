@@ -1,15 +1,10 @@
 /**
- * Turning the candidate's raw 15th-answer into the line the poster prints.
- *
- * The answer is prose — often four or five sentences of advice — and the raw
- * text stays in the database untouched. What the poster needs is one complete
- * thought, so this picks the first sentence, or the first two when one alone
- * would leave the quote box half empty.
- *
- * Two rules are absolute: the poster never shows a fragment of a sentence, and
- * it never shows an ellipsis. Shrinking the type or taking one sentence instead
- * of two is always preferred to cutting a candidate off mid-thought.
+ * Preserve the entire quote for the poster. Sentence boundaries are only
+ * diagnostic; they must never remove text. The layout engine fits the full
+ * text and flags oversized quotes for review instead of silently shortening.
  */
+
+export const POST_QUOTE_MAX_CHARACTERS = 500;
 
 /** Characters that can end a sentence, plus the closers that may follow one. */
 const TERMINATORS = ".!?…";
@@ -83,80 +78,25 @@ export function splitSentences(raw: string): string[] {
   return sentences;
 }
 
-export interface QuoteFitProbe {
-  /** Largest font size the text fits at, from the real layout engine. */
-  fontSize: number;
-  /** Laid-out height in the same units as the quote box. */
-  height: number;
-  /** True when even the minimum size could not contain it. */
-  overflow: boolean;
-}
-
 export interface DisplayQuoteChoice {
-  /** The text the poster prints — always whole sentences. */
+  /** Full text, with transport whitespace normalized only. */
   text: string;
   /** How many sentences it uses. */
   sentenceCount: number;
   /** Sentences the raw answer contained. */
   availableSentences: number;
   /** Why this choice was made, for the studio log. */
-  reason: "single" | "only-sentence" | "extended" | "extension-too-small" | "raw";
+  reason: "full" | "raw";
 }
 
-export interface DisplayQuoteOptions {
-  /** Measures a candidate with the real font metrics and the real box. */
-  probe: (text: string) => QuoteFitProbe;
-  /** Height of the quote box, to judge how full one sentence leaves it. */
-  boxHeight: number;
-  /** Below this fill ratio a second sentence is worth trying. */
-  minFillRatio: number;
-  /** A second sentence is only taken if it still sets at least this large. */
-  comfortFontSize: number;
-}
-
-/**
- * Chooses the display quote.
- *
- * The decision is made with real text measurement, not a character count: the
- * same engine that lays the quote out reports what each candidate would
- * actually render at, so "does one sentence look lost in the box" is answered
- * by geometry rather than by a guess about average word length.
- */
-export function selectDisplayQuote(
-  raw: string,
-  options: DisplayQuoteOptions,
-): DisplayQuoteChoice {
-  const sentences = splitSentences(raw);
-  if (sentences.length === 0) {
-    return { text: "", sentenceCount: 0, availableSentences: 0, reason: "raw" };
-  }
-
-  const first = sentences[0];
-  if (sentences.length === 1) {
-    return { text: first, sentenceCount: 1, availableSentences: 1, reason: "only-sentence" };
-  }
-
-  const firstFit = options.probe(first);
-  const fill = options.boxHeight > 0 ? firstFit.height / options.boxHeight : 1;
-  if (!firstFit.overflow && fill >= options.minFillRatio) {
-    return { text: first, sentenceCount: 1, availableSentences: sentences.length, reason: "single" };
-  }
-
-  const extended = `${first} ${sentences[1]}`;
-  const extendedFit = options.probe(extended);
-  if (!extendedFit.overflow && extendedFit.fontSize >= options.comfortFontSize) {
-    return {
-      text: extended,
-      sentenceCount: 2,
-      availableSentences: sentences.length,
-      reason: "extended",
-    };
-  }
-
+/** The length limit marks review; it never slices the original text. */
+export function selectDisplayQuote(raw: string): DisplayQuoteChoice {
+  const text = (raw ?? "").replace(/\s+/g, " ").trim();
+  const count = splitSentences(text).length;
   return {
-    text: first,
-    sentenceCount: 1,
-    availableSentences: sentences.length,
-    reason: "extension-too-small",
+    text,
+    sentenceCount: count,
+    availableSentences: count,
+    reason: text ? "full" : "raw",
   };
 }

@@ -3,6 +3,7 @@
 import { useState, type ChangeEvent } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { FormField, Input, Textarea } from "@/components/ui/primitives";
+import { ConfirmDialog } from "@/components/ui/overlays";
 import { splitPipeValues } from "@/lib/candidates/parser";
 
 interface FieldDraft {
@@ -42,6 +43,11 @@ export function PipeValuesField({
 }) {
   const valuesKey = JSON.stringify(values);
   const [draft, setDraft] = useState(() => makeDraft(values));
+  const [pendingDelete, setPendingDelete] = useState<{ id: number; items: FieldDraft["items"] } | null>(null);
+  // A replaced/edited list must never confirm removal of a different item.
+  const deleteTarget = pendingDelete?.items === draft.items
+    ? draft.items.find((item) => item.id === pendingDelete.id)
+    : undefined;
 
   // AI/parsing can replace these values. Our own updates already carry the
   // same key, so ordinary typing keeps spaces, delimiters and the caret intact.
@@ -101,7 +107,7 @@ export function PipeValuesField({
                 type="button"
                 className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-coral hover:bg-coral/10 focus-visible:outline-2 focus-visible:outline-coral"
                 aria-label={`${item.text || `${index + 1}-element`} — o‘chirish`}
-                onClick={() => changeItems(draft.items.filter((row) => row.id !== item.id))}
+                onClick={() => setPendingDelete({ id: item.id, items: draft.items })}
               >
                 <Trash2 className="h-3.5 w-3.5" aria-hidden="true" /> O‘chirish
               </button>
@@ -117,6 +123,19 @@ export function PipeValuesField({
       >
         <Plus className="h-4 w-4" aria-hidden="true" /> Qo‘shish
       </button>
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onClose={() => setPendingDelete(null)}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          changeItems(draft.items.filter((row) => row.id !== deleteTarget.id));
+          setPendingDelete(null);
+        }}
+        title={`${label}: elementni o‘chirish`}
+        description={`“${deleteTarget?.text.trim() || "Bo‘sh element"}” o‘chirilsinmi?`}
+        confirmLabel="Ha, o‘chirish"
+        danger
+      />
     </div>
   );
 }

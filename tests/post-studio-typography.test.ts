@@ -27,6 +27,7 @@ import {
 } from "../src/lib/post-studio/text-engine.ts";
 import { splitNameIntoLines, tokenizeFullName } from "../src/lib/post-studio/name-lines.ts";
 import { findQuoteSplitWordIndex } from "../src/lib/post-studio/quote-split.ts";
+import { POST_QUOTE_MAX_CHARACTERS } from "../src/lib/post-studio/quote-sentences.ts";
 import { buildPostLayout } from "../src/lib/post-studio/compose.ts";
 import { escapeXml, buildOverlaySvgBody } from "../src/lib/post-studio/svg.ts";
 import { POST_FONT_STACKS, fontFamilyAttr } from "../src/lib/post-studio/font-stacks.ts";
@@ -318,32 +319,27 @@ test("a longer sentence is rendered at a strictly smaller font size", () => {
   }
 });
 
-test("a multi-sentence answer is shortened, not shrunk", () => {
+test("a multi-sentence answer is fitted in full, not shortened", () => {
   const medium = quoteLayout(
     "O‘z qiziqishlari va imkoniyatlarini qidirlash, bilim olishdan hamda yangi narsalarni sinab ko‘rishdan qo‘rqmaslik kerak.",
   );
-  // Four sentences: the old engine set all of them at the minimum size.
-  const long = quoteLayout(
-    "Nima bo‘lishidan qat’i nazar, orzular tomon yurish shart. Zero, vaqt o‘tib ketadi, orzu esa ro‘yobini topib, insonga baxt berishi lozim. Shunchaki yashashdan nima ma’no? Har kuni bir qadam oldinga tashlash kerak.",
-  );
+  const raw = "Nima bo‘lishidan qat’i nazar, orzular tomon yurish shart. Zero, vaqt o‘tib ketadi, orzu esa ro‘yobini topib, insonga baxt berishi lozim. Shunchaki yashashdan nima ma’no? Har kuni bir qadam oldinga tashlash kerak.";
+  const long = quoteLayout(raw);
 
   assert.equal(long.quoteSelection.availableSentences, 4);
-  assert.equal(long.quoteSelection.sentenceCount, 1);
-  assert.equal(long.quoteSelection.text, "Nima bo‘lishidan qat’i nazar, orzular tomon yurish shart.");
-  assert.ok(
-    long.quote.fontSize >= medium.quote.fontSize,
-    `a long answer no longer shrinks the type (${long.quote.fontSize} vs ${medium.quote.fontSize})`,
-  );
+  assert.equal(long.quoteSelection.sentenceCount, 4);
+  assert.equal(long.quoteSelection.text, raw);
+  assert.ok(long.quote.fontSize <= medium.quote.fontSize);
   assert.equal(long.quote.overflow, false);
 });
 
-test("a short opening sentence pulls in the second one to fill the column", () => {
+test("both sentences remain on the poster", () => {
   const layout = quoteLayout(
     "O‘zingizga ishoning. Bilim olishdan to‘xtamang va har bir imkoniyatdan foydalaning.",
   );
 
   assert.equal(layout.quoteSelection.sentenceCount, 2);
-  assert.equal(layout.quoteSelection.reason, "extended");
+  assert.equal(layout.quoteSelection.reason, "full");
   assert.equal(
     layout.quoteSelection.text,
     "O‘zingizga ishoning. Bilim olishdan to‘xtamang va har bir imkoniyatdan foydalaning.",
@@ -359,9 +355,8 @@ test("the poster never truncates a sentence or prints an ellipsis", () => {
 
   assert.ok(!layout.quoteSelection.text.includes("…"));
   assert.ok(!layout.quoteSelection.text.includes("..."));
-  assert.ok(layout.quoteSelection.sentenceCount <= 2, "at most two sentences reach the poster");
-  // Whatever was chosen is a prefix of the raw answer and ends on real punctuation.
-  assert.ok(raw.startsWith(layout.quoteSelection.text));
+  assert.equal(layout.quoteSelection.sentenceCount, 3);
+  assert.equal(layout.quoteSelection.text, raw);
   assert.match(layout.quoteSelection.text, /[.!?…]$/);
 });
 
@@ -378,6 +373,41 @@ test("a quote that cannot fit even at the minimum size flags needs_review and is
   const rendered = layout.quote.lines.map((l) => l.text).join(" ");
   assert.equal(rendered.split(/\s+/).length, enormous.split(/\s+/).length);
   assert.ok(!rendered.includes("…"));
+});
+
+test("the requested quote fits all six templates with periods as well as commas", () => {
+  const comma = "Katta maqsadlardan qo‘rqmayman, ularga erishish uchun bugundan harakatni boshlayman, Bilimga sarmoya kiritaman, chunki haqiqiy imkoniyatlar izlanishdan boshlanadi.";
+  const period = comma.replace("boshlayman, Bilimga", "boshlayman. Bilimga");
+  for (const templateId of POST_TEMPLATE_IDS) {
+    for (const quote of [comma, period]) {
+      const layout = buildPostLayout({ templateId, quote, nameLines: ["ISM", "FAMILIYA"], shortBioItems: ["Talaba"], portraitHref: "data:image/png;base64,AA==", portraitTransform: { offsetX: 0, offsetY: 0, scale: 1, flip: false } });
+      assert.equal(layout.quoteSelection.text, quote);
+      assert.equal(layout.quote.overflow, false);
+      assert.equal(layout.needsReview, false);
+    }
+  }
+});
+
+test("the 500-character review limit never silently truncates a quote", () => {
+  assert.equal(POST_QUOTE_MAX_CHARACTERS, 500);
+  const exact = "i ".repeat(249) + "ii";
+  const excessive = exact + "i";
+  const atLimit = quoteLayout(exact);
+  assert.equal(atLimit.quote.overflow, false);
+  assert.ok(!atLimit.warnings.some((warning) => warning.code === "quote_overflow"));
+  const tooLong = quoteLayout(excessive);
+  assert.equal(tooLong.quote.overflow, false, "length limit must work even when narrow letters fit");
+  assert.equal(tooLong.quoteSelection.text, excessive);
+  assert.equal(tooLong.needsReview, true);
+  assert.ok(tooLong.warnings.some((warning) => warning.code === "quote_overflow" && warning.message.includes("500")));
+});
+
+test("a quote under 500 characters still needs review if manual font size prevents fitting", () => {
+  const quote = "Men har kuni o‘zim ustimda ishlayman va bilim olishdan to‘xtamayman. Orzularimga erishish uchun sabr qilaman, mehnat qilaman va o‘zimga ishonaman.";
+  const layout = buildPostLayout({ templateId: "template-01", quote, nameLines: ["ISM", "FAMILIYA"], shortBioItems: ["Talaba"], portraitHref: "data:image/png;base64,AA==", portraitTransform: { offsetX: 0, offsetY: 0, scale: 1, flip: false }, fontSizeOverrides: { quote: 64 } });
+  assert.equal(layout.quoteSelection.text, quote);
+  assert.equal(layout.quote.overflow, true);
+  assert.equal(layout.needsReview, true);
 });
 
 test("wrapping re-flows at each candidate size instead of clamping", () => {

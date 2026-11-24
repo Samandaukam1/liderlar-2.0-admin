@@ -23,6 +23,8 @@ import { auditChangeRows } from "@/lib/audit-view";
 import { auditEventLabel } from "@/lib/vip/audit-events";
 import { loadEditHistory, type EditHistoryResult } from "@/lib/profile-editor/review-service";
 import { EditHistoryPanel } from "@/components/admin/edit-history-panel";
+import { STATE_TEXT, type ArticleState } from "@/lib/articles/state";
+import { PostLinkLabel } from "./post-link-label";
 
 export const dynamic = "force-dynamic";
 
@@ -42,8 +44,9 @@ export default async function CandidateDetailPage(props: {
   const { id } = await props.params;
   const { tab = "profile" } = await props.searchParams;
   const admin = createSupabaseAdminClient();
+  const canViewPosts = hasPermission(ctx.roles, "posts.view");
 
-  const [{ data }, editorRecord, candidatePrompt] = await Promise.all([
+  const [{ data }, editorRecord, candidatePrompt, postResult] = await Promise.all([
     admin
       .from("candidates")
       .select("id,integration_key,slug,full_name,short_bio,avatar_url,birth_date,region_id,category_id,status,is_top100,top100_position,user_id,seo_title,seo_description,phone,email,last_update_requested_at,last_updated_at,next_update_due_at,created_at,updated_at,deleted_at,regions(name),categories(name,color)")
@@ -51,6 +54,9 @@ export default async function CandidateDetailPage(props: {
       .maybeSingle(),
     tab === "profile" ? getCandidateEditorRecord(id) : Promise.resolve(null),
     tab === "profile" ? getCandidatePrompt() : Promise.resolve(""),
+    canViewPosts
+      ? admin.from("candidate_social_posts").select("id").eq("candidate_id", id).neq("status", "failed").maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
   ]);
   if (!data) notFound();
   const candidate = data as unknown as Candidate;
@@ -81,6 +87,33 @@ export default async function CandidateDetailPage(props: {
           .is("deleted_at", null)
           .order("updated_at", { ascending: false })
       : { data: null };
+
+  const canViewOnlineArticles = hasPermission(ctx.roles, "articles.view");
+  const { data: onlineArticles, error: onlineArticlesError } =
+    tab === "articles" && canViewOnlineArticles
+      ? await admin
+          .from("member_articles")
+          .select("id, title, state, slug, created_at, submitted_at, reviewed_at, review_note, published_at, updated_at")
+          .eq("candidate_id", id)
+          .order("updated_at", { ascending: false })
+      : { data: null, error: null };
+
+  const { data: approvalEvents, error: approvalEventsError } =
+    onlineArticles?.length
+      ? await admin
+          .from("audit_logs")
+          .select("entity_id, created_at")
+          .eq("entity_type", "member_article")
+          .eq("action", "article.approved")
+          .in("entity_id", onlineArticles.map((article) => article.id))
+          .order("created_at", { ascending: false })
+      : { data: null, error: null };
+  const approvedAtByArticle = new Map<string, string>();
+  for (const event of approvalEvents ?? []) {
+    if (event.entity_id && !approvedAtByArticle.has(event.entity_id)) {
+      approvedAtByArticle.set(event.entity_id, event.created_at);
+    }
+  }
 
   /*
    * TARIX — IKKI MANBA.
@@ -147,13 +180,28 @@ export default async function CandidateDetailPage(props: {
           { label: candidate.full_name },
         ]}
         actions={
-          <StatusActions
-            candidateId={candidate.id}
-            status={candidate.status}
-            isDeleted={Boolean(candidate.deleted_at)}
-            canPublish={canPublish}
-            canArchive={canArchive}
-          />
+          <>
+            {canViewPosts && (
+              postResult.data?.id ? (
+                <Link
+                  href={`/postlar/${postResult.data.id}`}
+                  prefetch={false}
+                  className="inline-flex h-8 items-center justify-center gap-2 rounded-[14px] border border-line-strong bg-card px-3 text-xs font-bold text-ink transition duration-150 hover:border-brand/50 hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+                >
+                  <PostLinkLabel />
+                </Link>
+              ) : (
+                <span className="text-xs text-ink-soft">{postResult.error ? "Postni tekshirib bo‘lmadi" : "Post hali yaratilmagan"}</span>
+              )
+            )}
+            <StatusActions
+              candidateId={candidate.id}
+              status={candidate.status}
+              isDeleted={Boolean(candidate.deleted_at)}
+              canPublish={canPublish}
+              canArchive={canArchive}
+            />
+          </>
         }
       />
 
@@ -202,15 +250,16 @@ export default async function CandidateDetailPage(props: {
           )}
 
           {tab === "articles" && (
-            <Card>
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-bold text-ink">Biografik maqolalar</h3>
-                <Link
-                  href={`/articles/new?candidate=${id}`}
-                  className="text-xs font-bold text-brand hover:underline"
-                >
-                  + Yangi maqola
-                </Link>
+            <div className="space-y-5">
+              <Card>
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-ink">Biografik maqolalar</h3>
+                  <Link
+                    href={`/articles/new?candidate=${id}`}
+                    className="text-xs font-bold text-brand hover:underline"
+                  >
+                    + Yangi maqola
+                  </Link>
               </div>
               {!articles || articles.length === 0 ? (
                 <p className="py-4 text-sm text-ink-soft">Bu nomzod uchun maqola yo‘q</p>
@@ -233,6 +282,65 @@ export default async function CandidateDetailPage(props: {
                 </ul>
               )}
             </Card>
+            {canViewOnlineArticles && (
+              <Card>
+                <h3 className="mb-3 text-sm font-bold text-ink">O‘zi yozgan online maqolalar</h3>
+                {onlineArticlesError ? (
+                  <p role="alert" className="py-4 text-sm text-coral">Online maqolalarni yuklab bo‘lmadi. Sahifani yangilang.</p>
+                ) : !onlineArticles?.length ? (
+                  <p className="py-4 text-sm text-ink-soft">Bu nomzodning online maqolalari hali yo‘q</p>
+                ) : (
+                  <ul className="divide-y divide-line/60">
+                    {onlineArticles.map((article) => (
+                      <li key={article.id} className="flex flex-wrap items-center gap-3 py-3">
+                        <span className="min-w-0 basis-full break-words text-sm font-semibold text-ink sm:basis-auto sm:flex-1">
+                          {article.title}
+                        </span>
+                        <span className="rounded-full border border-line px-2.5 py-1 text-xs text-ink">
+                          {STATE_TEXT[article.state as ArticleState] ?? article.state}
+                        </span>
+                        {article.state === "published" && article.slug && (
+                          <a
+                            href={`${getSiteUrl()}/liderlar-online/${encodeURIComponent(article.slug)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label={`${article.title} — saytda ko‘rish`}
+                            className="inline-flex min-h-10 items-center gap-1 text-xs font-bold text-brand hover:underline"
+                          >
+                            Saytda ko‘rish <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                          </a>
+                        )}
+                        <dl className="grid w-full grid-cols-1 gap-x-5 gap-y-2 text-xs sm:grid-cols-2">
+                          {[
+                            ["Yaratilgan", formatDate(article.created_at, true)],
+                            ["Yuborilgan", formatDate(article.submitted_at, true)],
+                            ["Tasdiqlangan", approvedAtByArticle.has(article.id)
+                              ? formatDate(approvedAtByArticle.get(article.id), true)
+                              : article.state === "approved" && article.reviewed_at
+                                ? formatDate(article.reviewed_at, true)
+                                : approvalEventsError ? "Yuklab bo‘lmadi" : "Qayd etilmagan"],
+                            ["Oxirgi ko‘rib chiqish", formatDate(article.reviewed_at, true)],
+                            ["Nashr qilingan", formatDate(article.published_at, true)],
+                            ["Oxirgi yangilanish", formatDate(article.updated_at, true)],
+                          ].map(([label, value]) => (
+                            <div key={label}>
+                              <dt className="text-ink-soft">{label} (Toshkent)</dt>
+                              <dd className="mt-0.5 font-medium text-ink">{value}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                        {article.review_note && (
+                          <p className="w-full whitespace-pre-wrap break-words text-xs text-ink-soft">
+                            <span className="font-semibold text-ink">Tahririyat izohi: </span>{article.review_note}
+                          </p>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+            )}
+            </div>
           )}
 
           {tab === "history" && (

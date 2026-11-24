@@ -19,6 +19,7 @@ import type { QuoteCandidate } from "@/lib/post-studio/quote-source";
 import type { StudioAdPanel } from "@/lib/post-studio/post-ad";
 import { captionLengthWithAd } from "@/lib/post-studio/caption-ad";
 import { TELEGRAM_CAPTION_LIMIT } from "@/lib/post-studio/telegram-markdown";
+import { POST_QUOTE_MAX_CHARACTERS } from "@/lib/post-studio/quote-sentences";
 import {
   POST_STATUS_LABELS,
   POST_STATUS_TONES,
@@ -191,6 +192,7 @@ export function PostStudio(props: StudioProps) {
 
   const [templateId, setTemplateId] = useState<PostTemplateId>(post.templateId);
   const [quote, setQuote] = useState(post.quote);
+  const quoteCharacters = [...quote.replace(/\s+/g, " ").trim()].length;
   const [nameLines, setNameLines] = useState(post.nameLines.join("\n"));
   const [bioItems, setBioItems] = useState(post.shortBioItems.join("\n"));
   const [transform, setTransform] = useState(post.portraitTransform);
@@ -466,6 +468,9 @@ export function PostStudio(props: StudioProps) {
             />
             <p className="mt-1 text-[11px] text-ink-soft">
               Manba: {QUOTE_SOURCE_LABELS[post.quoteSource ?? "none"]}
+            </p>
+            <p className={`mt-1 text-[11px] ${quoteCharacters > POST_QUOTE_MAX_CHARACTERS ? "text-coral" : "text-ink-soft"}`}>
+              {quoteCharacters}/{POST_QUOTE_MAX_CHARACTERS} belgi. Iqtibos to‘liq olinadi. Limitdan oshsa yoki rasmga sig‘masa, post tekshirishga tushadi.
             </p>
 
             <Label htmlFor="name_lines" className="mt-3">
