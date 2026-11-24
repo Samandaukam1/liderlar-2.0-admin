@@ -32,6 +32,7 @@ export function StatusActions({
   const [pending, startTransition] = useTransition();
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [confirmPublish, setConfirmPublish] = useState(false);
+  const [confirmDraft, setConfirmDraft] = useState(false);
   const [publishWarnings, setPublishWarnings] = useState<string[]>([]);
 
   const setStatus = (next: CandidateStatus) => {
@@ -91,7 +92,7 @@ export function StatusActions({
         </Button>
       )}
       {status === "published" && (
-        <Button variant="secondary" size="sm" disabled={pending} onClick={() => setStatus("draft")}>
+        <Button variant="secondary" size="sm" disabled={pending} onClick={() => setConfirmDraft(true)}>
           <Send className="h-4 w-4" /> Qoralamaga qaytarish
         </Button>
       )}
@@ -111,6 +112,19 @@ export function StatusActions({
         title="Profilni nashr etish"
         description={`Profil liderlar.uz saytida ommaga ko‘rinadi va 30 kunlik yangilanish sikli boshlanadi.${publishWarnings.length ? ` Ogohlantirish: ${publishWarnings.join(" · ")}.` : ""}`}
         confirmLabel="Nashr etish"
+      />
+      <ConfirmDialog
+        open={status === "published" && confirmDraft}
+        onClose={() => setConfirmDraft(false)}
+        onConfirm={() => {
+          setConfirmDraft(false);
+          setStatus("draft");
+        }}
+        title="Profilni qoralamaga qaytarish"
+        description="Profil saytda ommaga ko‘rinmay qoladi. Keyinroq uni qayta nashr etishingiz mumkin."
+        confirmLabel="Qoralamaga qaytarish"
+        danger
+        loading={pending}
       />
       <ConfirmDialog
         open={confirmArchive}

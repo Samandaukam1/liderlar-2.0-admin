@@ -126,7 +126,7 @@ export function CertificatePanel({
       : "Sertifikatni yaratish";
 
   return (
-    <section className="mt-6">
+    <section>
       <Card className="p-6">
         <div className="mb-5 flex items-center gap-2">
           <Award className="h-5 w-5 text-brand" />
