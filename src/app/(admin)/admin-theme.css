@@ -1,0 +1,103 @@
+[data-admin-theme="dark"] {
+  color-scheme: dark;
+  --color-surface: #192430;
+  --color-card: #222f3e;
+  --color-ink: #dce5ed;
+  --color-ink-soft: #a6b7c7;
+  --color-line: #394a5b;
+  --color-line-strong: #50677b;
+  --color-navy-deep: #141f2d;
+  --color-navy-sidebar: #162231;
+  --color-navy-dark: #22364a;
+  --color-brand: #226e8d;
+  --color-electric: #326fb3;
+  --color-cyan: #64bace;
+  --color-cyan-light: #91ccd9;
+  --shadow-card: 0 12px 32px rgb(8 15 24 / 22%);
+  --shadow-card-hover: 0 18px 42px rgb(8 15 24 / 32%);
+  --shadow-pop: 0 24px 60px rgb(8 15 24 / 46%);
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+/* Keep saturated action backgrounds and readable link text on separate colors. */
+[data-admin-theme="dark"] :is(.text-brand, .text-electric) {
+  color: #8acde2;
+}
+
+/* Older admin screens use fixed colors for status labels and their backgrounds. */
+[data-admin-theme="dark"] :is(.text-\[\#c43d3d\], .text-\[\#a33232\], .text-rose-600, .text-rose-800) {
+  color: #ffa6ad;
+}
+
+[data-admin-theme="dark"] :is(.text-\[\#1d8a6b\], .text-\[\#2e7d44\], .text-\[\#14563f\], .text-emerald-700, .text-emerald-800) {
+  color: #9cdcb9;
+}
+
+[data-admin-theme="dark"] :is(.text-\[\#946a10\], .text-\[\#8a5a00\], .text-\[\#b45309\], .text-amber-700, .text-amber-800, .text-amber-900) {
+  color: #f2cd88;
+}
+
+[data-admin-theme="dark"] .text-\[\#b3611f\] {
+  color: #f0b790;
+}
+
+[data-admin-theme="dark"] .text-\[\#6a52c7\] {
+  color: #c8baff;
+}
+
+[data-admin-theme="dark"] :is(.text-\[\#1873a8\], .text-\[\#0287a0\], .text-sky-800) {
+  color: #91cfe8;
+}
+
+[data-admin-theme="dark"] .text-\[\#b2408a\] {
+  color: #edb0d4;
+}
+
+[data-admin-theme="dark"] .text-\[\#6d7d16\] {
+  color: #ccd98b;
+}
+
+[data-admin-theme="dark"] :is(.bg-white:not(img, .absolute), .bg-\[\#f8fbfe\]) {
+  background-color: var(--color-card);
+}
+
+@media (hover: hover) {
+  [data-admin-theme="dark"] .hover\:text-brand:hover {
+    color: #8acde2;
+  }
+
+  [data-admin-theme="dark"] .hover\:text-\[\#6a52c7\]:hover {
+    color: #c8baff;
+  }
+
+  [data-admin-theme="dark"] .hover\:bg-white:hover {
+    background-color: var(--color-card);
+  }
+}
+
+[data-admin-theme="dark"] .bg-ink.text-white {
+  background-color: #435e76;
+}
+
+[data-admin-theme="dark"] .border-ink.bg-ink.text-white {
+  border-color: #68839b;
+}
+
+[data-admin-theme="dark"] .bg-amber-50   { background-color: #3e352b; }
+[data-admin-theme="dark"] .bg-emerald-50 { background-color: #243b36; }
+[data-admin-theme="dark"] .bg-rose-50    { background-color: #42303c; }
+[data-admin-theme="dark"] .bg-sky-50     { background-color: #273d50; }
+
+[data-admin-theme="dark"] :is(.border-amber-200, .border-amber-300) { border-color: #6c583f; }
+[data-admin-theme="dark"] .border-emerald-200 { border-color: #446155; }
+[data-admin-theme="dark"] .border-rose-200    { border-color: #684755; }
+[data-admin-theme="dark"] .border-sky-200     { border-color: #466278; }
+
+[data-admin-theme="dark"] .recharts-cartesian-axis-tick-value {
+  fill: var(--color-ink-soft);
+}
+
+[data-admin-theme="dark"] :is(.recharts-cartesian-grid line, .recharts-cartesian-axis-line) {
+  stroke: var(--color-line);
+}

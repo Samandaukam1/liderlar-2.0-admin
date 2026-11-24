@@ -30,6 +30,7 @@ export const dynamic = "force-dynamic";
 
 const TABS = [
   { key: "profile", label: "Profil" },
+  { key: "certificate", label: "Sertifikat" },
   { key: "activity", label: "Faoliyat" },
   { key: "adabiyotx", label: "AdabiyotX" },
   { key: "articles", label: "Maqolalar" },
@@ -164,12 +165,15 @@ export default async function CandidateDetailPage(props: {
 
   const dueDays = daysUntil(candidate.next_update_due_at);
   const publicUrl = `${getSiteUrl()}${candidateArticlePath(candidate.slug)}`;
-  const certificateTarget = await resolveCertificateTargetUrl(candidate).catch(
-    (err): Awaited<ReturnType<typeof resolveCertificateTargetUrl>> => {
-      console.error("CERTIFICATE_TARGET_RESOLUTION_FAILED", err instanceof Error ? err.message : err);
-      return { ok: false, reason: "query-failed", message: err instanceof Error ? err.message : "unknown" };
-    }
-  );
+  const fullWidthTab = tab === "profile" || tab === "certificate";
+  const certificateTarget = tab === "certificate"
+    ? await resolveCertificateTargetUrl(candidate).catch(
+        (err): Awaited<ReturnType<typeof resolveCertificateTargetUrl>> => {
+          console.error("CERTIFICATE_TARGET_RESOLUTION_FAILED", err instanceof Error ? err.message : err);
+          return { ok: false, reason: "query-failed", message: err instanceof Error ? err.message : "unknown" };
+        }
+      )
+    : null;
 
   return (
     <>
@@ -205,7 +209,7 @@ export default async function CandidateDetailPage(props: {
         }
       />
 
-      <div className={tab === "profile" ? "block" : "grid grid-cols-1 gap-5 xl:grid-cols-3"}>
+      <div className={fullWidthTab ? "block" : "grid grid-cols-1 gap-5 xl:grid-cols-3"}>
         {/* Main column */}
         <div className="min-w-0 xl:col-span-2">
           <nav className="mb-4 flex gap-1 overflow-x-auto rounded-[16px] border border-line bg-card p-1 shadow-card" aria-label="Nomzod bo‘limlari">
@@ -232,6 +236,15 @@ export default async function CandidateDetailPage(props: {
             ) : (
               <Card><p className="text-sm text-ink-soft">Profilni tahrirlash uchun vakolatingiz yetarli emas.</p></Card>
             )
+          )}
+
+          {certificateTarget && (
+            <CertificatePanel
+              candidateId={candidate.id}
+              fullName={candidate.full_name}
+              canPublish={canPublish}
+              target={certificateTarget}
+            />
           )}
 
           {tab === "activity" && (
@@ -406,7 +419,7 @@ export default async function CandidateDetailPage(props: {
         </div>
 
         {/* Context panel */}
-        <aside className={tab === "profile" ? "hidden" : "space-y-4"}>
+        <aside className={fullWidthTab ? "hidden" : "space-y-4"}>
           {/* Preview card — mirrors the public site candidate card */}
           <div className="overflow-hidden rounded-card border border-line bg-gradient-to-br from-navy-deep to-navy-dark p-6 text-white shadow-card">
             <p className="mb-4 font-display text-4xl leading-none text-cyan/60">“</p>
@@ -493,13 +506,6 @@ export default async function CandidateDetailPage(props: {
           </Card>
         </aside>
       </div>
-
-      <CertificatePanel
-        candidateId={candidate.id}
-        fullName={candidate.full_name}
-        canPublish={canPublish}
-        target={certificateTarget}
-      />
     </>
   );
 }

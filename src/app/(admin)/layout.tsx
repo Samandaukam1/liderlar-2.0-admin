@@ -1,9 +1,12 @@
+import { cookies } from "next/headers";
 import { requireAdmin } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { AdminSidebar } from "@/components/admin/sidebar";
 import { AdminTopbar } from "@/components/admin/topbar";
 import { signOutAction } from "@/lib/actions/auth";
 import { getBranding } from "@/lib/branding/service";
+import { AdminTheme } from "@/components/admin/admin-theme";
+import "./admin-theme.css";
 
 export default async function AdminLayout({
   children,
@@ -11,6 +14,8 @@ export default async function AdminLayout({
   children: React.ReactNode;
 }) {
   const ctx = await requireAdmin();
+  const themeCookie = "liderlar-admin-theme";
+  const initialTheme = (await cookies()).get(themeCookie)?.value === "dark" ? "dark" : "light";
 
   let unreadCount = 0;
   try {
@@ -30,7 +35,7 @@ export default async function AdminLayout({
   const branding = await getBranding();
 
   return (
-    <div className="flex min-h-screen">
+    <AdminTheme initialTheme={initialTheme} cookieName={themeCookie}>
       <AdminSidebar
         fullName={ctx.fullName}
         email={ctx.email}
@@ -61,6 +66,6 @@ export default async function AdminLayout({
           </a>
         </footer>
       </div>
-    </div>
+    </AdminTheme>
   );
 }
