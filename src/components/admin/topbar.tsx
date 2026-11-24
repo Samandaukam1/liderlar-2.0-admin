@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { Bell, Plus, Search } from "lucide-react";
 import { CommandPalette } from "./command-palette";
 import { Avatar } from "./badges";
+import { AdminThemeToggle } from "./admin-theme";
 import { AnimatePresence, motion } from "framer-motion";
 
 export function AdminTopbar({
@@ -92,6 +93,8 @@ export function AdminTopbar({
             </AnimatePresence>
           </div>
         )}
+
+        <AdminThemeToggle />
 
         <Link
           href="/notifications"
