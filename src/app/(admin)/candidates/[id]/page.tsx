@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ExternalLink, ImageIcon, QrCode } from "lucide-react";
+import { ExternalLink, QrCode } from "lucide-react";
 import { requirePermission } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -24,6 +24,7 @@ import { auditEventLabel } from "@/lib/vip/audit-events";
 import { loadEditHistory, type EditHistoryResult } from "@/lib/profile-editor/review-service";
 import { EditHistoryPanel } from "@/components/admin/edit-history-panel";
 import { STATE_TEXT, type ArticleState } from "@/lib/articles/state";
+import { PostLinkLabel } from "./post-link-label";
 
 export const dynamic = "force-dynamic";
 
@@ -92,10 +93,27 @@ export default async function CandidateDetailPage(props: {
     tab === "articles" && canViewOnlineArticles
       ? await admin
           .from("member_articles")
-          .select("id, title, state, slug, published_at, updated_at")
+          .select("id, title, state, slug, created_at, submitted_at, reviewed_at, review_note, published_at, updated_at")
           .eq("candidate_id", id)
           .order("updated_at", { ascending: false })
       : { data: null, error: null };
+
+  const { data: approvalEvents, error: approvalEventsError } =
+    onlineArticles?.length
+      ? await admin
+          .from("audit_logs")
+          .select("entity_id, created_at")
+          .eq("entity_type", "member_article")
+          .eq("action", "article.approved")
+          .in("entity_id", onlineArticles.map((article) => article.id))
+          .order("created_at", { ascending: false })
+      : { data: null, error: null };
+  const approvedAtByArticle = new Map<string, string>();
+  for (const event of approvalEvents ?? []) {
+    if (event.entity_id && !approvedAtByArticle.has(event.entity_id)) {
+      approvedAtByArticle.set(event.entity_id, event.created_at);
+    }
+  }
 
   /*
    * TARIX — IKKI MANBA.
@@ -170,7 +188,7 @@ export default async function CandidateDetailPage(props: {
                   prefetch={false}
                   className="inline-flex h-8 items-center justify-center gap-2 rounded-[14px] border border-line-strong bg-card px-3 text-xs font-bold text-ink transition duration-150 hover:border-brand/50 hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
                 >
-                  <ImageIcon className="h-4 w-4" aria-hidden="true" /> Postga o‘tish
+                  <PostLinkLabel />
                 </Link>
               ) : (
                 <span className="text-xs text-ink-soft">{postResult.error ? "Postni tekshirib bo‘lmadi" : "Post hali yaratilmagan"}</span>
@@ -281,12 +299,9 @@ export default async function CandidateDetailPage(props: {
                         <span className="rounded-full border border-line px-2.5 py-1 text-xs text-ink">
                           {STATE_TEXT[article.state as ArticleState] ?? article.state}
                         </span>
-                        <span className="text-xs text-ink-soft">
-                          {formatDate(article.state === "published" && article.published_at ? article.published_at : article.updated_at)}
-                        </span>
                         {article.state === "published" && article.slug && (
                           <a
-                            href={`${getSiteUrl()}/maqola/${encodeURIComponent(article.slug)}`}
+                            href={`${getSiteUrl()}/liderlar-online/${encodeURIComponent(article.slug)}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             aria-label={`${article.title} — saytda ko‘rish`}
@@ -294,6 +309,30 @@ export default async function CandidateDetailPage(props: {
                           >
                             Saytda ko‘rish <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
                           </a>
+                        )}
+                        <dl className="grid w-full grid-cols-1 gap-x-5 gap-y-2 text-xs sm:grid-cols-2">
+                          {[
+                            ["Yaratilgan", formatDate(article.created_at, true)],
+                            ["Yuborilgan", formatDate(article.submitted_at, true)],
+                            ["Tasdiqlangan", approvedAtByArticle.has(article.id)
+                              ? formatDate(approvedAtByArticle.get(article.id), true)
+                              : article.state === "approved" && article.reviewed_at
+                                ? formatDate(article.reviewed_at, true)
+                                : approvalEventsError ? "Yuklab bo‘lmadi" : "Qayd etilmagan"],
+                            ["Oxirgi ko‘rib chiqish", formatDate(article.reviewed_at, true)],
+                            ["Nashr qilingan", formatDate(article.published_at, true)],
+                            ["Oxirgi yangilanish", formatDate(article.updated_at, true)],
+                          ].map(([label, value]) => (
+                            <div key={label}>
+                              <dt className="text-ink-soft">{label} (Toshkent)</dt>
+                              <dd className="mt-0.5 font-medium text-ink">{value}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                        {article.review_note && (
+                          <p className="w-full whitespace-pre-wrap break-words text-xs text-ink-soft">
+                            <span className="font-semibold text-ink">Tahririyat izohi: </span>{article.review_note}
+                          </p>
                         )}
                       </li>
                     ))}
