@@ -57,19 +57,13 @@ const QUOTE_BOTTOM_LIMIT = 456;
  */
 const SHARED = {
   quote: {
-    // Widened and deepened from 430x252: the poster now prints one or two whole
-    // sentences instead of a whole answer, and the old column left the card's
-    // right third and bottom quarter empty while setting the type small.
+    // Fit the full quote inside the existing column, clear of the portrait.
     x: TEXT_LEFT,
     y: 150,
     width: QUOTE_RIGHT_LIMIT - TEXT_LEFT,
     height: QUOTE_BOTTOM_LIMIT - 150,
     maxFontSize: 64,
     minFontSize: 22,
-    // A second sentence is only taken if the quote still sets at 30 or larger,
-    // and only when one sentence fills less than 62% of the column.
-    comfortFontSize: 30,
-    minFillRatio: 0.62,
     align: "left" as const,
     fill: WHITE,
     tracking: 0,

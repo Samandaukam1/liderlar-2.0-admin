@@ -23,6 +23,7 @@ import { auditChangeRows } from "@/lib/audit-view";
 import { auditEventLabel } from "@/lib/vip/audit-events";
 import { loadEditHistory, type EditHistoryResult } from "@/lib/profile-editor/review-service";
 import { EditHistoryPanel } from "@/components/admin/edit-history-panel";
+import { STATE_TEXT, type ArticleState } from "@/lib/articles/state";
 
 export const dynamic = "force-dynamic";
 
@@ -85,6 +86,16 @@ export default async function CandidateDetailPage(props: {
           .is("deleted_at", null)
           .order("updated_at", { ascending: false })
       : { data: null };
+
+  const canViewOnlineArticles = hasPermission(ctx.roles, "articles.view");
+  const { data: onlineArticles, error: onlineArticlesError } =
+    tab === "articles" && canViewOnlineArticles
+      ? await admin
+          .from("member_articles")
+          .select("id, title, state, slug, published_at, updated_at")
+          .eq("candidate_id", id)
+          .order("updated_at", { ascending: false })
+      : { data: null, error: null };
 
   /*
    * TARIX — IKKI MANBA.
@@ -157,7 +168,7 @@ export default async function CandidateDetailPage(props: {
                 <Link
                   href={`/postlar/${postResult.data.id}`}
                   prefetch={false}
-                  className="inline-flex min-h-10 items-center gap-2 rounded-[14px] border border-line-strong bg-card px-4 py-2 text-sm font-bold text-ink transition hover:border-brand/50 hover:bg-surface focus-visible:outline-2 focus-visible:outline-brand"
+                  className="inline-flex h-8 items-center justify-center gap-2 rounded-[14px] border border-line-strong bg-card px-3 text-xs font-bold text-ink transition duration-150 hover:border-brand/50 hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
                 >
                   <ImageIcon className="h-4 w-4" aria-hidden="true" /> Postga o‘tish
                 </Link>
@@ -221,15 +232,16 @@ export default async function CandidateDetailPage(props: {
           )}
 
           {tab === "articles" && (
-            <Card>
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-bold text-ink">Biografik maqolalar</h3>
-                <Link
-                  href={`/articles/new?candidate=${id}`}
-                  className="text-xs font-bold text-brand hover:underline"
-                >
-                  + Yangi maqola
-                </Link>
+            <div className="space-y-5">
+              <Card>
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-ink">Biografik maqolalar</h3>
+                  <Link
+                    href={`/articles/new?candidate=${id}`}
+                    className="text-xs font-bold text-brand hover:underline"
+                  >
+                    + Yangi maqola
+                  </Link>
               </div>
               {!articles || articles.length === 0 ? (
                 <p className="py-4 text-sm text-ink-soft">Bu nomzod uchun maqola yo‘q</p>
@@ -252,6 +264,44 @@ export default async function CandidateDetailPage(props: {
                 </ul>
               )}
             </Card>
+            {canViewOnlineArticles && (
+              <Card>
+                <h3 className="mb-3 text-sm font-bold text-ink">O‘zi yozgan online maqolalar</h3>
+                {onlineArticlesError ? (
+                  <p role="alert" className="py-4 text-sm text-coral">Online maqolalarni yuklab bo‘lmadi. Sahifani yangilang.</p>
+                ) : !onlineArticles?.length ? (
+                  <p className="py-4 text-sm text-ink-soft">Bu nomzodning online maqolalari hali yo‘q</p>
+                ) : (
+                  <ul className="divide-y divide-line/60">
+                    {onlineArticles.map((article) => (
+                      <li key={article.id} className="flex flex-wrap items-center gap-3 py-3">
+                        <span className="min-w-0 basis-full break-words text-sm font-semibold text-ink sm:basis-auto sm:flex-1">
+                          {article.title}
+                        </span>
+                        <span className="rounded-full border border-line px-2.5 py-1 text-xs text-ink">
+                          {STATE_TEXT[article.state as ArticleState] ?? article.state}
+                        </span>
+                        <span className="text-xs text-ink-soft">
+                          {formatDate(article.state === "published" && article.published_at ? article.published_at : article.updated_at)}
+                        </span>
+                        {article.state === "published" && article.slug && (
+                          <a
+                            href={`${getSiteUrl()}/maqola/${encodeURIComponent(article.slug)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label={`${article.title} — saytda ko‘rish`}
+                            className="inline-flex min-h-10 items-center gap-1 text-xs font-bold text-brand hover:underline"
+                          >
+                            Saytda ko‘rish <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                          </a>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+            )}
+            </div>
           )}
 
           {tab === "history" && (

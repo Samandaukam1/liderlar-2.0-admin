@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Trash2 } from "lucide-react";
 import { Button, FormField, Input, Textarea } from "@/components/ui/primitives";
-import { Modal } from "@/components/ui/overlays";
+import { ConfirmDialog, Modal } from "@/components/ui/overlays";
 import { useToast } from "@/components/ui/toast";
 import {
   addCandidateEntryAction,
@@ -47,7 +47,20 @@ export function EntriesPanel({
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
+  const [pendingDelete, setPendingDelete] = useState<EntryRow | null>(null);
+  const deleteTarget = canEdit && pendingDelete && entries.includes(pendingDelete) ? pendingDelete : null;
   const labels = KIND_LABELS[kind];
+
+  const deleteEntry = (entry: EntryRow) => {
+    startTransition(async () => {
+      const res = await deleteCandidateEntryAction(candidateId, kind, entry.id);
+      if (res.ok) {
+        setPendingDelete(null);
+        toast("success", "O‘chirildi");
+        router.refresh();
+      } else toast("error", "Xatolik", res.error);
+    });
+  };
 
   return (
     <section className="rounded-card border border-line bg-card p-5 shadow-card">
@@ -91,26 +104,33 @@ export function EntriesPanel({
               </div>
               {canEdit && (
                 <button
-                  aria-label="O‘chirish"
+                  type="button"
+                  aria-label={kind === "social" ? `${e.title} — o‘chirish` : "O‘chirish"}
                   disabled={pending}
-                  onClick={() =>
-                    startTransition(async () => {
-                      const res = await deleteCandidateEntryAction(candidateId, kind, e.id);
-                      if (res.ok) {
-                        toast("success", "O‘chirildi");
-                        router.refresh();
-                      } else toast("error", "Xatolik", res.error);
-                    })
-                  }
-                  className="rounded-lg p-1.5 text-ink-soft/50 opacity-0 transition hover:bg-coral/10 hover:text-coral group-hover:opacity-100"
+                  onClick={() => kind === "social" ? setPendingDelete(e) : deleteEntry(e)}
+                  className={kind === "social"
+                    ? "inline-flex min-h-11 shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-coral transition hover:bg-coral/10 focus-visible:outline-2 focus-visible:outline-coral disabled:opacity-50"
+                    : "rounded-lg p-1.5 text-ink-soft/50 opacity-0 transition hover:bg-coral/10 hover:text-coral group-hover:opacity-100"}
                 >
-                  <Trash2 className="h-4 w-4" />
+                  <Trash2 className="h-4 w-4" aria-hidden="true" />
+                  {kind === "social" && "O‘chirish"}
                 </button>
               )}
             </li>
           ))}
         </ul>
       )}
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onClose={() => { if (!pending) setPendingDelete(null); }}
+        onConfirm={() => { if (deleteTarget) deleteEntry(deleteTarget); }}
+        title="Ijtimoiy tarmoqni o‘chirish"
+        description={`“${deleteTarget?.title ?? ""}${deleteTarget?.subtitle ? ` — ${deleteTarget.subtitle}` : ""}” havolasi o‘chirilsinmi?`}
+        confirmLabel="Ha, o‘chirish"
+        danger
+        loading={pending}
+      />
 
       <Modal open={open} onClose={() => setOpen(false)} title={`${labels.title} qo‘shish`}>
         <form

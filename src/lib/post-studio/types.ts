@@ -54,13 +54,6 @@ export interface TextBlockConfig extends Box {
   maxFontSize: number;
   /** Below this the block is considered un-fittable -> post needs review. */
   minFontSize: number;
-  /**
-   * Quote only: the smallest size at which taking a second sentence is still
-   * worth it, and how full one sentence must leave the box before a second is
-   * even considered.
-   */
-  comfortFontSize?: number;
-  minFillRatio?: number;
   fontSize?: never;
   align: TextAlign;
   fill: string;
@@ -239,7 +232,7 @@ export interface PostLayout {
   templateId: PostTemplateId;
   /** Current template's colours; swap this to repaint without re-laying out. */
   palette: PostPalette;
-  /** The whole sentences taken from the raw answer, and why. */
+  /** Full quote text and diagnostic sentence counts. */
   quoteSelection: {
     text: string;
     sentenceCount: number;

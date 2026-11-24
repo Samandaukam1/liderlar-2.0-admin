@@ -3,7 +3,7 @@ import { getFontMetrics } from "./fonts.ts";
 import { fitFixedLines, fitWrappedText, positionLines } from "./text-engine.ts";
 import { applyQuoteColorSplit } from "./quote-split.ts";
 import { applyNameDarkTail } from "./name-tone.ts";
-import { selectDisplayQuote, type DisplayQuoteChoice } from "./quote-sentences.ts";
+import { POST_QUOTE_MAX_CHARACTERS, selectDisplayQuote, type DisplayQuoteChoice } from "./quote-sentences.ts";
 import {
   applyPortraitOverride,
   fallbackPersonBounds,
@@ -80,18 +80,8 @@ export function buildPostLayout(composition: PostComposition): PostLayout {
       tracking: template.quote.tracking,
     });
 
-  // The poster prints whole sentences off the raw 15th answer, never a
-  // character-count truncation of it. Which sentences is decided by measuring
-  // them with the very engine that will lay them out — see quote-sentences.ts.
-  const selection: DisplayQuoteChoice = selectDisplayQuote(composition.quote, {
-    probe: (text) => {
-      const fit = fitQuote(text);
-      return { fontSize: fit.fontSize, height: fit.height, overflow: fit.overflow };
-    },
-    boxHeight: template.quote.height,
-    minFillRatio: template.quote.minFillRatio ?? 0.62,
-    comfortFontSize: template.quote.comfortFontSize ?? template.quote.minFontSize,
-  });
+  // Fit the whole quote, including every sentence and its punctuation.
+  const selection: DisplayQuoteChoice = selectDisplayQuote(composition.quote);
 
   const quoteFit = fitQuote(selection.text);
 
@@ -107,6 +97,11 @@ export function buildPostLayout(composition: PostComposition): PostLayout {
 
   if (!selection.text.trim()) {
     warnings.push({ code: "quote_missing", message: "Iqtibos tanlanmagan." });
+  } else if ([...selection.text].length > POST_QUOTE_MAX_CHARACTERS) {
+    warnings.push({
+      code: "quote_overflow",
+      message: `Iqtibos ${POST_QUOTE_MAX_CHARACTERS} belgidan oshdi. Matn avtomatik kesilmaydi — qisqartirib, qayta render qiling.`,
+    });
   } else if (quoteBlock.overflow) {
     warnings.push({
       code: "quote_overflow",
