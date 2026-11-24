@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ExternalLink, QrCode } from "lucide-react";
+import { ExternalLink, ImageIcon, QrCode } from "lucide-react";
 import { requirePermission } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -42,8 +42,9 @@ export default async function CandidateDetailPage(props: {
   const { id } = await props.params;
   const { tab = "profile" } = await props.searchParams;
   const admin = createSupabaseAdminClient();
+  const canViewPosts = hasPermission(ctx.roles, "posts.view");
 
-  const [{ data }, editorRecord, candidatePrompt] = await Promise.all([
+  const [{ data }, editorRecord, candidatePrompt, postResult] = await Promise.all([
     admin
       .from("candidates")
       .select("id,integration_key,slug,full_name,short_bio,avatar_url,birth_date,region_id,category_id,status,is_top100,top100_position,user_id,seo_title,seo_description,phone,email,last_update_requested_at,last_updated_at,next_update_due_at,created_at,updated_at,deleted_at,regions(name),categories(name,color)")
@@ -51,6 +52,9 @@ export default async function CandidateDetailPage(props: {
       .maybeSingle(),
     tab === "profile" ? getCandidateEditorRecord(id) : Promise.resolve(null),
     tab === "profile" ? getCandidatePrompt() : Promise.resolve(""),
+    canViewPosts
+      ? admin.from("candidate_social_posts").select("id").eq("candidate_id", id).neq("status", "failed").maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
   ]);
   if (!data) notFound();
   const candidate = data as unknown as Candidate;
@@ -147,13 +151,28 @@ export default async function CandidateDetailPage(props: {
           { label: candidate.full_name },
         ]}
         actions={
-          <StatusActions
-            candidateId={candidate.id}
-            status={candidate.status}
-            isDeleted={Boolean(candidate.deleted_at)}
-            canPublish={canPublish}
-            canArchive={canArchive}
-          />
+          <>
+            {canViewPosts && (
+              postResult.data?.id ? (
+                <Link
+                  href={`/postlar/${postResult.data.id}`}
+                  prefetch={false}
+                  className="inline-flex min-h-10 items-center gap-2 rounded-[14px] border border-line-strong bg-card px-4 py-2 text-sm font-bold text-ink transition hover:border-brand/50 hover:bg-surface focus-visible:outline-2 focus-visible:outline-brand"
+                >
+                  <ImageIcon className="h-4 w-4" aria-hidden="true" /> Postga o‘tish
+                </Link>
+              ) : (
+                <span className="text-xs text-ink-soft">{postResult.error ? "Postni tekshirib bo‘lmadi" : "Post hali yaratilmagan"}</span>
+              )
+            )}
+            <StatusActions
+              candidateId={candidate.id}
+              status={candidate.status}
+              isDeleted={Boolean(candidate.deleted_at)}
+              canPublish={canPublish}
+              canArchive={canArchive}
+            />
+          </>
         }
       />
 
