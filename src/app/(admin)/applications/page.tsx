@@ -1,6 +1,7 @@
 import { ClipboardList } from "lucide-react";
 import { PromoReportPanel } from "./promo-report-panel";
 import { NewApplicationsDownload } from "./new-applications-download";
+import { DailyApplicationsReport } from "./daily-applications-report";
 import { requirePermission } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -245,7 +246,10 @@ export default async function ApplicationsPage(props: {
             },
           ]}
         />
-        {hasPermission(ctx.roles, "applications.review") && <NewApplicationsDownload />}
+        <div className="mb-4 flex min-h-10 flex-wrap items-center gap-2.5 sm:ml-auto">
+          {hasPermission(ctx.roles, "applications.review") && <NewApplicationsDownload />}
+          <DailyApplicationsReport />
+        </div>
       </div>
       <DataTable
         columns={columns}

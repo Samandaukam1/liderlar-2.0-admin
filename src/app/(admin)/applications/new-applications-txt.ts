@@ -9,7 +9,7 @@ function phoneNumber(value: string | null): string | null {
   return /^\+?\d{7,15}$/.test(compact) ? compact : null;
 }
 
-function telegramUsername(value: string | null): string | null {
+export function telegramUsername(value: string | null): string | null {
   const raw = (value ?? "").trim();
   if (phoneNumber(raw)) return null;
   const link = /^(?:https?:\/\/)?t\.me\/([a-z0-9_]+)\/?$/i.exec(raw);

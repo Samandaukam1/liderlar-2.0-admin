@@ -80,8 +80,8 @@ export function NewApplicationsDownload() {
   }
 
   return (
-    <div className="mb-4 sm:ml-auto">
-      <Button type="button" onClick={() => run()} disabled={pending} aria-busy={pending}>
+    <>
+      <Button type="button" size="sm" onClick={() => run()} disabled={pending} aria-busy={pending}>
         <Download className="h-4 w-4" aria-hidden />
         {pending ? "Tayyorlanmoqda…" : retryFile ? "Yuklab olishni qayta urinish" : "Yangi arizalarni yuklab olish"}
       </Button>
@@ -109,6 +109,6 @@ export function NewApplicationsDownload() {
           </div>
         </form>
       </Modal>
-    </div>
+    </>
   );
 }

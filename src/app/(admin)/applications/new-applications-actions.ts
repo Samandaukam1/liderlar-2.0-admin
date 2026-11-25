@@ -8,9 +8,10 @@ import { logAudit } from "@/lib/audit";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { parseTashkentDateTime, tashkentDayRange } from "@/lib/tashkent-day";
 import type { Application } from "@/lib/types";
-import { formatNewApplications } from "./new-applications-txt";
+import { formatNewApplications, telegramUsername } from "./new-applications-txt";
 
 const PAGE_SIZE = 500;
+const EXPORT_REVIEW_REASON = "Yangi arizalar eksporti";
 const timestamp = z.iso.datetime({ offset: true });
 const cursorSchema = z.object({ id: z.uuid(), created_at: timestamp });
 const receiptSchema = z.object({
@@ -135,13 +136,87 @@ export async function completeNewApplicationsExport(input: z.infer<typeof signed
       entityId: receipt.latest.id,
       oldValue: { status: "new" },
       newValue: { status: "in_review" },
-      reason: "Yangi arizalar eksporti",
+      reason: EXPORT_REVIEW_REASON,
     });
     revalidatePath("/applications");
     revalidatePath(`/applications/${receipt.latest.id}`);
     return { status: "saved" } as const;
   } catch (error) {
     console.error("Yangi arizalar eksportini qayd etib bo‘lmadi", error);
+    return { status: "error" } as const;
+  }
+}
+
+async function latestReviewEvent(admin: Admin, before: string, from?: string, exportOnly = true) {
+  let query = admin.from("audit_logs")
+    .select("entity_id")
+    .eq("entity_type", "application")
+    .eq("action", "application.in_review")
+    .lt("created_at", before);
+  if (from) query = query.gte("created_at", from);
+  if (exportOnly) query = query.eq("reason", EXPORT_REVIEW_REASON);
+
+  const { data, error } = await query
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? z.uuid().parse(data.entity_id) : null;
+}
+
+export async function getDailyApplicationsReport() {
+  await requirePermission("applications.view");
+  const admin = createSupabaseAdminClient();
+  const day = tashkentDayRange();
+
+  try {
+    const [todayId, previousExportId] = await Promise.all([
+      latestReviewEvent(admin, day.endIso, day.startIso),
+      latestReviewEvent(admin, day.startIso),
+    ]);
+    if (!todayId) return { status: "no_export" } as const;
+
+    // Before TXT exports existed, reviewers set the same status manually.
+    const previousId = previousExportId ?? await latestReviewEvent(admin, day.startIso, undefined, false);
+    if (!previousId) return { status: "no_boundary" } as const;
+
+    const { data: boundaries, error: boundaryError } = await admin.from("applications")
+      .select("id, created_at")
+      .in("id", [previousId, todayId]);
+    if (boundaryError) throw boundaryError;
+    const bounds = z.array(cursorSchema).parse(boundaries);
+    const start = bounds.find((row) => row.id === previousId);
+    const end = bounds.find((row) => row.id === todayId);
+    if (!start || !end) return { status: "no_boundary" } as const;
+
+    let total = 0;
+    let withUsername = 0;
+    let cursor = start;
+    const throughEnd = `created_at.lt.${end.created_at},and(created_at.eq.${end.created_at},id.lte.${end.id})`;
+
+    while (true) {
+      const { data, error } = await admin.from("applications")
+        .select("id, created_at, telegram")
+        .gte("created_at", cursor.created_at)
+        .lte("created_at", end.created_at)
+        .or(`and(or(${following(cursor)}),or(${throughEnd}))`)
+        .order("created_at")
+        .order("id")
+        .limit(PAGE_SIZE);
+      if (error) throw error;
+
+      total += data.length;
+      for (const row of data) {
+        if (telegramUsername(row.telegram)) withUsername++;
+      }
+      if (data.length < PAGE_SIZE || data.at(-1)?.id === end.id) break;
+      cursor = cursorSchema.parse(data.at(-1));
+    }
+
+    return { status: "ready", date: day.date, total, withUsername } as const;
+  } catch (error) {
+    console.error("Kunlik arizalar hisoboti tayyorlanmadi", error);
     return { status: "error" } as const;
   }
 }
