@@ -16,9 +16,8 @@ const timestamp = z.iso.datetime({ offset: true });
 const cursorSchema = z.object({ id: z.uuid(), created_at: timestamp });
 const reportBoundarySchema = cursorSchema.extend({
   full_name: z.string(),
-  status: z.string(),
+  status: z.literal("in_review"),
 });
-const reviewEventSchema = z.object({ entity_id: z.uuid(), created_at: timestamp });
 const receiptSchema = z.object({
   boundaryId: z.uuid().nullable(),
   latest: cursorSchema.extend({ updated_at: timestamp }),
@@ -152,11 +151,10 @@ export async function completeNewApplicationsExport(input: z.infer<typeof signed
   }
 }
 
-async function latestReviewEvent(admin: Admin, from: string, before: string) {
-  const { data, error } = await admin.from("audit_logs")
-    .select("entity_id, created_at")
-    .eq("entity_type", "application")
-    .eq("action", "application.in_review")
+async function latestReceivedInReview(admin: Admin, from: string, before: string) {
+  const { data, error } = await admin.from("applications")
+    .select("id, created_at, full_name, status")
+    .eq("status", "in_review")
     .gte("created_at", from)
     .lt("created_at", before)
     .order("created_at", { ascending: false })
@@ -164,7 +162,7 @@ async function latestReviewEvent(admin: Admin, from: string, before: string) {
     .limit(1)
     .maybeSingle();
   if (error) throw error;
-  return data ? reviewEventSchema.parse(data) : null;
+  return data ? reportBoundarySchema.parse(data) : null;
 }
 
 export async function getDailyApplicationsReport() {
@@ -175,21 +173,12 @@ export async function getDailyApplicationsReport() {
   const yesterday = tashkentDayRange(new Date(Date.parse(day.startIso) - 1));
 
   try {
-    const [today, previous] = await Promise.all([
-      latestReviewEvent(admin, day.startIso, now.toISOString()),
-      latestReviewEvent(admin, yesterday.startIso, day.startIso),
+    const [start, end] = await Promise.all([
+      latestReceivedInReview(admin, yesterday.startIso, day.startIso),
+      latestReceivedInReview(admin, day.startIso, now.toISOString()),
     ]);
-    if (!today) return { status: "no_today_review" } as const;
-    if (!previous) return { status: "no_yesterday_review" } as const;
-
-    const { data: boundaries, error: boundaryError } = await admin.from("applications")
-      .select("id, created_at, full_name, status")
-      .in("id", [previous.entity_id, today.entity_id]);
-    if (boundaryError) throw boundaryError;
-    const bounds = z.array(reportBoundarySchema).parse(boundaries);
-    const start = bounds.find((row) => row.id === previous.entity_id);
-    const end = bounds.find((row) => row.id === today.entity_id);
-    if (!start || !end) return { status: "no_boundary" } as const;
+    if (!end) return { status: "no_today_review" } as const;
+    if (!start) return { status: "no_yesterday_review" } as const;
 
     let total = 0;
     let withUsername = 0;
@@ -220,8 +209,8 @@ export async function getDailyApplicationsReport() {
       date: day.date,
       total,
       withUsername,
-      start: { name: start.full_name, receivedAt: start.created_at, reviewedAt: previous.created_at, status: start.status },
-      end: { name: end.full_name, receivedAt: end.created_at, reviewedAt: today.created_at, status: end.status },
+      start: { name: start.full_name, receivedAt: start.created_at, status: start.status },
+      end: { name: end.full_name, receivedAt: end.created_at, status: end.status },
     } as const;
   } catch (error) {
     console.error("Kunlik arizalar hisoboti tayyorlanmadi", error);

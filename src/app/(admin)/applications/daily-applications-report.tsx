@@ -30,15 +30,11 @@ export function DailyApplicationsReport() {
       try {
         const result = await getDailyApplicationsReport();
         if (result.status === "no_today_review") {
-          toast("info", "Bugun «Ko‘rilmoqda»ga o‘tkazilgan ariza topilmadi");
+          toast("info", "Bugun kelgan «Ko‘rilmoqda» statusidagi ariza topilmadi");
           return;
         }
         if (result.status === "no_yesterday_review") {
-          toast("info", "Kecha «Ko‘rilmoqda»ga o‘tkazilgan ariza topilmadi");
-          return;
-        }
-        if (result.status === "no_boundary") {
-          toast("info", "Hisobot chegarasidagi ariza topilmadi");
+          toast("info", "Kecha kelgan «Ko‘rilmoqda» statusidagi ariza topilmadi");
           return;
         }
         if (result.status === "error") throw new Error("Report unavailable");
@@ -83,9 +79,6 @@ export function DailyApplicationsReport() {
                     <p className="break-words text-sm font-semibold text-ink">{boundary.name}</p>
                     <p className="text-xs text-ink-soft">
                       Kelgan vaqti <time dateTime={boundary.receivedAt}>{formatDate(boundary.receivedAt, true)}</time>
-                    </p>
-                    <p className="text-xs text-ink-soft">
-                      «Ko‘rilmoqda»ga o‘tgan vaqti <time dateTime={boundary.reviewedAt}>{formatDate(boundary.reviewedAt, true)}</time>
                     </p>
                     <div className="flex flex-wrap items-center gap-1.5 text-xs text-ink-soft">
                       Hozirgi status <StatusBadge status={boundary.status} />
