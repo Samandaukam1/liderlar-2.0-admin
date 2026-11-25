@@ -116,6 +116,11 @@ export function editorCan(action: EditorAction, state: ArticleState): boolean {
   return EDITOR_ALLOWED[action].includes(state);
 }
 
+/** Unpublishing keeps the public slug so editors can restore the same article. */
+export function canRepublishDraft(state: string, slug: string | null): boolean {
+  return state === "draft" && Boolean(slug);
+}
+
 export function nextState(action: EditorAction): ArticleState {
   switch (action) {
     case "start_review":

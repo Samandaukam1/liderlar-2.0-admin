@@ -1,18 +1,19 @@
 [data-admin-theme="dark"] {
   color-scheme: dark;
-  --color-surface: #192430;
-  --color-card: #222f3e;
-  --color-ink: #dce5ed;
-  --color-ink-soft: #a6b7c7;
-  --color-line: #394a5b;
-  --color-line-strong: #50677b;
-  --color-navy-deep: #141f2d;
-  --color-navy-sidebar: #162231;
-  --color-navy-dark: #22364a;
-  --color-brand: #226e8d;
-  --color-electric: #326fb3;
-  --color-cyan: #64bace;
-  --color-cyan-light: #91ccd9;
+  --color-surface: #101823;
+  --color-card: #18222f;
+  --color-ink: #c5d0db;
+  --color-ink-soft: #97a8b9;
+  --color-line: #2d3b4b;
+  --color-line-strong: #43576b;
+  --color-navy-deep: #0d1520;
+  --color-navy-sidebar: #101a27;
+  --color-navy-dark: #1b2b3d;
+  --color-brand: #23647c;
+  --color-electric: #2b5e94;
+  --color-cyan: #58a0b4;
+  --color-cyan-light: #83b6c4;
+  --color-admin-link: #7eb6ca;
   --shadow-card: 0 12px 32px rgb(8 15 24 / 22%);
   --shadow-card-hover: 0 18px 42px rgb(8 15 24 / 32%);
   --shadow-pop: 0 24px 60px rgb(8 15 24 / 46%);
@@ -22,7 +23,7 @@
 
 /* Keep saturated action backgrounds and readable link text on separate colors. */
 [data-admin-theme="dark"] :is(.text-brand, .text-electric) {
-  color: #8acde2;
+  color: var(--color-admin-link);
 }
 
 /* Older admin screens use fixed colors for status labels and their backgrounds. */
@@ -64,7 +65,7 @@
 
 @media (hover: hover) {
   [data-admin-theme="dark"] .hover\:text-brand:hover {
-    color: #8acde2;
+    color: var(--color-admin-link);
   }
 
   [data-admin-theme="dark"] .hover\:text-\[\#6a52c7\]:hover {

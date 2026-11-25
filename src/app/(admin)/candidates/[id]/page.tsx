@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ExternalLink, QrCode } from "lucide-react";
+import { ExternalLink, PenLine, QrCode } from "lucide-react";
 import { requirePermission } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -23,7 +23,8 @@ import { auditChangeRows } from "@/lib/audit-view";
 import { auditEventLabel } from "@/lib/vip/audit-events";
 import { loadEditHistory, type EditHistoryResult } from "@/lib/profile-editor/review-service";
 import { EditHistoryPanel } from "@/components/admin/edit-history-panel";
-import { STATE_TEXT, type ArticleState } from "@/lib/articles/state";
+import { canRepublishDraft, STATE_TEXT, type ArticleState } from "@/lib/articles/state";
+import { ArticlePublicationButton } from "../../online-maqolalar/article-publication-button";
 import { PostLinkLabel } from "./post-link-label";
 
 export const dynamic = "force-dynamic";
@@ -90,6 +91,7 @@ export default async function CandidateDetailPage(props: {
       : { data: null };
 
   const canViewOnlineArticles = hasPermission(ctx.roles, "articles.view");
+  const canEditOnlineArticles = hasPermission(ctx.roles, "articles.edit");
   const { data: onlineArticles, error: onlineArticlesError } =
     tab === "articles" && canViewOnlineArticles
       ? await admin
@@ -312,6 +314,23 @@ export default async function CandidateDetailPage(props: {
                         <span className="rounded-full border border-line px-2.5 py-1 text-xs text-ink">
                           {STATE_TEXT[article.state as ArticleState] ?? article.state}
                         </span>
+                        {canEditOnlineArticles && (
+                          <Link
+                            href={`/online-maqolalar/${article.id}/edit`}
+                            prefetch={false}
+                            className="inline-flex min-h-10 items-center gap-1.5 text-xs font-bold text-brand hover:underline"
+                            aria-label={`${article.title} — tahrirlash`}
+                          >
+                            <PenLine className="h-4 w-4" aria-hidden="true" /> Tahrirlash
+                          </Link>
+                        )}
+                        {canEditOnlineArticles && (article.state === "published" || canRepublishDraft(article.state, article.slug)) && (
+                          <ArticlePublicationButton
+                            id={article.id}
+                            title={article.title}
+                            action={article.state === "published" ? "unpublish" : "publish"}
+                          />
+                        )}
                         {article.state === "published" && article.slug && (
                           <a
                             href={`${getSiteUrl()}/liderlar-online/${encodeURIComponent(article.slug)}`}

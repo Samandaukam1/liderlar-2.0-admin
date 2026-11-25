@@ -4,6 +4,7 @@ import { recordAudit } from "@/lib/vip/audit-log";
 import type { AuditEventKey } from "@/lib/vip/audit-events";
 import {
   editorCan,
+  canRepublishDraft,
   nextState,
   requiresNote,
   slugify,
@@ -12,6 +13,7 @@ import {
   type EditorAction,
 } from "./state";
 import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
+import { getArticlePageRange, getArticleSearch } from "./list-search";
 
 /**
  * A'ZO MAQOLALARI — TAHRIRIYAT NAVBATI.
@@ -26,64 +28,82 @@ import { refreshPublicProfiles } from "@/lib/public-profile-refresh";
 
 export interface QueueArticle {
   id: string;
-  candidateId: string;
   candidateName: string;
-  candidateSlug: string;
   title: string;
   subtitle: string | null;
-  excerpt: string | null;
   content: string;
   heroUrl: string | null;
   heroAlt: string | null;
   state: ArticleState;
   reviewNote: string | null;
   submittedAt: string | null;
-  slug: string | null;
 }
 
-/**
- * Tahririyat navbati.
- *
- * `submitted` va `in_review` — ishlanishi kerak bo'lganlar.
- * `approved` ham kiradi: u nashr qilishni kutib turadi va ro'yxatdan
- * tushib qolsa, tasdiqlangan maqola nashrsiz qolib ketardi.
- */
-export async function loadArticleQueue(limit = 100): Promise<QueueArticle[]> {
-  const db = createSupabaseAdminClient();
+type QueueArticleRow = {
+  id: string;
+  title: string;
+  subtitle: string | null;
+  content: string;
+  hero_url: string | null;
+  hero_alt: string | null;
+  state: ArticleState;
+  review_note: string | null;
+  submitted_at: string | null;
+  candidates: { full_name: string | null } | null;
+};
 
-  const { data, error } = await db
+/**
+ * Tahririyat navbatini qidiradi va bir sahifalik maqola matnlarini oladi.
+ * Tasdiqlangan maqolalar ham shu navbatda turadi, chunki ular nashrni kutadi.
+ */
+export async function loadArticleQueue({ page, search: query }: {
+  page: number;
+  search: string;
+}): Promise<
+  | { error: true; outOfRange: boolean }
+  | { error: false; rows: QueueArticle[]; searching: boolean; total: number }
+> {
+  const db = createSupabaseAdminClient();
+  const search = getArticleSearch(query);
+  const { from, to } = getArticlePageRange(page);
+
+  let articles = db
     .from("member_articles")
     .select(
-      "id, candidate_id, title, subtitle, excerpt, content, hero_url, hero_alt, state, review_note, submitted_at, slug, candidates(full_name, slug)",
+      `id, title, subtitle, content, hero_url, hero_alt, state, review_note, submitted_at, candidates(full_name)${search ? ", matching_author:candidates()" : ""}`,
+      { count: "exact" },
     )
-    .in("state", ["submitted", "in_review", "approved"])
-    .order("submitted_at", { ascending: true })
-    .limit(limit);
+    .in("state", ["submitted", "in_review", "approved"]);
 
-  if (error) {
-    console.error("[maqola-korik] navbat o'qilmadi:", error.message);
-    return [];
+  if (search) {
+    articles = articles.ilike("matching_author.full_name", search.pattern).or(search.titleOrAuthor);
   }
 
-  return (data ?? []).map((row) => {
-    const candidate = row.candidates as { full_name?: string; slug?: string } | null;
-    return {
-      id: row.id as string,
-      candidateId: row.candidate_id as string,
-      candidateName: candidate?.full_name?.trim() || "(nomsiz)",
-      candidateSlug: candidate?.slug ?? "",
-      title: (row.title as string) ?? "",
-      subtitle: (row.subtitle as string | null) ?? null,
-      excerpt: (row.excerpt as string | null) ?? null,
-      content: (row.content as string) ?? "",
-      heroUrl: (row.hero_url as string | null) ?? null,
-      heroAlt: (row.hero_alt as string | null) ?? null,
-      state: row.state as ArticleState,
-      reviewNote: (row.review_note as string | null) ?? null,
-      submittedAt: (row.submitted_at as string | null) ?? null,
-      slug: (row.slug as string | null) ?? null,
-    };
-  });
+  const { data, count, error } = await articles
+    .order("submitted_at", { ascending: true })
+    .order("id", { ascending: true })
+    .range(from, to)
+    .overrideTypes<QueueArticleRow[], { merge: false }>();
+
+  if (error) {
+    const outOfRange = error.code === "PGRST103";
+    if (!outOfRange || from === 0) console.error("[maqola-korik] navbat o'qilmadi:", error.message);
+    return { error: true, outOfRange };
+  }
+
+  const rows = (data ?? []).map((row) => ({
+    id: row.id,
+    candidateName: row.candidates?.full_name?.trim() || "(nomsiz)",
+    title: row.title,
+    subtitle: row.subtitle,
+    content: row.content,
+    heroUrl: row.hero_url,
+    heroAlt: row.hero_alt,
+    state: row.state,
+    reviewNote: row.review_note,
+    submittedAt: row.submitted_at,
+  }));
+  return { error: false, rows, searching: Boolean(search), total: count ?? 0 };
 }
 
 export type EditorialResult = { ok: true } | { ok: false; error: string };
@@ -117,12 +137,12 @@ export async function applyEditorialAction(input: {
   action: EditorAction;
   reviewerId: string;
   note: string;
-}): Promise<EditorialResult> {
+}): Promise<{ ok: true; candidateId: string } | Extract<EditorialResult, { ok: false }>> {
   const db = createSupabaseAdminClient();
 
   const { data: current, error: readError } = await db
     .from("member_articles")
-    .select("id, state, title, slug, candidate_id")
+    .select("id, state, title, slug, candidate_id, updated_at")
     .eq("id", input.articleId)
     .maybeSingle();
 
@@ -133,7 +153,8 @@ export async function applyEditorialAction(input: {
 
   const state = current.state as ArticleState;
 
-  if (!editorCan(input.action, state)) {
+  const republishing = input.action === "publish" && canRepublishDraft(state, current.slug);
+  if (!editorCan(input.action, state) && !republishing) {
     return {
       ok: false,
       error: "Bu amal maqolaning hozirgi holatida mumkin emas. Sahifani yangilang.",
@@ -186,13 +207,9 @@ export async function applyEditorialAction(input: {
     .from("member_articles")
     .update(patch)
     .eq("id", input.articleId)
-    /*
-     * HOLAT SHARTI YOZISHDA HAM.
-     *
-     * Yuqoridagi o'qish va bu yozish orasida boshqa muharrir
-     * holatni o'zgartirgan bo'lishi mumkin.
-     */
+    // O‘qishdan so‘ng boshqa muharrir holat yoki matnni o‘zgartirgan bo‘lsa, amal rad etiladi.
     .eq("state", state)
+    .eq("updated_at", current.updated_at)
     .select("id")
     .maybeSingle();
 
@@ -222,7 +239,7 @@ export async function applyEditorialAction(input: {
   if (!updated) {
     return {
       ok: false,
-      error: "Maqolaning holati boshqa joyda o'zgargan. Sahifani yangilang.",
+      error: "Maqola boshqa joyda o‘zgargan. Sahifani yangilang.",
     };
   }
 
@@ -244,7 +261,7 @@ export async function applyEditorialAction(input: {
     },
   });
 
-  return { ok: true };
+  return { ok: true, candidateId: current.candidate_id as string };
 }
 
 /* ========================================================================= *
@@ -336,26 +353,21 @@ async function openChannels(articleId: string): Promise<void> {
 
 export interface ArticleCounts {
   submitted: number;
-  inReview: number;
-  approved: number;
   published: number;
 }
 
-export async function loadArticleCounts(): Promise<ArticleCounts> {
+/** Menyudagi ikki hisoblagich uchun faqat sonlarni oladi. */
+export async function loadArticleCounts(): Promise<Partial<ArticleCounts>> {
   const db = createSupabaseAdminClient();
   const head = { count: "exact" as const, head: true };
 
-  const [submitted, inReview, approved, published] = await Promise.all([
-    db.from("member_articles").select("*", head).eq("state", "submitted"),
-    db.from("member_articles").select("*", head).eq("state", "in_review"),
-    db.from("member_articles").select("*", head).eq("state", "approved"),
-    db.from("member_articles").select("*", head).eq("state", "published"),
+  const [submitted, published] = await Promise.all([
+    db.from("member_articles").select("id", head).eq("state", "submitted"),
+    db.from("member_articles").select("id", head).eq("state", "published"),
   ]);
 
   return {
-    submitted: submitted.count ?? 0,
-    inReview: inReview.count ?? 0,
-    approved: approved.count ?? 0,
-    published: published.count ?? 0,
+    submitted: submitted.count ?? undefined,
+    published: published.count ?? undefined,
   };
 }

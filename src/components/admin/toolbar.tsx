@@ -16,9 +16,11 @@ export interface FilterOption {
  */
 export function DataTableToolbar({
   searchPlaceholder = "Qidirish…",
+  searchMaxLength,
   filters = [],
 }: {
   searchPlaceholder?: string;
+  searchMaxLength?: number;
   filters?: Array<{ key: string; label: string; options: FilterOption[] }>;
 }) {
   const router = useRouter();
@@ -63,6 +65,7 @@ export function DataTableToolbar({
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-soft/60" />
         <input
           value={q}
+          maxLength={searchMaxLength}
           onChange={(e) => {
             setQ(e.target.value);
             if (debounce.current) clearTimeout(debounce.current);

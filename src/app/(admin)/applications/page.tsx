@@ -1,6 +1,9 @@
 import { ClipboardList } from "lucide-react";
 import { PromoReportPanel } from "./promo-report-panel";
+import { NewApplicationsDownload } from "./new-applications-download";
+import { DailyApplicationsReport } from "./daily-applications-report";
 import { requirePermission } from "@/lib/auth";
+import { hasPermission } from "@/lib/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { parseListParams, listRange, PAGE_SIZE } from "@/lib/list";
 import { parseTashkentDateTime } from "@/lib/tashkent-day";
@@ -34,7 +37,7 @@ interface ScopedQuery {
 export default async function ApplicationsPage(props: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  await requirePermission("applications.view");
+  const ctx = await requirePermission("applications.view");
   const sp = await props.searchParams;
   const { page, q, filters } = parseListParams(sp, ["status", "gender", "age_range"]);
   const admin = createSupabaseAdminClient();
@@ -215,33 +218,39 @@ export default async function ApplicationsPage(props: {
       </p>
 
       <PromoReportPanel />
-      <DataTableToolbar
-        searchPlaceholder="Ism, telefon, Telegram yoki promo kod…"
-        filters={[
-          {
-            key: "status",
-            label: "Status",
-            options: [
-              { value: "new", label: "Yangi" },
-              { value: "in_review", label: "Ko‘rilmoqda" },
-              { value: "needs_info", label: "Ma’lumot kerak" },
-              { value: "accepted", label: "Qabul qilingan" },
-              { value: "rejected", label: "Rad etilgan" },
-              { value: "converted", label: "Nomzodga aylantirilgan" },
-            ],
-          },
-          {
-            key: "gender",
-            label: "Jinsi",
-            options: Object.entries(APPLICATION_GENDER_LABELS).map(([value, label]) => ({ value, label })),
-          },
-          {
-            key: "age_range",
-            label: "Yoshi",
-            options: APPLICATION_AGE_RANGES.map((value) => ({ value, label: value })),
-          },
-        ]}
-      />
+      <div className="flex flex-wrap items-start gap-x-3">
+        <DataTableToolbar
+          searchPlaceholder="Ism, telefon, Telegram yoki promo kod…"
+          filters={[
+            {
+              key: "status",
+              label: "Status",
+              options: [
+                { value: "new", label: "Yangi" },
+                { value: "in_review", label: "Ko‘rilmoqda" },
+                { value: "needs_info", label: "Ma’lumot kerak" },
+                { value: "accepted", label: "Qabul qilingan" },
+                { value: "rejected", label: "Rad etilgan" },
+                { value: "converted", label: "Nomzodga aylantirilgan" },
+              ],
+            },
+            {
+              key: "gender",
+              label: "Jinsi",
+              options: Object.entries(APPLICATION_GENDER_LABELS).map(([value, label]) => ({ value, label })),
+            },
+            {
+              key: "age_range",
+              label: "Yoshi",
+              options: APPLICATION_AGE_RANGES.map((value) => ({ value, label: value })),
+            },
+          ]}
+        />
+        <div className="mb-4 flex min-h-10 flex-wrap items-center gap-2.5 sm:ml-auto">
+          {hasPermission(ctx.roles, "applications.review") && <NewApplicationsDownload />}
+          <DailyApplicationsReport />
+        </div>
+      </div>
       <DataTable
         columns={columns}
         rows={rows}

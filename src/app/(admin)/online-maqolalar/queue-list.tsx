@@ -4,28 +4,26 @@ import { formatTashkentDate } from "@/lib/tashkent-day";
 
 import { useState, useTransition } from "react";
 import Image from "next/image";
+import Link from "next/link";
+import { Archive, Check, CircleX, Eye, MessageSquareText, PenLine, RotateCcw, Send } from "lucide-react";
+import { Button, type ButtonProps } from "@/components/ui/primitives";
 import { runEditorialAction } from "./actions";
 import { STATE_TEXT, editorCan, requiresNote, type EditorAction } from "@/lib/articles/state";
 import type { QueueArticle } from "@/lib/articles/editorial-service";
+import { cn } from "@/lib/utils";
 
-/**
- * TAHRIRIYAT NAVBATI.
- *
- * Maqola MAZMUNI to'liq ko'rsatiladi: muharrir nimani tasdiqlayotganini
- * ko'rmasa, tasdiqlash ma'noga ega bo'lmaydi.
- *
- * Amallar HOLATGA QARAB chiqadi — mavjud bo'lmagan amalni ko'rsatib,
- * keyin "mumkin emas" deb rad etish muharrirni chalg'itardi.
- */
-
-const ACTION_LABEL: Record<EditorAction, string> = {
-  start_review: "Ko'rishni boshlash",
-  request_changes: "Tuzatish so'rash",
-  approve: "Tasdiqlash",
-  publish: "Nashr qilish",
-  reject: "Rad etish",
-  archive: "Arxivlash",
-  unpublish: "Nashrdan qaytarish",
+const ACTIONS: Record<EditorAction, {
+  label: string;
+  Icon: typeof Eye;
+  variant?: ButtonProps["variant"];
+}> = {
+  start_review: { label: "Ko‘rishni boshlash", Icon: Eye },
+  request_changes: { label: "Tuzatishni so‘rash", Icon: MessageSquareText, variant: "warning" },
+  approve: { label: "Tasdiqlash", Icon: Check, variant: "success" },
+  publish: { label: "Nashr qilish", Icon: Send },
+  reject: { label: "Rad etish", Icon: CircleX, variant: "danger" },
+  archive: { label: "Arxivlash", Icon: Archive },
+  unpublish: { label: "Nashrdan qaytarish", Icon: RotateCcw },
 };
 
 const ALL_ACTIONS: EditorAction[] = [
@@ -37,20 +35,23 @@ const ALL_ACTIONS: EditorAction[] = [
   "archive",
 ];
 
+/** Joriy sahifadagi maqolalar kartalarini yoki qidiruvning bo‘sh natijasini ko‘rsatadi. */
 export function QueueList({
   rows,
   canReview,
+  searching,
 }: {
   rows: QueueArticle[];
   canReview: boolean;
+  searching: boolean;
 }) {
   if (rows.length === 0) {
     return (
       <section className="rounded-card border border-line bg-surface px-4 py-10 text-center">
-        <p className="text-sm font-bold text-ink">Navbatda maqola yo‘q.</p>
-        <p className="mt-1 text-xs text-ink-soft">
-          A‘zolar yuborgan maqolalar shu yerda paydo bo‘ladi.
-        </p>
+        <p className="text-sm font-bold text-ink">{searching ? "Qidiruv bo‘yicha maqola topilmadi." : "Navbatda maqola yo‘q."}</p>
+        {!searching && (
+          <p className="mt-1 text-xs text-ink-soft">A‘zolar yuborgan maqolalar shu yerda paydo bo‘ladi.</p>
+        )}
       </section>
     );
   }
@@ -64,6 +65,7 @@ export function QueueList({
   );
 }
 
+/** Maqola matnini va uning joriy holatida ruxsat berilgan amallarni ko‘rsatadi. */
 function ArticleCard({ row, canReview }: { row: QueueArticle; canReview: boolean }) {
   const [pending, startTransition] = useTransition();
   const [action, setAction] = useState<EditorAction | null>(null);
@@ -72,18 +74,25 @@ function ArticleCard({ row, canReview }: { row: QueueArticle; canReview: boolean
   const [expanded, setExpanded] = useState(false);
 
   const available = ALL_ACTIONS.filter((candidate) => editorCan(candidate, row.state));
+  const ActiveIcon = action ? ACTIONS[action].Icon : null;
+  const activeVariant = action ? ACTIONS[action].variant : undefined;
 
+  /** Tanlangan amalni yuboradi va xatoda kiritilgan izohni saqlab qoladi. */
   function run() {
-    if (!action) return;
+    if (!action || pending) return;
     startTransition(async () => {
       setError(null);
-      const result = await runEditorialAction(row.id, action, note);
-      if (!result.ok) {
-        setError(result.error);
-        return;
+      try {
+        const result = await runEditorialAction(row.id, action, note);
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
+        setAction(null);
+        setNote("");
+      } catch {
+        setError("Amalni bajarib bo‘lmadi. Qayta urinib ko‘ring.");
       }
-      setAction(null);
-      setNote("");
     });
   }
 
@@ -97,6 +106,12 @@ function ArticleCard({ row, canReview }: { row: QueueArticle; canReview: boolean
             {row.submittedAt &&
               ` · ${formatTashkentDate(row.submittedAt)}`}
           </p>
+          {canReview && (
+            <Link href={`/online-maqolalar/${row.id}/edit`} prefetch={false} className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-brand hover:underline">
+              <PenLine className="h-4 w-4" aria-hidden="true" />
+              Tahrirlash
+            </Link>
+          )}
         </div>
         <span className="shrink-0 rounded-full border border-line bg-white px-2 py-0.5 text-[11px] font-bold text-ink">
           {STATE_TEXT[row.state]}
@@ -163,24 +178,30 @@ function ArticleCard({ row, canReview }: { row: QueueArticle; canReview: boolean
       {canReview && (
         <div className="mt-3">
           <div className="flex flex-wrap gap-1.5">
-            {available.map((option) => (
-              <button
-                key={option}
-                type="button"
-                disabled={pending}
-                onClick={() => {
-                  setAction(option);
-                  setError(null);
-                }}
-                className={`rounded-md border px-2.5 py-1.5 text-[11px] font-bold transition disabled:opacity-50 ${
-                  action === option
-                    ? "border-ink bg-ink text-white"
-                    : "border-line bg-white text-ink hover:bg-surface"
-                }`}
-              >
-                {ACTION_LABEL[option]}
-              </button>
-            ))}
+            {available.map((option) => {
+              const { label, Icon, variant } = ACTIONS[option];
+              return (
+                <Button
+                  key={option}
+                  type="button"
+                  size="sm"
+                  variant={variant ?? (action === option ? "primary" : "secondary")}
+                  aria-pressed={action === option}
+                  className={cn(
+                    "aria-pressed:ring-2 aria-pressed:ring-brand aria-pressed:ring-offset-2 aria-pressed:ring-offset-surface",
+                    variant && "text-navy-deep!",
+                  )}
+                  disabled={pending}
+                  onClick={() => {
+                    setAction(option);
+                    setError(null);
+                  }}
+                >
+                  <Icon className="size-4 shrink-0" aria-hidden="true" />
+                  {label}
+                </Button>
+              );
+            })}
           </div>
 
           {action && (
@@ -209,32 +230,36 @@ function ArticleCard({ row, canReview }: { row: QueueArticle; canReview: boolean
               </label>
 
               <div className="mt-2 flex flex-wrap gap-2">
-                <button
+                <Button
                   type="button"
+                  size="sm"
+                  variant={activeVariant}
+                  className={activeVariant ? "text-navy-deep!" : undefined}
                   disabled={pending}
                   onClick={run}
-                  className="rounded-md bg-ink px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50"
                 >
-                  {pending ? "Bajarilmoqda…" : ACTION_LABEL[action]}
-                </button>
-                <button
+                  {ActiveIcon && <ActiveIcon className="size-4 shrink-0" aria-hidden="true" />}
+                  {pending ? "Bajarilmoqda…" : ACTIONS[action].label}
+                </Button>
+                <Button
                   type="button"
+                  size="sm"
+                  variant="secondary"
                   disabled={pending}
                   onClick={() => {
                     setAction(null);
                     setError(null);
                   }}
-                  className="rounded-md border border-line px-3 py-1.5 text-xs font-bold text-ink-soft"
                 >
                   Bekor qilish
-                </button>
+                </Button>
               </div>
             </div>
           )}
         </div>
       )}
 
-      {error && <p className="mt-2 text-xs font-bold text-rose-600">{error}</p>}
+      {error && <p role="alert" className="mt-2 text-xs font-bold text-rose-600">{error}</p>}
     </li>
   );
 }

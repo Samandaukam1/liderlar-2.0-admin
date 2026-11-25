@@ -24,10 +24,12 @@ export function Pagination({
   page,
   pageSize,
   total,
+  prefetch,
 }: {
   page: number;
   pageSize: number;
   total: number;
+  prefetch?: boolean;
 }) {
   const pathname = usePathname();
   const params = useSearchParams();
@@ -49,10 +51,10 @@ export function Pagination({
         Jami <b className="text-ink">{total}</b> ta yozuv · {page}/{totalPages}-sahifa
       </p>
       <div className="flex items-center gap-1.5">
-        <PaginationLink href={href(page - 1)} disabled={page <= 1}>
+        <PaginationLink href={href(page - 1)} disabled={page <= 1} prefetch={prefetch}>
           <ChevronLeft className="h-4 w-4" />
         </PaginationLink>
-        <PaginationLink href={href(page + 1)} disabled={page >= totalPages}>
+        <PaginationLink href={href(page + 1)} disabled={page >= totalPages} prefetch={prefetch}>
           <ChevronRight className="h-4 w-4" />
         </PaginationLink>
       </div>
@@ -63,10 +65,12 @@ export function Pagination({
 function PaginationLink({
   href,
   disabled,
+  prefetch,
   children,
 }: {
   href: string;
   disabled?: boolean;
+  prefetch?: boolean;
   children: ReactNode;
 }) {
   if (disabled) {
@@ -79,6 +83,7 @@ function PaginationLink({
   return (
     <Link
       href={href}
+      prefetch={prefetch}
       className="flex h-9 w-9 items-center justify-center rounded-xl border border-line bg-card text-ink transition hover:border-brand/50 hover:text-brand"
     >
       {children}

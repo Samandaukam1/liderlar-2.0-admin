@@ -15,6 +15,7 @@ type ButtonVariant =
   | "ghost"
   | "danger"
   | "success"
+  | "warning"
   | "ai";
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
@@ -27,6 +28,8 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
     "bg-gradient-to-r from-coral to-rose text-white shadow-[0_8px_24px_rgba(255,133,133,0.3)] hover:brightness-105",
   success:
     "bg-gradient-to-r from-green to-mint text-white shadow-[0_8px_24px_rgba(100,199,123,0.3)] hover:brightness-105",
+  warning:
+    "bg-gradient-to-r from-amber to-peach text-navy-deep shadow-[0_8px_24px_rgba(244,185,79,0.24)] hover:brightness-105",
   ai: "ai-gradient text-white shadow-[0_8px_28px_rgba(105,82,224,0.35)] hover:brightness-110",
 };
 
