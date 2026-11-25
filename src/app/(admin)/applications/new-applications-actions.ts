@@ -14,6 +14,11 @@ const PAGE_SIZE = 500;
 const EXPORT_REVIEW_REASON = "Yangi arizalar eksporti";
 const timestamp = z.iso.datetime({ offset: true });
 const cursorSchema = z.object({ id: z.uuid(), created_at: timestamp });
+const reportBoundarySchema = cursorSchema.extend({
+  full_name: z.string(),
+  status: z.string(),
+});
+const reviewEventSchema = z.object({ entity_id: z.uuid(), created_at: timestamp });
 const receiptSchema = z.object({
   boundaryId: z.uuid().nullable(),
   latest: cursorSchema.extend({ updated_at: timestamp }),
@@ -147,52 +152,48 @@ export async function completeNewApplicationsExport(input: z.infer<typeof signed
   }
 }
 
-async function latestReviewEvent(admin: Admin, before: string, from?: string, exportOnly = true) {
-  let query = admin.from("audit_logs")
-    .select("entity_id")
+async function latestReviewEvent(admin: Admin, from: string, before: string) {
+  const { data, error } = await admin.from("audit_logs")
+    .select("entity_id, created_at")
     .eq("entity_type", "application")
     .eq("action", "application.in_review")
-    .lt("created_at", before);
-  if (from) query = query.gte("created_at", from);
-  if (exportOnly) query = query.eq("reason", EXPORT_REVIEW_REASON);
-
-  const { data, error } = await query
+    .gte("created_at", from)
+    .lt("created_at", before)
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (error) throw error;
-  return data ? z.uuid().parse(data.entity_id) : null;
+  return data ? reviewEventSchema.parse(data) : null;
 }
 
 export async function getDailyApplicationsReport() {
   await requirePermission("applications.view");
   const admin = createSupabaseAdminClient();
-  const day = tashkentDayRange();
+  const now = new Date();
+  const day = tashkentDayRange(now);
+  const yesterday = tashkentDayRange(new Date(Date.parse(day.startIso) - 1));
 
   try {
-    const [todayId, previousExportId] = await Promise.all([
-      latestReviewEvent(admin, day.endIso, day.startIso),
-      latestReviewEvent(admin, day.startIso),
+    const [today, previous] = await Promise.all([
+      latestReviewEvent(admin, day.startIso, now.toISOString()),
+      latestReviewEvent(admin, yesterday.startIso, day.startIso),
     ]);
-    if (!todayId) return { status: "no_export" } as const;
-
-    // Before TXT exports existed, reviewers set the same status manually.
-    const previousId = previousExportId ?? await latestReviewEvent(admin, day.startIso, undefined, false);
-    if (!previousId) return { status: "no_boundary" } as const;
+    if (!today) return { status: "no_today_review" } as const;
+    if (!previous) return { status: "no_yesterday_review" } as const;
 
     const { data: boundaries, error: boundaryError } = await admin.from("applications")
-      .select("id, created_at")
-      .in("id", [previousId, todayId]);
+      .select("id, created_at, full_name, status")
+      .in("id", [previous.entity_id, today.entity_id]);
     if (boundaryError) throw boundaryError;
-    const bounds = z.array(cursorSchema).parse(boundaries);
-    const start = bounds.find((row) => row.id === previousId);
-    const end = bounds.find((row) => row.id === todayId);
+    const bounds = z.array(reportBoundarySchema).parse(boundaries);
+    const start = bounds.find((row) => row.id === previous.entity_id);
+    const end = bounds.find((row) => row.id === today.entity_id);
     if (!start || !end) return { status: "no_boundary" } as const;
 
     let total = 0;
     let withUsername = 0;
-    let cursor = start;
+    let cursor: Cursor = start;
     const throughEnd = `created_at.lt.${end.created_at},and(created_at.eq.${end.created_at},id.lte.${end.id})`;
 
     while (true) {
@@ -214,7 +215,14 @@ export async function getDailyApplicationsReport() {
       cursor = cursorSchema.parse(data.at(-1));
     }
 
-    return { status: "ready", date: day.date, total, withUsername } as const;
+    return {
+      status: "ready",
+      date: day.date,
+      total,
+      withUsername,
+      start: { name: start.full_name, receivedAt: start.created_at, reviewedAt: previous.created_at, status: start.status },
+      end: { name: end.full_name, receivedAt: end.created_at, reviewedAt: today.created_at, status: end.status },
+    } as const;
   } catch (error) {
     console.error("Kunlik arizalar hisoboti tayyorlanmadi", error);
     return { status: "error" } as const;
