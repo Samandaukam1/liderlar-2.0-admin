@@ -29,7 +29,7 @@ const KIND_LABELS: Record<EntryKind, { title: string; itemLabel: string; subtitl
   achievement: { title: "Yutuqlar", itemLabel: "Yutuq nomi", subtitleLabel: "Beruvchi tashkilot" },
   event: { title: "Tadbirlar", itemLabel: "Tadbir nomi", subtitleLabel: "Rol / joy" },
   book: { title: "O‘qilgan kitoblar", itemLabel: "Kitob nomi", subtitleLabel: "Muallif" },
-  social: { title: "Ijtimoiy tarmoqlar", itemLabel: "Tarmoq nomi", subtitleLabel: "Foydalanuvchi nomi" },
+  social: { title: "Ijtimoiy tarmoqlar", itemLabel: "Ijtimoiy tarmoq nomi", subtitleLabel: "" },
 };
 
 export function EntriesPanel({
@@ -149,22 +149,26 @@ export function EntriesPanel({
           <FormField label={labels.itemLabel} htmlFor={`${kind}-title`}>
             <Input id={`${kind}-title`} name="title" required minLength={2} />
           </FormField>
-          <FormField label={labels.subtitleLabel} htmlFor={`${kind}-subtitle`}>
-            <Input id={`${kind}-subtitle`} name="subtitle" />
-          </FormField>
-          <FormField label="Tavsif" htmlFor={`${kind}-desc`}>
-            <Textarea id={`${kind}-desc`} name="description" rows={3} />
-          </FormField>
-          <div className="grid grid-cols-2 gap-4">
-            <FormField label="Boshlanish" htmlFor={`${kind}-from`}>
-              <Input id={`${kind}-from`} name="date_from" type="date" />
-            </FormField>
-            <FormField label="Tugash" htmlFor={`${kind}-to`}>
-              <Input id={`${kind}-to`} name="date_to" type="date" />
-            </FormField>
-          </div>
-          <FormField label="Havola (ixtiyoriy)" htmlFor={`${kind}-url`}>
-            <Input id={`${kind}-url`} name="url" type="url" placeholder="https://" />
+          {kind !== "social" && (
+            <>
+              <FormField label={labels.subtitleLabel} htmlFor={`${kind}-subtitle`}>
+                <Input id={`${kind}-subtitle`} name="subtitle" />
+              </FormField>
+              <FormField label="Tavsif" htmlFor={`${kind}-desc`}>
+                <Textarea id={`${kind}-desc`} name="description" rows={3} />
+              </FormField>
+              <div className="grid grid-cols-2 gap-4">
+                <FormField label="Boshlanish" htmlFor={`${kind}-from`}>
+                  <Input id={`${kind}-from`} name="date_from" type="date" />
+                </FormField>
+                <FormField label="Tugash" htmlFor={`${kind}-to`}>
+                  <Input id={`${kind}-to`} name="date_to" type="date" />
+                </FormField>
+              </div>
+            </>
+          )}
+          <FormField label={kind === "social" ? "Havola" : "Havola (ixtiyoriy)"} htmlFor={`${kind}-url`}>
+            <Input id={`${kind}-url`} name="url" type="url" placeholder="https://" required={kind === "social"} />
           </FormField>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="secondary" onClick={() => setOpen(false)}>

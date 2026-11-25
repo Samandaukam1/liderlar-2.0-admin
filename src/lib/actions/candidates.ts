@@ -249,6 +249,11 @@ const entrySchema = z.object({
   url: z.string().max(500).optional().or(z.literal("")),
 });
 
+const socialEntrySchema = entrySchema.extend({
+  title: z.string().trim().min(2).max(300),
+  url: z.string().trim().max(500).pipe(z.url({ protocol: /^https?$/, error: "Havolani http:// yoki https:// bilan kiriting." })),
+});
+
 export async function addCandidateEntryAction(
   candidateId: string,
   kind: EntryKind,
@@ -257,7 +262,9 @@ export async function addCandidateEntryAction(
   const ctx = await requirePermission("candidates.edit");
   const table = ENTRY_TABLES[kind];
   if (!table) return { ok: false, error: "Noto‘g‘ri bo‘lim" };
-  const parsed = entrySchema.safeParse(Object.fromEntries(formData.entries()));
+  const parsed = kind === "social"
+    ? socialEntrySchema.safeParse({ title: formData.get("title"), url: formData.get("url") })
+    : entrySchema.safeParse(Object.fromEntries(formData.entries()));
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Forma xatosi" };
   }
@@ -266,11 +273,13 @@ export async function addCandidateEntryAction(
   const { error } = await admin.from(table).insert({
     candidate_id: candidateId,
     title: v.title.trim(),
-    subtitle: nullable(v.subtitle),
-    description: nullable(v.description),
-    date_from: nullable(v.date_from),
-    date_to: nullable(v.date_to),
     url: nullable(v.url),
+    ...(kind !== "social" && {
+      subtitle: nullable(v.subtitle),
+      description: nullable(v.description),
+      date_from: nullable(v.date_from),
+      date_to: nullable(v.date_to),
+    }),
   });
   if (error) return { ok: false, error: error.message };
   await logAudit({

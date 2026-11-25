@@ -10,6 +10,7 @@ import { Avatar, Badge, StatusBadge } from "@/components/admin/badges";
 import { CandidateEditor } from "../candidate-editor";
 import { StatusActions } from "./status-actions";
 import { EntriesPanel, type EntryRow } from "./entries-panel";
+import { ActivityCertificates, type ActivityCertificate } from "./activity-certificates";
 import { AdabiyotXPanel } from "./adabiyotx-panel";
 import { CertificatePanel } from "./certificate-panel";
 import { cn, formatDate, daysUntil } from "@/lib/utils";
@@ -68,7 +69,7 @@ export default async function CandidateDetailPage(props: {
   const canArchive = hasPermission(ctx.roles, "candidates.archive");
 
   const entrySelect = "id, title, subtitle, description, date_from, date_to, url";
-  const [education, work, achievements, events, books, socials] =
+  const [education, work, achievements, events, books, socials, activityCertificates, certificateEvidence] =
     tab === "activity"
       ? await Promise.all([
           admin.from("education").select(entrySelect).eq("candidate_id", id).order("date_from", { ascending: false }),
@@ -77,8 +78,18 @@ export default async function CandidateDetailPage(props: {
           admin.from("events").select(entrySelect).eq("candidate_id", id).order("date_from", { ascending: false }),
           admin.from("books_read").select(entrySelect).eq("candidate_id", id).order("created_at", { ascending: false }),
           admin.from("social_links").select(entrySelect).eq("candidate_id", id).order("created_at"),
+          admin.from("candidate_certificates")
+            .select(`id, title, issuer, issued_on, expires_on, credential_number, credential_url, description, trust, updated_at${canEdit ? ", evidence_url" : ""}`)
+            .eq("candidate_id", id)
+            .order("sort_order")
+            .order("created_at", { ascending: true })
+            .returns<Omit<ActivityCertificate, "hasEvidence">[]>(),
+          canEdit
+            ? admin.from("certificate_evidence").select("certificate_id").eq("candidate_id", id)
+            : null,
         ])
-      : [null, null, null, null, null, null];
+      : [null, null, null, null, null, null, null, null];
+  const certificateEvidenceIds = new Set((certificateEvidence?.data ?? []).map(({ certificate_id }) => certificate_id));
 
   const { data: articles } =
     tab === "articles"
@@ -252,6 +263,21 @@ export default async function CandidateDetailPage(props: {
           {tab === "activity" && (
             <div className="space-y-4">
               <EntriesPanel candidateId={id} kind="achievement" entries={(achievements?.data ?? []) as EntryRow[]} canEdit={canEdit} />
+              {activityCertificates?.error || certificateEvidence?.error ? (
+                <Card>
+                  <h3 className="text-sm font-bold text-ink">Sertifikatlar</h3>
+                  <p className="mt-2 text-sm text-ink-soft">Sertifikatlarni o‘qib bo‘lmadi. Sahifani yangilang.</p>
+                </Card>
+              ) : (
+                <ActivityCertificates
+                  candidateId={id}
+                  canEdit={canEdit}
+                  certificates={(activityCertificates?.data ?? []).map((certificate) => ({
+                    ...certificate,
+                    hasEvidence: certificateEvidenceIds.has(certificate.id),
+                  }))}
+                />
+              )}
               <EntriesPanel candidateId={id} kind="education" entries={(education?.data ?? []) as EntryRow[]} canEdit={canEdit} />
               <EntriesPanel candidateId={id} kind="work" entries={(work?.data ?? []) as EntryRow[]} canEdit={canEdit} />
               <EntriesPanel candidateId={id} kind="event" entries={(events?.data ?? []) as EntryRow[]} canEdit={canEdit} />
