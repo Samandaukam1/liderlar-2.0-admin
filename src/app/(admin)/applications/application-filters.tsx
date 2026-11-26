@@ -5,6 +5,7 @@ import { useTransition } from "react";
 import { CalendarClock, TicketSlash, X } from "lucide-react";
 import { Input, Label } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
+import { PromoHideFilter } from "./promo-hide-filter";
 
 /**
  * VAQT ORALIG'I VA "PROMO KODSIZLAR TEPADA".
@@ -73,6 +74,8 @@ export function ApplicationFilters() {
 
   return (
     <section className="mb-4 rounded-card border border-line bg-card p-4 shadow-card">
+      <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.65fr)]">
+      <div className="min-w-0">
       <div className="flex flex-wrap items-end gap-3">
         <div className="min-w-[190px]">
           <Label htmlFor="from">
@@ -87,14 +90,17 @@ export function ApplicationFilters() {
         </div>
 
         <div className="min-w-[190px]">
-          <Label htmlFor="to">Vaqtgacha</Label>
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <Label htmlFor="to" className="!mb-0">Vaqtgacha</Label>
+            <span id="to-hint" className="text-[11px] text-ink-soft">Bo‘sh — hozirgacha</span>
+          </div>
           <Input
             id="to"
+            aria-describedby="to-hint"
             type="datetime-local"
             value={to}
             onChange={(event) => apply({ to: event.target.value })}
           />
-          <p className="mt-1 text-[11px] text-ink-soft">Bo‘sh — hozirgacha</p>
         </div>
 
         {/*
@@ -147,6 +153,11 @@ export function ApplicationFilters() {
         <span className="text-[11px] text-ink-soft">
           Vaqt <b>Toshkent</b> bo‘yicha
         </span>
+      </div>
+      </div>
+      <div className="min-w-0 border-t border-line pt-4 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
+        <PromoHideFilter />
+      </div>
       </div>
     </section>
   );

@@ -2,6 +2,7 @@
 
 import { useState, useTransition, type FormEvent } from "react";
 import { Download } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import { Modal } from "@/components/ui/overlays";
 import { Button, Input, Label } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
@@ -21,6 +22,12 @@ function downloadText(file: Download) {
 }
 
 export function NewApplicationsDownload() {
+  const params = useSearchParams();
+  const hiddenPromo = params.get("hide_promo") === "1" ? params.get("hidden_promo") ?? "" : "";
+  return <FilteredApplicationsDownload key={hiddenPromo} hiddenPromo={hiddenPromo} />;
+}
+
+function FilteredApplicationsDownload({ hiddenPromo }: { hiddenPromo: string }) {
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
   const [chooseStart, setChooseStart] = useState(false);
@@ -31,7 +38,7 @@ export function NewApplicationsDownload() {
     if (pending) return;
     startTransition(async () => {
       try {
-        const file = retryFile ?? await prepareNewApplicationsExport(start);
+        const file = retryFile ?? await prepareNewApplicationsExport(start, hiddenPromo);
         if (file.status === "start_required") {
           if (start) toast("warning", "Toshkent vaqti bo‘yicha o‘tgan sana va vaqtni tanlang");
           setChooseStart(true);

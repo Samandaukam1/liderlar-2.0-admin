@@ -8,6 +8,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { parseListParams, listRange, PAGE_SIZE } from "@/lib/list";
 import { parseTashkentDateTime } from "@/lib/tashkent-day";
 import { ApplicationFilters } from "./application-filters";
+import { hiddenPromoCondition, parseHiddenPromoCodes } from "./promo-hide-utils";
 import type { Application } from "@/lib/types";
 import { APPLICATION_AGE_RANGES, APPLICATION_GENDER_LABELS, genderLabel } from "@/lib/application-fields";
 import { PageHeader } from "@/components/admin/page-header";
@@ -61,6 +62,7 @@ export default async function ApplicationsPage(props: {
   const fromIso = parseTashkentDateTime(one(sp.from));
   const toIso = parseTashkentDateTime(one(sp.to));
   const noPromoFirst = one(sp.promo) === "kodsiz";
+  const hiddenPromoCodes = one(sp.hide_promo) === "1" ? parseHiddenPromoCodes(one(sp.hidden_promo)) : [];
 
   /*
    * Uchala so'rov (ro'yxat + ikki sanoq) BIR XIL chegarada
@@ -76,6 +78,7 @@ export default async function ApplicationsPage(props: {
     // Yuqori chegara EKSKLYUZIV: aynan o'sha daqiqada kelgan ariza
     // ikkala oynaga ham tushib qolmasin.
     if (toIso) next = next.lt("created_at", toIso);
+    if (hiddenPromoCodes.length) next = next.or(hiddenPromoCondition(hiddenPromoCodes));
     if (q) {
       next = next.or(
         `full_name.ilike.%${q}%,phone.ilike.%${q}%,telegram.ilike.%${q}%,promo_code.ilike.%${q}%`,

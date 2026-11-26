@@ -9,6 +9,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { parseTashkentDateTime, tashkentDayRange, tashkentToday } from "@/lib/tashkent-day";
 import type { Application } from "@/lib/types";
 import { formatNewApplications, telegramUsername } from "./new-applications-txt";
+import { hiddenPromoCondition, parseHiddenPromoCodes } from "./promo-hide-utils";
 
 const PAGE_SIZE = 500;
 const EXPORT_REVIEW_REASON = "Yangi arizalar eksporti";
@@ -61,13 +62,14 @@ function signReceipt(receipt: ExportReceipt, actorId: string): Buffer {
 }
 
 /** Yangi arizalarni o‘qiydi va raqamlangan faylni imzolangan kvitansiya bilan tayyorlaydi. */
-export async function prepareNewApplicationsExport(startAt?: string) {
+export async function prepareNewApplicationsExport(startAt?: string, hiddenPromo = "") {
   const ctx = await requirePermission("applications.review");
   const admin = createSupabaseAdminClient();
   const now = new Date();
   const until = now.toISOString();
 
   try {
+    const hiddenCodes = parseHiddenPromoCodes(hiddenPromo);
     const context = await loadExportContext(admin, until);
     const { boundary } = context;
     let cursor = boundary;
@@ -88,6 +90,7 @@ export async function prepareNewApplicationsExport(startAt?: string) {
         .limit(PAGE_SIZE);
       if (cursor) query = query.or(following(cursor));
       else if (since) query = query.gte("created_at", since);
+      if (hiddenCodes.length) query = query.or(hiddenPromoCondition(hiddenCodes));
 
       const { data, error } = await query;
       if (error) throw error;
