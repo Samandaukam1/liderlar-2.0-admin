@@ -284,8 +284,7 @@ export function CandidateEditor({
 
   const diffs = useMemo(() => parseResult ? meaningfulDiffs(data, parseResult.data) : [], [data, parseResult]);
 
-  return (
-    <div className="space-y-5">
+  const promptCard = (
       <Card className="border-lavender/30 bg-gradient-to-br from-card via-card to-lavender/[0.06] !p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex max-w-3xl items-start gap-3">
@@ -306,6 +305,11 @@ export function CandidateEditor({
         </div>
         <Textarea aria-label="Nomzod uchun AI prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={8} className="mt-4 font-mono text-xs" />
       </Card>
+  );
+
+  return (
+    <div className="space-y-5">
+      {!candidateId && promptCard}
 
       <div className="grid grid-cols-3 gap-2 rounded-[16px] border border-line bg-card p-1 lg:hidden" role="tablist" aria-label="Nomzod muharriri panellari">
         {(["fields", "text", "preview"] as MobileTab[]).map((tab) => (
@@ -426,6 +430,8 @@ export function CandidateEditor({
         </div>
         <Button onClick={() => void save()} disabled={saveState === "saving" || aiRunning}><Save className="h-4 w-4" /> {saveState === "saving" ? "Saqlanmoqda…" : candidateId ? "O‘zgarishlarni saqlash" : "Nomzodni yaratish"}</Button>
       </div>
+      {candidateId && promptCard}
+
     </div>
   );
 }

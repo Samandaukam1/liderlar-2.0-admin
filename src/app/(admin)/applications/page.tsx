@@ -218,7 +218,7 @@ export default async function ApplicationsPage(props: {
       </p>
 
       <PromoReportPanel />
-      <div className="flex flex-wrap items-start gap-x-3">
+      <div className="mb-4 flex flex-wrap items-center gap-2.5 [&>div:first-child]:contents [&>div:first-child>div]:min-w-[180px] [&>div:first-child>div]:sm:max-w-[240px]">
         <DataTableToolbar
           searchPlaceholder="Ism, telefon, Telegram yoki promo kod…"
           filters={[
@@ -246,7 +246,7 @@ export default async function ApplicationsPage(props: {
             },
           ]}
         />
-        <div className="mb-4 flex min-h-10 flex-wrap items-center gap-2.5 sm:ml-auto">
+        <div className="flex min-h-10 flex-wrap items-center gap-2.5 sm:ml-auto">
           {hasPermission(ctx.roles, "applications.review") && <NewApplicationsDownload />}
           <DailyApplicationsReport />
         </div>

@@ -27,6 +27,7 @@ import { EditHistoryPanel } from "@/components/admin/edit-history-panel";
 import { canRepublishDraft, STATE_TEXT, type ArticleState } from "@/lib/articles/state";
 import { ArticlePublicationButton } from "../../online-maqolalar/article-publication-button";
 import { PostLinkLabel } from "./post-link-label";
+import { CreateCandidatePostButton } from "./create-candidate-post-button";
 
 export const dynamic = "force-dynamic";
 
@@ -207,6 +208,8 @@ export default async function CandidateDetailPage(props: {
                 >
                   <PostLinkLabel />
                 </Link>
+              ) : !postResult.error && hasPermission(ctx.roles, "posts.manage") ? (
+                <CreateCandidatePostButton candidateId={candidate.id} />
               ) : (
                 <span className="text-xs text-ink-soft">{postResult.error ? "Postni tekshirib bo‘lmadi" : "Post hali yaratilmagan"}</span>
               )

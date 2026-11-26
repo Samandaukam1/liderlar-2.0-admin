@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { PenLine } from "lucide-react";
+import Image from "next/image";
+import { ImageIcon, PenLine } from "lucide-react";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/admin/page-header";
 import { Pagination } from "@/components/admin/pagination";
@@ -36,6 +37,8 @@ const LISTS = {
 type PublicationListArticle = {
   id: string;
   title: string;
+  hero_url: string | null;
+  hero_alt: string | null;
   list_date: string | null;
   candidates: { full_name: string | null } | null;
 };
@@ -55,7 +58,7 @@ export async function ArticlePublicationList({ state, searchParams }: {
   const db = createSupabaseAdminClient();
   let query = db.from("member_articles")
     .select(
-      `id, title, list_date:${list.dateField}, candidates(full_name)${search ? ", matching_author:candidates()" : ""}`,
+      `id, title, hero_url, hero_alt, list_date:${list.dateField}, candidates(full_name)${search ? ", matching_author:candidates()" : ""}`,
       { count: "exact" },
     )
     .eq("state", state);
@@ -98,12 +101,29 @@ export async function ArticlePublicationList({ state, searchParams }: {
             <ul className="divide-y divide-line">
               {data.map((article) => (
                 <li key={article.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3">
-                  <div className="min-w-0">
-                    <p className="break-words text-sm font-bold text-ink">{article.title}</p>
-                    <p className="mt-1 text-xs text-ink-soft">
-                      {article.candidates?.full_name ?? "Muallif topilmadi"}
-                      {article.list_date ? ` · ${formatDate(article.list_date, true)}` : ""}
-                    </p>
+                  <div className="flex min-w-0 flex-1 basis-64 items-center gap-3">
+                    <div className="flex h-14 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-line bg-surface sm:h-16 sm:w-24">
+                      {article.hero_url ? (
+                        <Image
+                          src={article.hero_url}
+                          alt={article.hero_alt ?? ""}
+                          width={192}
+                          height={128}
+                          loading="lazy"
+                          unoptimized
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <ImageIcon className="h-5 w-5 text-ink-soft" aria-label="Maqola rasmi yo‘q" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="break-words text-sm font-bold text-ink">{article.title}</p>
+                      <p className="mt-1 text-xs text-ink-soft">
+                        {article.candidates?.full_name ?? "Muallif topilmadi"}
+                        {article.list_date ? ` · ${formatDate(article.list_date, true)}` : ""}
+                      </p>
+                    </div>
                   </div>
                   {canEdit && (
                     <div className="flex flex-wrap items-center gap-3">

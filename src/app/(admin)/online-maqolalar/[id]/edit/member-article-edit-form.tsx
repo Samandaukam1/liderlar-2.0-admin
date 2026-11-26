@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { Save } from "lucide-react";
-import { useState, useTransition, type FormEvent } from "react";
+import { ImageIcon, Save, UploadCloud } from "lucide-react";
+import { useEffect, useRef, useState, useTransition, type ChangeEvent, type FormEvent } from "react";
 import { Button, Card, FormField, Input, Textarea } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { uploadToBucket } from "@/lib/upload-client";
@@ -20,6 +20,32 @@ export function MemberArticleEditForm({ article }: {
   const { toast } = useToast();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const bannerInput = useRef<HTMLInputElement>(null);
+  const [selectedBanner, setSelectedBanner] = useState<{ url: string; name: string } | null>(null);
+  const previewUrl = selectedBanner?.url ?? (article.hero_url && /^https?:\/\//i.test(article.hero_url) ? article.hero_url : null);
+
+  useEffect(() => {
+    return () => {
+      if (selectedBanner) URL.revokeObjectURL(selectedBanner.url);
+    };
+  }, [selectedBanner]);
+
+  function selectBanner(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    if (!file) {
+      setSelectedBanner(null);
+      return;
+    }
+    const check = validateUpload("candidate-gallery", file.type, file.size);
+    if ("error" in check) {
+      event.currentTarget.value = "";
+      setSelectedBanner(null);
+      setError(check.error);
+      return;
+    }
+    setError(null);
+    setSelectedBanner({ url: URL.createObjectURL(file), name: file.name });
+  }
 
   /** Banner tanlansa, uni bevosita Storage’ga yuklaydi va forma bilan faqat manzilini yuboradi. */
   function save(event: FormEvent<HTMLFormElement>) {
@@ -61,11 +87,26 @@ export function MemberArticleEditForm({ article }: {
       <form onSubmit={save} className="space-y-4">
         <fieldset disabled={pending} className="space-y-4">
           <FormField label="Banner rasmi" htmlFor="member-article-banner">
-            {article.hero_url && /^https?:\/\//i.test(article.hero_url) && (
-              <Image src={article.hero_url} alt="Joriy banner" width={320} height={180} unoptimized className="mb-2 aspect-video rounded-field object-cover" />
-            )}
-            <Input id="member-article-banner" name="banner" type="file" accept="image/jpeg,image/png,image/webp" />
-            <p className="mt-1 text-xs text-ink-soft">JPG, PNG yoki WebP · 8 MB gacha</p>
+            <div className="mb-3 flex aspect-video w-full max-w-md items-center justify-center overflow-hidden rounded-field border border-line bg-surface">
+              {previewUrl ? (
+                <Image src={previewUrl} alt="Banner rasmi preview" width={640} height={360} unoptimized className="h-full w-full object-contain" />
+              ) : (
+                <div className="flex flex-col items-center gap-2 text-ink-soft">
+                  <ImageIcon className="h-8 w-8" aria-hidden="true" />
+                  <span className="text-xs">Banner rasmini tanlang</span>
+                </div>
+              )}
+            </div>
+            <input ref={bannerInput} id="member-article-banner" name="banner" type="file" accept="image/jpeg,image/png,image/webp" onChange={selectBanner} className="sr-only" tabIndex={-1} />
+            <div className="flex flex-wrap items-center gap-3">
+              <Button type="button" variant="secondary" size="sm" onClick={() => bannerInput.current?.click()}>
+                <UploadCloud className="h-4 w-4" aria-hidden="true" />
+                {previewUrl ? "Rasmni almashtirish" : "Rasm yuklash"}
+              </Button>
+              {selectedBanner && <span className="max-w-full truncate text-xs text-ink-soft" role="status">{selectedBanner.name}</span>}
+            </div>
+            <p className="mt-2 text-xs text-ink-soft">JPG, PNG yoki WebP · 8 MB gacha</p>
+            {selectedBanner && <p className="mt-1 text-xs text-brand">Yangi banner tanlandi. Saqlash bosilganda yuklanadi.</p>}
           </FormField>
           <FormField label="Sarlavha" htmlFor="member-article-title">
             <Input id="member-article-title" name="title" defaultValue={article.title} minLength={5} maxLength={300} required />
