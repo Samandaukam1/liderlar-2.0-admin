@@ -14,6 +14,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { formatDate } from "@/lib/utils";
 import { ArticlePublicationButton } from "./article-publication-button";
 import { ArticleSectionNav } from "./article-section-nav";
+import { loadArticleCounts } from "@/lib/articles/editorial-service";
 
 const LISTS = {
   published: {
@@ -72,11 +73,12 @@ export async function ArticlePublicationList({ state, searchParams }: {
     query = query.ilike("matching_author.full_name", search.pattern).or(search.titleOrAuthor);
   }
 
-  const { data, count, error } = await query
+  const [result, counts] = await Promise.all([query
     .order(list.dateField, { ascending: false, nullsFirst: false })
     .order("id", { ascending: false })
     .range(from, to)
-    .returns<PublicationListArticle[]>();
+    .returns<PublicationListArticle[]>(), loadArticleCounts()]);
+  const { data, count, error } = result;
   if ((error?.code === "PGRST103" || (!error && !data?.length)) && page > 1) {
     redirect(q ? `${list.path}?${new URLSearchParams({ q })}` : list.path);
   }
@@ -91,7 +93,7 @@ export async function ArticlePublicationList({ state, searchParams }: {
           { label: list.label },
         ]}
       />
-      <ArticleSectionNav active={state} />
+      <ArticleSectionNav active={state} counts={counts} />
       <DataTableToolbar key={state} searchPlaceholder="Sarlavha yoki muallif nomi" searchMaxLength={ARTICLE_SEARCH_MAX_LENGTH} />
       {error ? (
         <Card><p role="alert" className="text-sm text-coral">Maqolalarni yuklab bo‘lmadi. Sahifani yangilang.</p></Card>

@@ -11,6 +11,8 @@ import { cn, timeAgo, daysUntil } from "@/lib/utils";
 import { INTAKE_TABS } from "@/lib/intake/constants";
 import { DataTableToolbar } from "@/components/admin/toolbar";
 import { findScriptSearchMatches } from "@/lib/candidate-script-search";
+import { parseCalendarDate, tashkentDayRangeForDate } from "@/lib/tashkent-day";
+import { CreatedDateFilter } from "./created-date-filter";
 
 export const metadata = { title: "Nomzod anketalari" };
 export const dynamic = "force-dynamic";
@@ -37,6 +39,10 @@ export default async function IntakesPipelinePage(props: {
   const tabKey = typeof sp.tab === "string" ? sp.tab : "all";
   const tab = INTAKE_TABS.find((t) => t.key === tabKey) ?? INTAKE_TABS[0];
   const admin = createSupabaseAdminClient();
+  const createdFrom = parseCalendarDate(typeof sp.created_from === "string" ? sp.created_from : null);
+  const createdTo = parseCalendarDate(typeof sp.created_to === "string" ? sp.created_to : null);
+  const createdStart = createdFrom ? tashkentDayRangeForDate(createdFrom).startIso : null;
+  const createdEnd = createdTo ? tashkentDayRangeForDate(createdTo).endIso : null;
 
   let query = admin
     .from("candidate_intakes")
@@ -45,6 +51,8 @@ export default async function IntakesPipelinePage(props: {
     .order("updated_at", { ascending: false });
 
   if (tab.method) query = query.eq("intake_method", tab.method);
+  if (createdStart) query = query.gte("created_at", createdStart);
+  if (createdEnd) query = query.lt("created_at", createdEnd);
   if (tab.status) {
     query = Array.isArray(tab.status) ? query.in("status", tab.status) : query.eq("status", tab.status);
   }
@@ -59,6 +67,8 @@ export default async function IntakesPipelinePage(props: {
           .is("deleted_at", null)
           .order("updated_at", { ascending: false }).order("id", { ascending: false });
         if (tab.method) request = request.eq("intake_method", tab.method);
+        if (createdStart) request = request.gte("created_at", createdStart);
+        if (createdEnd) request = request.lt("created_at", createdEnd);
         if (tab.status) request = Array.isArray(tab.status) ? request.in("status", tab.status) : request.eq("status", tab.status);
         return request.range(offset, end);
       });
@@ -205,7 +215,7 @@ export default async function IntakesPipelinePage(props: {
         {INTAKE_TABS.map((t) => (
           <Link
             key={t.key}
-            href={`/nomzodlar/anketalar?tab=${t.key}${q ? `&q=${encodeURIComponent(q)}` : ""}`}
+            href={`/nomzodlar/anketalar?${new URLSearchParams({ tab: t.key, ...(q ? { q } : {}), ...(createdFrom ? { created_from: createdFrom } : {}), ...(createdTo ? { created_to: createdTo } : {}) }).toString()}`}
             className={cn(
               "shrink-0 rounded-full border px-3.5 py-1.5 text-sm font-semibold transition",
               t.key === tab.key
@@ -219,6 +229,7 @@ export default async function IntakesPipelinePage(props: {
       </div>
 
       {/* Search */}
+      <CreatedDateFilter />
       <DataTableToolbar key={tab.key} searchPlaceholder="Ism bo‘yicha qidirish…" />
 
       <DataTable

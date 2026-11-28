@@ -354,20 +354,23 @@ async function openChannels(articleId: string): Promise<void> {
 export interface ArticleCounts {
   submitted: number;
   published: number;
+  draft: number;
 }
 
-/** Menyudagi ikki hisoblagich uchun faqat sonlarni oladi. */
+/** Uchala bo‘limning qidiruvdan mustaqil jami sonlarini oladi. */
 export async function loadArticleCounts(): Promise<Partial<ArticleCounts>> {
   const db = createSupabaseAdminClient();
   const head = { count: "exact" as const, head: true };
 
-  const [submitted, published] = await Promise.all([
+  const [submitted, published, draft] = await Promise.all([
     db.from("member_articles").select("id", head).eq("state", "submitted"),
     db.from("member_articles").select("id", head).eq("state", "published"),
+    db.from("member_articles").select("id", head).eq("state", "draft").not("slug", "is", null),
   ]);
 
   return {
     submitted: submitted.count ?? undefined,
     published: published.count ?? undefined,
+    draft: draft.count ?? undefined,
   };
 }

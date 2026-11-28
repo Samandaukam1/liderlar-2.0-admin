@@ -54,6 +54,7 @@ export interface IntakeTab {
 
 export const INTAKE_TABS: IntakeTab[] = [
   { key: "all", label: "Barcha nomzodlar" },
+  { key: "draft", label: "Qoralamadagilar", status: "draft" },
   { key: "incoming", label: "Kelayotgan anketalar", status: ["submitted", "ai_reviewing", "needs_clarification"] },
   { key: "manual", label: "Qo‘lda kiritilganlar", method: "manual" },
   { key: "secure_link", label: "Havola yuborilganlar", method: "secure_link" },

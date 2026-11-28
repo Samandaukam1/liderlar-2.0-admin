@@ -294,6 +294,43 @@ export async function addCandidateEntryAction(
   return { ok: true };
 }
 
+export async function updateCandidateEntryAction(
+  candidateId: string,
+  kind: EntryKind,
+  entryId: string,
+  formData: FormData,
+): Promise<ActionResult> {
+  const ctx = await requirePermission("candidates.edit");
+  const table = ENTRY_TABLES[kind];
+  if (!table) return { ok: false, error: "Noto‘g‘ri bo‘lim" };
+  const parsed = kind === "social"
+    ? socialEntrySchema.safeParse({ title: formData.get("title"), url: formData.get("url") })
+    : entrySchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Forma xatosi" };
+  const v = parsed.data;
+  const admin = createSupabaseAdminClient();
+  const { data: before, error: readError } = await admin.from(table).select("*")
+    .eq("id", entryId).eq("candidate_id", candidateId).maybeSingle();
+  if (readError) return { ok: false, error: readError.message };
+  if (!before) return { ok: false, error: "Yozuv topilmadi" };
+  const changes = {
+    title: v.title.trim(), url: nullable(v.url),
+    ...(kind !== "social" && {
+      subtitle: nullable(v.subtitle), description: nullable(v.description),
+      date_from: nullable(v.date_from), date_to: nullable(v.date_to),
+    }),
+  };
+  const { data: updated, error } = await admin.from(table).update(changes)
+    .eq("id", entryId).eq("candidate_id", candidateId).select("id").maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  if (!updated) return { ok: false, error: "Yozuv topilmadi" };
+  await logAudit({ actorId: ctx.userId, action: `candidate.${kind}.edit`, entityType: "candidate",
+    entityId: candidateId, oldValue: before, newValue: { entry_id: entryId, ...changes } });
+  revalidatePath(`/candidates/${candidateId}`);
+  refreshPublicProfiles([candidateId]);
+  return { ok: true };
+}
+
 export async function deleteCandidateEntryAction(
   candidateId: string,
   kind: EntryKind,
